@@ -81,6 +81,48 @@ def _verify(args: argparse.Namespace) -> int:
     return 0
 
 
+def _batch(args: argparse.Namespace) -> int:
+    from rfnbo.optimise.batching import optimise_batching
+
+    m = re.fullmatch(r"(\d{4})-Q([1-4])", args.quarter)
+    if not m:
+        print(f"--quarter must look like 2026-Q4, got {args.quarter!r}", file=sys.stderr)
+        return 2
+    cfg = load_config(args.config)
+    raw = ingest.load(args.data, ingest.load_source_spec(args.source))
+    frame, flags = quality.prepare(cfg, raw, int(m.group(1)), int(m.group(2)))
+    if quality.has_errors(flags):
+        for f in flags:
+            print(f"  {f}", file=sys.stderr)
+        return 1
+    result = optimise_batching(cfg, frame, eps=args.batch_penalty_MJ)
+    decisions = Decisions(batches=result.batches)
+    check = calculate(cfg, frame, decisions)
+    Path(args.out).write_text(decisions.model_dump_json(indent=1) + "\n", encoding="utf-8")
+    for ub in result.units:
+        bs = [b for b in check.batches.values() if b.unit == ub.unit]
+        full = sum(b.rfnbo_share == 1 for b in bs)
+        part = sum(0 < b.rfnbo_share < 1 for b in bs)
+        lim = (
+            ""
+            if ub.limit_gCO2e_per_MJ is None
+            else f", downstream limit {ub.limit_gCO2e_per_MJ:.4f}"
+        )
+        print(
+            f"{ub.unit}: {len(bs)} batches ({full} at 100%, {part} part, "
+            f"{len(bs) - full - part} at 0%), RFNBO {sum(b.rfnbo_kg for b in bs):,.1f} kg, "
+            f"feedable {ub.score.feedable_MJ:,.0f} MJ, mu {ub.mu}{lim}"
+        )
+    bad = [c for c in check.failures if c.name.startswith("batch")]
+    for c in bad:
+        print(f"  {c}", file=sys.stderr)
+    print(
+        f"wrote {len(decisions.batches)} batches to {args.out} "
+        "(stage A only: feed, consignments and write-offs come from stages B/C)"
+    )
+    return 1 if bad else 0
+
+
 def _edit(args: argparse.Namespace) -> int:
     try:
         from rfnbo.ui.bfd_editor.page import run
@@ -112,6 +154,20 @@ def main(argv: list[str] | None = None) -> int:
     c = sub.add_parser("verify", help="re-run a sealed run and compare outputs byte for byte")
     c.add_argument("run_dir")
     c.set_defaults(fn=_verify)
+
+    b = sub.add_parser("batch", help="stage A: choose batch boundaries")
+    b.add_argument("--config", required=True)
+    b.add_argument("--source", required=True)
+    b.add_argument("--data", required=True)
+    b.add_argument("--quarter", required=True)
+    b.add_argument("--out", required=True, help="decision set JSON (batches only)")
+    b.add_argument(
+        "--batch-penalty-MJ",
+        type=float,
+        default=0.01,
+        help="value a batch must add to be split off (fewest-batches tie-break)",
+    )
+    b.set_defaults(fn=_batch)
 
     e = sub.add_parser("edit", help="open the block flow diagram editor")
     e.add_argument("path", help="plant config JSON (created on first save if missing)")

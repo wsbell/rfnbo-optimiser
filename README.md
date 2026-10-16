@@ -15,7 +15,8 @@ plant dispatch.
 | 3 | Data ingestion | done (CSV/Excel, plant time zone, DST, quality flags) |
 | 4 | Calculator | done (golden tests reproduce both workbooks to 1e-6) |
 | 5 | Traceability | done (per-batch JSON, lineage, sealed runs reproduce byte for byte) |
-| 6–9 | Optimiser, reports, results UI | not started |
+| 6 | Optimiser stage A (batching) | done (`rfnbo batch`; reproduces test case 1 and its 2030 hourly variant exactly) |
+| 7–9 | Optimiser stages B/C, reports, results UI | not started |
 
 Test case 2 predates the non-compliant RFNBO rule (build plan §2.5). Its golden fixtures were
 regenerated with `tests/golden/export_workbook.py --rule-2-5`: 88 H₂ sub-batches above
