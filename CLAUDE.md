@@ -42,6 +42,9 @@ uv run rfnbo validate examples/test_plant.json
   aggregated batches, write-offs) as JSON-serialisable pydantic models.
 - `src/rfnbo/calc/`: `batch.py`, `ledger.py`, `consign.py`, `check.py` (named rule checks),
   `calculator.py` (`calculate(config, frame, decisions) -> RunResult`).
+- `src/rfnbo/trace/`: `json_log.py` (per-batch records, `recompute_ghg`), `lineage.py`
+  (edges and drill-down), `run.py` (seal, verify, open next quarter from a sealed run).
+  Sealed outputs must stay byte-identical on re-run: no wall-clock, no unordered iteration.
 - `examples/test_plant.json`: the test plant from the workbooks;
   `examples/test_workbook_source.json` maps workbook columns to series.
 - `tests/golden/`: the two test workbooks, `export_workbook.py`, and the exported
