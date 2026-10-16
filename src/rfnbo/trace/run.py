@@ -30,11 +30,12 @@ from rfnbo.config.schema import OpeningLedgerEntry, PlantConfig, StorageUnit
 from rfnbo.data import ingest, quality
 from rfnbo.data.quality import Frame, QualityFlag
 from rfnbo.model.entities import Decisions
+from rfnbo.optimise.lp import solver_info
 from rfnbo.trace import json_log, lineage
 
 RECORD_VERSION = 1
 FRAME_FILE, BATCHES_FILE, RUN_FILE = "frame.csv", "batches.jsonl", "run.json"
-_PACKAGES = ("rfnbo", "numpy", "pydantic", "openpyxl", "tzdata")
+_PACKAGES = ("rfnbo", "numpy", "pydantic", "openpyxl", "tzdata", "highspy")
 
 
 class SealError(ValueError):
@@ -95,8 +96,7 @@ def environment() -> dict[str, Any]:
     return {
         "python": platform.python_version(),
         "packages": versions,
-        # No solver is used yet; the optimiser will record HiGHS and its options here.
-        "solver": None,
+        "solver": solver_info(),
     }
 
 

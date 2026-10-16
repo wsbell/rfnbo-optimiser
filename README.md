@@ -16,7 +16,8 @@ plant dispatch.
 | 4 | Calculator | done (golden tests reproduce both workbooks to 1e-6) |
 | 5 | Traceability | done (per-batch JSON, lineage, sealed runs reproduce byte for byte) |
 | 6 | Optimiser stage A (batching) | done (`rfnbo batch`; reproduces test case 1 and its 2030 hourly variant exactly) |
-| 7–9 | Optimiser stages B/C, reports, results UI | not started |
+| 7 | Optimiser stages B/C, pipeline, baseline | done (`rfnbo optimise`; matches test case 1, beats regenerated test case 2) |
+| 8–9 | Reports, results UI | not started |
 
 Test case 2 predates the non-compliant RFNBO rule (build plan §2.5). Its golden fixtures were
 regenerated with `tests/golden/export_workbook.py --rule-2-5`: 88 H₂ sub-batches above
@@ -38,6 +39,13 @@ uv run rfnbo run --config examples/test_plant.json \
   --data tests/golden/workbooks/RFNBO_optimiser_test_Q4_2026.xlsx \
   --decisions tests/golden/tc1.decisions.json --quarter 2026-Q4 --out runs/tc1
 uv run rfnbo verify runs/tc1
+
+# optimise a quarter against consignment requirements; seals the result and the baseline
+uv run rfnbo optimise --config examples/test_plant.json \
+  --source examples/test_workbook_source.json \
+  --data tests/golden/workbooks/RFNBO_optimiser_test_Q4_2026_undersized.xlsx \
+  --consignments examples/test_consignments_Q4_2026_undersized.json \
+  --quarter 2026-Q4 --out runs/tc2-opt
 ```
 
 A sealed run directory holds `frame.csv` (the exact 15-minute data used), `batches.jsonl`

@@ -123,6 +123,82 @@ def _batch(args: argparse.Namespace) -> int:
     return 1 if bad else 0
 
 
+def _optimise(args: argparse.Namespace) -> int:
+    import json
+
+    from pydantic import TypeAdapter
+
+    from rfnbo.model.entities import ConsignmentSpec
+    from rfnbo.optimise.pipeline import optimise
+
+    m = re.fullmatch(r"(\d{4})-Q([1-4])", args.quarter)
+    if not m:
+        print(f"--quarter must look like 2026-Q4, got {args.quarter!r}", file=sys.stderr)
+        return 2
+    cfg = load_config(args.config)
+    raw = ingest.load(args.data, ingest.load_source_spec(args.source))
+    frame, flags = quality.prepare(cfg, raw, int(m.group(1)), int(m.group(2)))
+    if quality.has_errors(flags):
+        for f in flags:
+            print(f"  {f}", file=sys.stderr)
+        return 1
+    consignments = TypeAdapter(list[ConsignmentSpec]).validate_json(
+        Path(args.consignments).read_text(encoding="utf-8")
+    )
+    result = optimise(cfg, frame, consignments, batch_penalty_MJ=args.batch_penalty_MJ)
+
+    out = Path(args.out)
+    ids = {}
+    for name, outcome in (("optimised", result.optimised), ("baseline", result.baseline)):
+        d = sealed.seal(outcome.run, out / name, flags)
+        ids[name] = sealed.load_record(d)["run_id"]
+    bound = result.bound()
+    summary = {
+        "run_ids": ids,
+        "feasible": result.feasible,
+        "shortfalls": [
+            {"consignment": s.consignment, "reason": s.reason, "achievable_kg": s.achievable_kg}
+            for s in result.shortfalls
+        ],
+        "objectives": {
+            name: {
+                "consignments_met": o.objectives.consignments_met,
+                "final_rfnbo_kg": o.objectives.final_rfnbo_kg,
+                "carried_emissions_g": o.objectives.carried_emissions_g,
+                "carried_ghg": o.objectives.carried_ghg,
+                "batches": o.objectives.batches,
+                "failed_checks": len(o.run.failures),
+            }
+            for name, o in (("optimised", result.optimised), ("baseline", result.baseline))
+        },
+        "bound": None
+        if bound is None
+        else {"upper_kg": bound.upper_kg, "achieved_kg": bound.achieved_kg, "gap": bound.gap},
+        "log": result.log,
+    }
+    (out / "comparison.json").write_text(json.dumps(summary, indent=1) + "\n", encoding="utf-8")
+
+    print(f"{'':>24} {'optimised':>18} {'baseline':>18}")
+    o, b = result.optimised.objectives, result.baseline.objectives
+    print(f"{'consignments met':>24} {o.consignments_met!s:>18} {b.consignments_met!s:>18}")
+    print(f"{'final RFNBO (kg)':>24} {o.final_rfnbo_kg:>18,.1f} {b.final_rfnbo_kg:>18,.1f}")
+    print(
+        f"{'carried GHG (g)':>24} {o.carried_emissions_g:>18,.0f} {b.carried_emissions_g:>18,.0f}"
+    )
+    print(f"{'batches':>24} {o.batches:>18,} {b.batches:>18,}")
+    if bound is not None:
+        print(f"upper bound for this batching {bound.upper_kg:,.1f} kg (gap {bound.gap:.4%})")
+    for s in result.shortfalls:
+        print(
+            f"  {s.consignment} not met: {s.reason}; achievable {s.achievable_kg:,.1f} kg",
+            file=sys.stderr,
+        )
+    print(f"sealed to {out}/optimised and {out}/baseline; comparison in {out}/comparison.json")
+    if not result.feasible:
+        return 3
+    return 0 if result.optimised.run.passed else 1
+
+
 def _edit(args: argparse.Namespace) -> int:
     try:
         from rfnbo.ui.bfd_editor.page import run
@@ -168,6 +244,20 @@ def main(argv: list[str] | None = None) -> int:
         help="value a batch must add to be split off (fewest-batches tie-break)",
     )
     b.set_defaults(fn=_batch)
+
+    o = sub.add_parser("optimise", help="optimise a quarter and seal it with its baseline")
+    o.add_argument("--config", required=True)
+    o.add_argument("--source", required=True)
+    o.add_argument("--data", required=True)
+    o.add_argument("--quarter", required=True)
+    o.add_argument(
+        "--consignments",
+        required=True,
+        help="JSON list of consignments (target null = minimise mode)",
+    )
+    o.add_argument("--out", required=True)
+    o.add_argument("--batch-penalty-MJ", type=float, default=0.01)
+    o.set_defaults(fn=_optimise)
 
     e = sub.add_parser("edit", help="open the block flow diagram editor")
     e.add_argument("path", help="plant config JSON (created on first save if missing)")

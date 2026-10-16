@@ -54,8 +54,14 @@ uv run rfnbo validate examples/test_plant.json
   intervals (hourly windows from the switch date for electrolytic units), Lagrangian value
   against the downstream blend limit, μ search on feedable RFNBO. Proposals only: re-run
   everything through the calculator.
+- `src/rfnbo/optimise/allocate.py`: stage B (feed LP per downstream unit; compliance is linear
+  in the feed) and stage C (consignment LP, then write-offs by the §2.7 rule).
+  `pipeline.py` runs A → B → C with B↔C feedback and relaxation when a consignment cannot be
+  met; `baseline.py` is one batch per month, FIFO; `lp.py` wraps HiGHS with fixed, recorded
+  options (`solver_info()` goes into every sealed run).
 - `examples/test_plant.json`: the test plant from the workbooks;
-  `examples/test_workbook_source.json` maps workbook columns to series.
+  `examples/test_workbook_source.json` maps workbook columns to series;
+  `examples/test_consignments_*.json` are the workbooks' consignment requirements.
 - `tests/golden/`: the two test workbooks, `export_workbook.py`, and the exported
   `*.decisions.json` / `*.expected.json` fixtures. Regenerate fixtures with the script, never
   by hand (test case 2 uses `--rule-2-5`).

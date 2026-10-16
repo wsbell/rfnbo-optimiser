@@ -5,6 +5,7 @@ description = "RFNBO GHG and mass balance optimiser (retrospective accounting pe
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
+    "highspy>=1.11,<2",
     "numpy>=2.5.4",
     "openpyxl>=3.1.5",
     "pydantic>=2.9,<3",
@@ -57,3 +58,8 @@ testpaths = ["tests"]
 addopts = "-ra --strict-markers"
 markers = ["e2e: browser end-to-end tests (need the ui extra and Chromium)"]
 pythonpath = ["."]
+
+[[tool.mypy.overrides]]
+# The highspy bindings are untyped; only the LP wrapper calls them.
+module = ["rfnbo.optimise.lp"]
+disallow_untyped_calls = false
