@@ -7,7 +7,8 @@
   "settings": {
     "fossil_comparator_gCO2e_per_MJ": 94.0,
     "required_saving": 0.70,
-    "hourly_correlation_from": "2030-01-01"
+    "hourly_correlation_from": "2030-01-01",
+    "balance_tolerance_kg_per_interval": 1.0
   },
   "blocks": [
     {
@@ -20,7 +21,7 @@
       "series": "renewable_available_kWh",
       "emission_factors": [
         {"value": 0.0, "unit": "gCO2e/kWh", "valid_from": "2026-01-01",
-         "source": "EU 2023/1185 Annex A: fully renewable electricity counts as zero"}
+         "source": "EU 2023/1185: matched renewable electricity counts as zero"}
       ]
     },
     {
@@ -32,29 +33,18 @@
       "renewable": false,
       "emission_factors": [
         {"value": 400.0, "unit": "gCO2e/kWh", "valid_from": "2026-01-01",
-         "source": "Build plan §5 example; confirm against test workbook"}
+         "source": "Test workbooks, Parameters sheet (constant input)"}
       ]
     },
     {
       "kind": "input",
       "id": "water",
-      "name": "Demineralised water",
+      "name": "Water",
       "material": "water",
       "quantity_unit": "kg",
       "emission_factors": [
         {"value": 2.0, "unit": "gCO2e/kg", "valid_from": "2026-01-01",
-         "source": "Build plan §5 example; confirm against test workbook"}
-      ]
-    },
-    {
-      "kind": "input",
-      "id": "nitrogen",
-      "name": "Nitrogen",
-      "material": "N2",
-      "quantity_unit": "kg",
-      "emission_factors": [
-        {"value": 50.0, "unit": "gCO2e/kg", "valid_from": "2026-01-01",
-         "source": "PLACEHOLDER: confirm against test workbook"}
+         "source": "Test workbooks, Parameters sheet (synthetic value)"}
       ]
     },
     {
@@ -74,7 +64,7 @@
       "name": "H2 storage",
       "product": "H2",
       "inventory_series": "h2_storage_inventory_kg",
-      "opening_inventory_kg": 0.0,
+      "opening_inventory_kg": 5000.0,
       "opening_ledger": []
     },
     {
@@ -94,36 +84,53 @@
       "name": "NH3 storage",
       "product": "NH3",
       "inventory_series": "nh3_storage_inventory_kg",
-      "opening_inventory_kg": 0.0,
-      "opening_ledger": []
+      "opening_inventory_kg": 350000.0,
+      "opening_ledger": [
+        {"batch_id": "N-2026-09", "rfnbo_kg": 300000.0, "ghg_gCO2e_per_MJ": 6.0,
+         "production_month": "2026-09"}
+      ]
     },
     {
       "kind": "distribution",
       "id": "dist_customer_a",
-      "name": "Distribution to customer A",
+      "name": "Distribution to Customer A",
       "customer": "Customer A",
-      "fixed_adder_gCO2e_per_MJ": 1.5
+      "fixed_adder_gCO2e_per_MJ": 3.0
     },
     {
       "kind": "distribution",
       "id": "dist_customer_b",
-      "name": "Distribution to customer B",
+      "name": "Distribution to Customer B",
       "customer": "Customer B",
-      "fixed_adder_gCO2e_per_MJ": 3.0
+      "fixed_adder_gCO2e_per_MJ": 8.0
+    },
+    {
+      "kind": "distribution",
+      "id": "dist_spot",
+      "name": "Spot sales (no RFNBO claim)",
+      "customer": "Spot market",
+      "fixed_adder_gCO2e_per_MJ": 0.0
     },
     {
       "kind": "consignment_output",
       "id": "consignment_a",
-      "name": "Consignments to customer A",
+      "name": "Consignments to Customer A",
       "customer": "Customer A",
       "distribution_block": "dist_customer_a"
     },
     {
       "kind": "consignment_output",
       "id": "consignment_b",
-      "name": "Consignments to customer B",
+      "name": "Consignments to Customer B",
       "customer": "Customer B",
       "distribution_block": "dist_customer_b"
+    },
+    {
+      "kind": "consignment_output",
+      "id": "spot",
+      "name": "Spot sales",
+      "customer": "Spot market",
+      "distribution_block": "dist_spot"
     }
   ],
   "flows": [
@@ -133,17 +140,17 @@
      "series": "electrolyser_water_kg"},
     {"id": "f_el_h2s", "source": "electrolyser", "target": "h2_storage", "material": "H2"},
     {"id": "f_h2s_nh3", "source": "h2_storage", "target": "nh3_synthesis", "material": "H2",
-     "series": "h2_to_nh3_synthesis_kg"},
-    {"id": "f_re_nh3", "source": "renewable_power", "target": "nh3_synthesis", "material": "electricity"},
+     "series": "nh3_synthesis_H2_kg"},
     {"id": "f_grid_nh3", "source": "grid_power", "target": "nh3_synthesis", "material": "electricity"},
-    {"id": "f_n2_nh3", "source": "nitrogen", "target": "nh3_synthesis", "material": "N2",
-     "series": "nh3_synthesis_N2_kg"},
     {"id": "f_nh3_nh3s", "source": "nh3_synthesis", "target": "nh3_storage", "material": "NH3"},
     {"id": "f_nh3s_a", "source": "nh3_storage", "target": "dist_customer_a", "material": "NH3",
-     "series": "nh3_shipped_customer_a_kg"},
+     "series": "nh3_shipped_c1_kg"},
     {"id": "f_nh3s_b", "source": "nh3_storage", "target": "dist_customer_b", "material": "NH3",
-     "series": "nh3_shipped_customer_b_kg"},
+     "series": "nh3_shipped_c2_kg"},
+    {"id": "f_nh3s_spot", "source": "nh3_storage", "target": "dist_spot", "material": "NH3",
+     "series": "nh3_shipped_spot_kg"},
     {"id": "f_a_cons", "source": "dist_customer_a", "target": "consignment_a", "material": "NH3"},
-    {"id": "f_b_cons", "source": "dist_customer_b", "target": "consignment_b", "material": "NH3"}
+    {"id": "f_b_cons", "source": "dist_customer_b", "target": "consignment_b", "material": "NH3"},
+    {"id": "f_spot_cons", "source": "dist_spot", "target": "spot", "material": "NH3"}
   ]
 }

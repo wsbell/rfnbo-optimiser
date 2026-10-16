@@ -1,0 +1,20 @@
+{
+  "format": "excel",
+  "sheet": "Data_15min",
+  "time_column": "Start (UTC)",
+  "timestamps": "UTC",
+  "columns": {
+    "renewable_available_kWh": "Renewable power available (kWh)",
+    "electrolyser_electricity_kWh": "Electrolyser electricity (kWh)",
+    "electrolyser_water_kg": "Electrolyser water (kg)",
+    "electrolyser_H2_kg": "Electrolyser H₂ produced (kg)",
+    "nh3_synthesis_electricity_kWh": "NH₃ synthesis electricity, non-renewable (kWh)",
+    "nh3_synthesis_H2_kg": "NH₃ synthesis H₂ consumed (kg)",
+    "nh3_synthesis_NH3_kg": "NH₃ produced (kg)",
+    "h2_storage_inventory_kg": "H₂ storage inventory, end of interval (kg)",
+    "nh3_shipped_c1_kg": "NH₃ shipped C1 (kg)",
+    "nh3_shipped_c2_kg": "NH₃ shipped C2 (kg)",
+    "nh3_shipped_spot_kg": "NH₃ shipped spot, no claim (kg)",
+    "nh3_storage_inventory_kg": "NH₃ storage inventory, end of interval (kg)"
+  }
+}

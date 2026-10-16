@@ -173,9 +173,15 @@ def storage_series(cfg: PlantConfig) -> Iterator[Issue]:
 
 
 def unit_outputs(cfg: PlantConfig) -> Iterator[Issue]:
+    """Each unit sends its whole production to one storage (split outputs not supported)."""
     for u in cfg.blocks_of(ProcessingUnit):
-        if not cfg.flows_out_of(u.id):
-            yield Issue("unit_outputs", "processing unit has no product output", u.id)
+        n = len(cfg.flows_out_of(u.id))
+        if n != 1:
+            yield Issue(
+                "unit_outputs",
+                f"processing unit needs exactly one product output, has {n}",
+                u.id,
+            )
 
 
 def unit_feeds(cfg: PlantConfig) -> Iterator[Issue]:

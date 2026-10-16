@@ -5,6 +5,8 @@ description = "RFNBO GHG and mass balance optimiser (retrospective accounting pe
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
+    "numpy>=2.5.4",
+    "openpyxl>=3.1.5",
     "pydantic>=2.9,<3",
     "tzdata>=2024.1",
 ]
@@ -18,6 +20,7 @@ dev = [
     "hypothesis>=6.112",
     "ruff>=0.7",
     "mypy>=1.13",
+    "types-openpyxl>=3.1.5.20260827",
 ]
 
 [build-system]

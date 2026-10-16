@@ -36,7 +36,14 @@ uv run rfnbo validate examples/test_plant.json
 
 - `src/rfnbo/config/`: pydantic block flow diagram schema (`schema.py`) and named
   validation rules (`validate.py`).
-- `src/rfnbo/data/calendar.py`: plant-time-zone months, clock hours, quarters, intervals.
-- `examples/test_plant.json`: the scope document's test plant. Values whose `source` says
-  PLACEHOLDER must be replaced from the test workbooks.
-- `tests/unit`, `tests/property`, `tests/integration`, `tests/golden` (workbook fixtures).
+- `src/rfnbo/data/`: `calendar.py` (plant-time-zone months, clock hours, quarters),
+  `ingest.py` (CSV/Excel → raw series), `quality.py` (grid alignment, quality flags, `Frame`).
+- `src/rfnbo/model/entities.py`: decision sets (batches, feed, renewable split, consignments,
+  aggregated batches, write-offs) as JSON-serialisable pydantic models.
+- `src/rfnbo/calc/`: `batch.py`, `ledger.py`, `consign.py`, `check.py` (named rule checks),
+  `calculator.py` (`calculate(config, frame, decisions) -> RunResult`).
+- `examples/test_plant.json`: the test plant from the workbooks;
+  `examples/test_workbook_source.json` maps workbook columns to series.
+- `tests/golden/`: the two test workbooks, `export_workbook.py`, and the exported
+  `*.decisions.json` / `*.expected.json` fixtures. Regenerate fixtures with the script, never
+  by hand (test case 2 uses `--rule-2-5`).

@@ -16,7 +16,7 @@ def _block(raw: dict[str, Any], block_id: str) -> dict[str, Any]:
 def test_example_parses(raw: dict[str, Any]) -> None:
     cfg = PlantConfig.model_validate(raw)
     assert cfg.settings.rfnbo_threshold_gCO2e_per_MJ == pytest.approx(28.2, rel=1e-9)
-    assert len(cfg.blocks_of(InputBlock)) == 4
+    assert len(cfg.blocks_of(InputBlock)) == 3
 
 
 def test_json_round_trip(raw: dict[str, Any]) -> None:

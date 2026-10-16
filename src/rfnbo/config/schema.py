@@ -99,7 +99,8 @@ class OpeningLedgerEntry(_Model):
     batch_id: str = Field(min_length=1)
     rfnbo_kg: float = Field(ge=0)
     ghg_gCO2e_per_MJ: float = Field(ge=0)
-    rfnbo_share: float = Field(ge=0, le=1)
+    # None when the source record does not state it; never assumed.
+    rfnbo_share: float | None = Field(default=None, ge=0, le=1)
     production_month: str = Field(pattern=r"^\d{4}-(0[1-9]|1[0-2])$")
 
 
@@ -161,6 +162,8 @@ class Settings(_Model):
     required_saving: float = Field(default=0.70, gt=0, lt=1)
     # Hourly temporal correlation for units whose electricity adds to product LHV.
     hourly_correlation_from: dt.date = dt.date(2030, 1, 1)
+    # Data quality: a storage meter-balance residual above this is flagged (not corrected).
+    balance_tolerance_kg_per_interval: float = Field(default=1.0, ge=0)
 
     @property
     def rfnbo_threshold_gCO2e_per_MJ(self) -> float:
