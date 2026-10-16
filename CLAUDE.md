@@ -2,7 +2,8 @@
 
 RFNBO GHG and mass balance optimiser: retrospective accounting of one quarter of 15-minute
 plant data under Delegated Regulations (EU) 2023/1184 and 2023/1185 and certification-scheme
-mass balance rules. The build plan and scope document define the domain rules; follow them.
+mass balance rules. The build plan (`docs/build-plan.md`) and scope document define the domain
+rules; follow them. Phases 10–15 (multi-step networks) need the §10.3 decisions first.
 
 ## Commands
 

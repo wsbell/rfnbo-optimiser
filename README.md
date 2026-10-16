@@ -18,6 +18,10 @@ plant dispatch.
 | 6 | Optimiser stage A (batching) | done (`rfnbo batch`; reproduces test case 1 and its 2030 hourly variant exactly) |
 | 7 | Optimiser stages B/C, pipeline, baseline | done (`rfnbo optimise`; matches test case 1, beats regenerated test case 2) |
 | 8–9 | Reports, results UI | not started |
+| 10–15 | Multiple and parallel processing steps (e.g. electrolyser → liquefier and compressor) | planned: see `docs/build-plan.md` §10 |
+
+The full build plan, including the multi-step extension and the decisions it needs, is in
+`docs/build-plan.md`.
 
 Test case 2 predates the non-compliant RFNBO rule (build plan §2.5). Its golden fixtures were
 regenerated with `tests/golden/export_workbook.py --rule-2-5`: 88 H₂ sub-batches above
