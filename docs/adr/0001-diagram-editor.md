@@ -15,7 +15,7 @@ that round-trips the test plant cleanly with less code:
 
 Both spikes share one pure-Python editing model, `rfnbo.ui.bfd_editor.document.EditorDocument`
 (add, connect, move, rename, delete, validate, save), so the comparison is only the UI layer.
-The spike code is kept in the git history of the phase 2 commits under `spikes/`.
+The spike code is in the git history: `spikes/` in the first phase 2 commit, removed in the next.
 
 Each spike was driven in headless Chromium through the same script: load the test plant,
 drag a block, add a distribution block, connect NH₃ storage to it by dragging between ports,
