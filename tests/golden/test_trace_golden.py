@@ -203,3 +203,18 @@ def test_cli_run_and_verify(tmp_path: Path, capsys: pytest.CaptureFixture[str]) 
     assert code == 0, capsys.readouterr().err
     assert main(["verify", str(out)]) == 0
     assert "byte for byte" in capsys.readouterr().out
+
+
+def test_moving_blocks_does_not_change_the_run_id(tmp_path: Path) -> None:
+    """Diagram layout is presentation only; it is left out of the sealed config hash."""
+    from rfnbo.config.schema import Position
+
+    run, _, flags = _run("tc1")
+    moved = run.config.model_copy(
+        update={"layout": {**run.config.layout, "water": Position(x=999.0, y=999.0)}}
+    )
+    again = calculate(moved, run.frame, run.decisions)
+    a = sealed.load_record(sealed.seal(run, tmp_path / "a", flags))
+    b = sealed.load_record(sealed.seal(again, tmp_path / "b", flags))
+    assert a["run_id"] == b["run_id"]
+    assert a["hashes"]["config_sha256"] == b["hashes"]["config_sha256"]

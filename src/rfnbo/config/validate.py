@@ -300,6 +300,14 @@ def no_cycles(cfg: PlantConfig) -> Iterator[Issue]:
             return
 
 
+def layout_blocks(cfg: PlantConfig) -> Iterator[Issue]:
+    """Diagram positions refer only to blocks that exist."""
+    ids = _ids(cfg)
+    for block_id in cfg.layout:
+        if block_id not in ids:
+            yield Issue("layout_blocks", "position given for a block that does not exist", block_id)
+
+
 RULES: tuple[Rule, ...] = (
     unique_ids,
     flow_endpoints,
@@ -316,6 +324,7 @@ RULES: tuple[Rule, ...] = (
     emission_factor_coverage,
     consignment_links,
     no_cycles,
+    layout_blocks,
 )
 
 

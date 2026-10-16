@@ -1,0 +1,223 @@
+"""The editor's document model, without any UI toolkit."""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from rfnbo.config import load_config
+from rfnbo.config.schema import (
+    ConsignmentOutput,
+    DistributionBlock,
+    EmissionFactor,
+    Flow,
+    InputBlock,
+    OpeningLedgerEntry,
+    PlantConfig,
+    ProcessingUnit,
+    Settings,
+    StorageUnit,
+)
+from rfnbo.ui.bfd_editor.document import EditorDocument, EditorError
+from rfnbo.ui.bfd_editor.fields import (
+    BLOCK_FIELDS,
+    FLOW_FIELDS,
+    PLANT_FIELDS,
+    SETTINGS_FIELDS,
+    TableSpec,
+)
+from tests.conftest import EXAMPLE
+
+
+def test_example_round_trips_byte_for_byte() -> None:
+    text = EXAMPLE.read_text(encoding="utf-8")
+    doc = EditorDocument.load(EXAMPLE)
+    assert doc.issues() == []
+    assert doc.to_json() == text
+
+
+def draw(spec: PlantConfig) -> EditorDocument:
+    """Build a plant through editor operations only, as a user drawing it would."""
+    doc = EditorDocument.new(plant="draft")
+    doc.update_plant(
+        plant=spec.plant,
+        version=spec.version,
+        effective_from=spec.effective_from.isoformat(),
+        timezone=spec.timezone,
+    )
+    doc.update_settings(**spec.settings.model_dump(mode="json"))
+    for b in spec.blocks:
+        raw = b.model_dump(mode="json")
+        block_id = doc.add_block(raw.pop("kind"))
+        doc.rename_block(block_id, raw.pop("id"))
+        tables = {k: raw.pop(k) for k in ("emission_factors", "opening_ledger") if k in raw}
+        doc.update_block(b.id, **raw)
+        for table, rows in tables.items():
+            for i in reversed(range(len(doc.block(b.id).get(table, [])))):
+                doc.remove_row(b.id, table, i)
+            for row in rows:
+                doc.add_row(b.id, table, row)
+    for f in spec.flows:
+        flow_id = doc.connect(f.source, f.target)
+        doc.update_flow(flow_id, id=f.id, material=f.material, series=f.series)
+    for block_id, pos in spec.layout.items():
+        doc.move(block_id, pos.x, pos.y)
+    return doc
+
+
+def test_test_plant_can_be_drawn_saved_and_reloaded(tmp_path: Path) -> None:
+    spec = load_config(EXAMPLE)
+    doc = draw(spec)
+    assert doc.issues() == []
+    out = tmp_path / "drawn.json"
+    assert doc.save(out) == []
+    assert load_config(out) == spec
+    assert out.read_text(encoding="utf-8") == EXAMPLE.read_text(encoding="utf-8")
+
+
+def test_connect_infers_material_and_fills_blanks() -> None:
+    doc = EditorDocument.new()
+    unit = doc.add_block("processing_unit")
+    doc.update_block(unit, product="H2")
+    store = doc.add_block("storage_unit")
+    flow = doc.connect(unit, store)
+    assert doc.flow(flow)["material"] == "H2" and doc.block(store)["product"] == "H2"
+
+    dist = doc.add_block("distribution")
+    doc.update_block(dist, customer="Customer A")
+    doc.connect(store, dist)
+    out = doc.add_block("consignment_output")
+    doc.connect(dist, out)
+    assert doc.block(out)["distribution_block"] == dist
+    assert doc.block(out)["customer"] == "Customer A"
+    assert doc.flows[-1]["material"] == "H2"
+
+
+@pytest.mark.parametrize(
+    ("src", "tgt"),
+    [
+        ("input", "storage_unit"),
+        ("processing_unit", "processing_unit"),
+        ("consignment_output", "distribution"),
+    ],
+)
+def test_disallowed_connections_are_refused(src: str, tgt: str) -> None:
+    doc = EditorDocument.new()
+    a, b = doc.add_block(src), doc.add_block(tgt)
+    with pytest.raises(EditorError, match="cannot flow into"):
+        doc.connect(a, b)
+    assert doc.flows == []
+
+
+def test_duplicate_connection_is_refused() -> None:
+    doc = EditorDocument.load(EXAMPLE)
+    with pytest.raises(EditorError, match="already connected"):
+        doc.connect("water", "electrolyser")
+
+
+def test_rename_updates_every_reference() -> None:
+    doc = EditorDocument.load(EXAMPLE)
+    doc.rename_block("dist_customer_a", "dist_a")
+    assert doc.block("consignment_a")["distribution_block"] == "dist_a"
+    assert {f["source"] for f in doc.flows if f["target"] == "consignment_a"} == {"dist_a"}
+    assert "dist_a" in doc.data["layout"] and "dist_customer_a" not in doc.data["layout"]
+    assert doc.issues() == []
+    with pytest.raises(EditorError, match="already used"):
+        doc.rename_block("dist_a", "water")
+
+
+def test_remove_block_removes_its_flows_and_links() -> None:
+    doc = EditorDocument.load(EXAMPLE)
+    doc.remove_block("dist_customer_a")
+    assert all("dist_customer_a" not in (f["source"], f["target"]) for f in doc.flows)
+    assert doc.block("consignment_a")["distribution_block"] == ""
+    rules = {i.rule for i in doc.issues()}
+    assert rules == {"schema"}  # the consignment output now names no distribution block
+
+
+def test_schema_issues_point_at_their_block() -> None:
+    doc = EditorDocument.load(EXAMPLE)
+    doc.update_block("electrolyser", lhv_MJ_per_kg=0)
+    doc.block("water")["emission_factors"][0]["source"] = ""
+    by_ref = doc.issues_by_ref()
+    assert [i.message for i in by_ref["electrolyser"]] == [
+        "lhv_MJ_per_kg: Input should be greater than 0"
+    ]
+    assert by_ref["water"][0].message.startswith("emission_factors.0.source")
+
+
+def test_rule_issues_once_schema_holds() -> None:
+    doc = EditorDocument.load(EXAMPLE)
+    flow = next(f["id"] for f in doc.flows if f["source"] == "renewable_power")
+    doc.disconnect(flow)
+    assert [(i.rule, i.ref) for i in doc.issues()] == [
+        ("no_orphans", "renewable_power"),
+        ("unit_feeds", "electrolyser"),
+    ]
+
+
+def test_new_blocks_do_not_overlap() -> None:
+    doc = EditorDocument.new()
+    ids = [doc.add_block("input") for _ in range(14)]
+    spots = [doc.position(i) for i in ids]
+    assert len(set(spots)) == len(spots)
+
+
+def test_config_without_layout_gets_an_automatic_one() -> None:
+    raw = load_config(EXAMPLE).model_dump(mode="json", exclude={"layout"})
+    doc = EditorDocument(raw)
+    assert (
+        doc.position("renewable_power")[0]
+        < doc.position("electrolyser")[0]
+        < doc.position("h2_storage")[0]
+        < doc.position("nh3_synthesis")[0]
+    )
+    assert len({doc.position(b["id"]) for b in doc.blocks}) == len(doc.blocks)
+
+
+def test_invalid_draft_is_saved_as_is(tmp_path: Path) -> None:
+    doc = EditorDocument.new()
+    doc.add_block("input")
+    issues = doc.save(tmp_path / "draft.json")
+    assert issues
+    again = EditorDocument.load(tmp_path / "draft.json")
+    assert again.data == doc.data
+
+
+def test_kind_cannot_change() -> None:
+    doc = EditorDocument.load(EXAMPLE)
+    with pytest.raises(EditorError, match="kind"):
+        doc.update_block("water", kind="storage_unit")
+
+
+MODELS: dict[str, Any] = {
+    "input": InputBlock,
+    "processing_unit": ProcessingUnit,
+    "storage_unit": StorageUnit,
+    "distribution": DistributionBlock,
+    "consignment_output": ConsignmentOutput,
+}
+
+
+@pytest.mark.parametrize("kind", sorted(MODELS))
+def test_every_schema_field_has_an_editor(kind: str) -> None:
+    specs = BLOCK_FIELDS[kind]
+    assert {s.key for s in specs} == set(MODELS[kind].model_fields) - {"kind", "id", "name"}
+    for s in specs:
+        if isinstance(s, TableSpec):
+            row_model = EmissionFactor if s.key == "emission_factors" else OpeningLedgerEntry
+            assert {c.key for c in s.columns} == set(row_model.model_fields)
+
+
+def test_flow_plant_and_settings_fields_have_editors() -> None:
+    assert {s.key for s in FLOW_FIELDS} == set(Flow.model_fields) - {"id", "source", "target"}
+    assert {s.key for s in PLANT_FIELDS} == set(PlantConfig.model_fields) - {
+        "schema_version",
+        "settings",
+        "blocks",
+        "flows",
+        "layout",
+    }
+    assert {s.key for s in SETTINGS_FIELDS} == set(Settings.model_fields)

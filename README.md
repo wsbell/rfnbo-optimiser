@@ -11,7 +11,7 @@ plant dispatch.
 | --- | --- | --- |
 | 0 | Repo skeleton, lint, type check, tests, CI | done |
 | 1 | Plant config schema and validator | done |
-| 2 | Diagram editor | not started |
+| 2 | Diagram editor | done (NiceGUI + Drawflow; see `docs/adr/0001-diagram-editor.md`) |
 | 3 | Data ingestion | done (CSV/Excel, plant time zone, DST, quality flags) |
 | 4 | Calculator | done (golden tests reproduce both workbooks to 1e-6) |
 | 5 | Traceability | done (per-batch JSON, lineage, sealed runs reproduce byte for byte) |
@@ -26,7 +26,8 @@ at quarter end under the workbook's own decisions. The original values are kept 
 ## Quick start
 
 ```sh
-uv sync
+uv sync --extra ui            # the ui extra is only needed for the diagram editor
+uv run rfnbo edit examples/test_plant.json   # opens the block flow diagram editor
 uv run pytest
 uv run rfnbo validate examples/test_plant.json
 

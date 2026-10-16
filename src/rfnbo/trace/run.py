@@ -257,7 +257,8 @@ def build(
 ) -> tuple[bytes, bytes, bytes]:
     """Serialise a run: (run.json, batches.jsonl, frame.csv) bytes."""
     frame_bytes = frame_csv(run.frame)
-    config_json = run.config.model_dump(mode="json")
+    # Layout is presentation only: moving a block must not change the run id.
+    config_json = run.config.model_dump(mode="json", exclude={"layout"})
     decisions_json = run.decisions.model_dump(mode="json")
     hashes = {
         "config_sha256": sha256(canonical(config_json)),

@@ -81,6 +81,16 @@ def _verify(args: argparse.Namespace) -> int:
     return 0
 
 
+def _edit(args: argparse.Namespace) -> int:
+    try:
+        from rfnbo.ui.bfd_editor.page import run
+    except ImportError:
+        print("the editor needs the ui extra: uv sync --extra ui", file=sys.stderr)
+        return 1
+    run(Path(args.path), port=args.port, show=not args.no_browser)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="rfnbo")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -102,6 +112,12 @@ def main(argv: list[str] | None = None) -> int:
     c = sub.add_parser("verify", help="re-run a sealed run and compare outputs byte for byte")
     c.add_argument("run_dir")
     c.set_defaults(fn=_verify)
+
+    e = sub.add_parser("edit", help="open the block flow diagram editor")
+    e.add_argument("path", help="plant config JSON (created on first save if missing)")
+    e.add_argument("--port", type=int, default=8080)
+    e.add_argument("--no-browser", action="store_true")
+    e.set_defaults(fn=_edit)
 
     args = parser.parse_args(argv)
     code: int = args.fn(args)

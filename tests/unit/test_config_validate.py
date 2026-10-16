@@ -179,6 +179,10 @@ def _cycle(r: Raw) -> None:
     )
 
 
+def _layout_for_missing_block(r: Raw) -> None:
+    r["layout"] = {"electrolyser": {"x": 0, "y": 0}, "ghost": {"x": 10, "y": 10}}
+
+
 CASES: dict[str, list[Callable[[Raw], None]]] = {
     "unique_ids": [_dup_block],
     "flow_endpoints": [_unknown_endpoint, _self_loop],
@@ -199,6 +203,7 @@ CASES: dict[str, list[Callable[[Raw], None]]] = {
         _consignment_fed_by_other_distribution,
     ],
     "no_cycles": [_cycle],
+    "layout_blocks": [_layout_for_missing_block],
 }
 
 

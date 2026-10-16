@@ -7,8 +7,9 @@ mass balance rules. The build plan and scope document define the domain rules; f
 ## Commands
 
 ```sh
-uv sync                      # install (Python 3.12)
-uv run pytest                # tests
+uv sync --extra ui           # install (Python 3.12); the ui extra is the diagram editor
+uv run playwright install chromium   # once, for the browser tests in tests/e2e
+uv run pytest                # tests (browser tests skip without NiceGUI or Chromium)
 uv run ruff check . && uv run ruff format --check .
 uv run mypy                  # strict type check
 uv run rfnbo validate examples/test_plant.json
@@ -45,6 +46,10 @@ uv run rfnbo validate examples/test_plant.json
 - `src/rfnbo/trace/`: `json_log.py` (per-batch records, `recompute_ghg`), `lineage.py`
   (edges and drill-down), `run.py` (seal, verify, open next quarter from a sealed run).
   Sealed outputs must stay byte-identical on re-run: no wall-clock, no unordered iteration.
+- `src/rfnbo/ui/bfd_editor/`: the diagram editor (`rfnbo edit`). `document.py` holds all
+  editing state and validation with no UI imports; `fields.py` defines the property forms
+  (a test checks every schema field has one); `page.py` is the NiceGUI page; `static/` holds
+  vendored Drawflow (MIT) and `bfd.js` glue. Decision record: `docs/adr/0001-diagram-editor.md`.
 - `examples/test_plant.json`: the test plant from the workbooks;
   `examples/test_workbook_source.json` maps workbook columns to series.
 - `tests/golden/`: the two test workbooks, `export_workbook.py`, and the exported
