@@ -23,3 +23,11 @@ def at_most(value: float, limit: float, rel: float = REL, abs_: float = ABS_KG) 
 def meets_threshold(ghg: float, limit: float) -> bool:
     """GHG threshold checks: ``ghg ≤ limit + 1e-9``."""
     return ghg <= limit + THRESHOLD_EPS
+
+
+def snap_unit_share(share: float) -> float:
+    """Remove float noise from a share that is 1 to within 1e-12 (e.g. 1.0000000000000002).
+
+    Shares further from 1 are left alone, so a real over-allocation still fails its check.
+    """
+    return 1.0 if abs(share - 1.0) <= 1e-12 else share

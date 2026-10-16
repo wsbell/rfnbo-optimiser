@@ -171,6 +171,13 @@ class Settings(_Model):
         return self.fossil_comparator_gCO2e_per_MJ * (1.0 - self.required_saving)
 
 
+class Position(_Model):
+    """Where a block sits on the diagram canvas (presentation only)."""
+
+    x: float
+    y: float
+
+
 class PlantConfig(_Model):
     """One version of the plant block flow diagram."""
 
@@ -182,6 +189,9 @@ class PlantConfig(_Model):
     settings: Settings = Field(default_factory=Settings)
     blocks: list[Block]
     flows: list[Flow]
+    # Diagram positions written by the editor. Presentation only: never read by the engine
+    # and left out of the config hash of a sealed run.
+    layout: dict[str, Position] = Field(default_factory=dict)
 
     @field_validator("timezone")
     @classmethod

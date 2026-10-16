@@ -11,10 +11,11 @@ plant dispatch.
 | --- | --- | --- |
 | 0 | Repo skeleton, lint, type check, tests, CI | done |
 | 1 | Plant config schema and validator | done |
-| 2 | Diagram editor | not started |
+| 2 | Diagram editor | done (NiceGUI + Drawflow; see `docs/adr/0001-diagram-editor.md`) |
 | 3 | Data ingestion | done (CSV/Excel, plant time zone, DST, quality flags) |
 | 4 | Calculator | done (golden tests reproduce both workbooks to 1e-6) |
-| 5–9 | Traceability, optimiser, reports, results UI | not started |
+| 5 | Traceability | done (per-batch JSON, lineage, sealed runs reproduce byte for byte) |
+| 6–9 | Optimiser, reports, results UI | not started |
 
 Test case 2 predates the non-compliant RFNBO rule (build plan §2.5). Its golden fixtures were
 regenerated with `tests/golden/export_workbook.py --rule-2-5`: 88 H₂ sub-batches above
@@ -25,9 +26,22 @@ at quarter end under the workbook's own decisions. The original values are kept 
 ## Quick start
 
 ```sh
-uv sync
+uv sync --extra ui            # the ui extra is only needed for the diagram editor
+uv run rfnbo edit examples/test_plant.json   # opens the block flow diagram editor
 uv run pytest
 uv run rfnbo validate examples/test_plant.json
+
+# calculate the test case 1 decision set and seal the run, then re-check it
+uv run rfnbo run --config examples/test_plant.json \
+  --source examples/test_workbook_source.json \
+  --data tests/golden/workbooks/RFNBO_optimiser_test_Q4_2026.xlsx \
+  --decisions tests/golden/tc1.decisions.json --quarter 2026-Q4 --out runs/tc1
+uv run rfnbo verify runs/tc1
 ```
+
+A sealed run directory holds `frame.csv` (the exact 15-minute data used), `batches.jsonl`
+(one traceability record per batch) and `run.json` (config, decisions, hashes, environment,
+ledgers, consignments, lineage and every rule check). The run id is a hash of the inputs.
+`--opening-from <dir>` opens the next quarter from a sealed run's closing ledger.
 
 See `CLAUDE.md` for conventions.

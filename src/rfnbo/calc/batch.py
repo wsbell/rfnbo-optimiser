@@ -17,7 +17,7 @@ from typing import Literal
 
 import numpy as np
 
-from rfnbo.calc.tolerance import meets_threshold
+from rfnbo.calc.tolerance import meets_threshold, snap_unit_share
 from rfnbo.config.schema import (
     ELECTRICITY,
     InputBlock,
@@ -81,6 +81,7 @@ class BatchResult:
     own_emissions_g: float
     feed: tuple[FeedLine, ...]
     feed_consumed_kg: float
+    feed_consumed_MJ: float
     rfnbo_feed_kg: float
     feed_emissions_g: float
     feed_ghg_gCO2e_per_MJ: float | None
@@ -295,7 +296,7 @@ def _batch(
         ghg = own / energy + adder if energy > 0 else None
     else:
         kind = "downstream"
-        share = rfnbo_feed_MJ / feed_consumed_MJ if feed_consumed_MJ > 0 else 0.0
+        share = snap_unit_share(rfnbo_feed_MJ / feed_consumed_MJ) if feed_consumed_MJ > 0 else 0.0
         prorated = share * own
         ghg = (feed_emissions + prorated) / (share * energy) + adder if share * energy > 0 else None
 
@@ -323,6 +324,7 @@ def _batch(
         own_emissions_g=own,
         feed=tuple(feed),
         feed_consumed_kg=feed_consumed_kg,
+        feed_consumed_MJ=feed_consumed_MJ,
         rfnbo_feed_kg=rfnbo_feed_kg,
         feed_emissions_g=feed_emissions,
         feed_ghg_gCO2e_per_MJ=feed_emissions / rfnbo_feed_MJ if rfnbo_feed_MJ > 0 else None,
