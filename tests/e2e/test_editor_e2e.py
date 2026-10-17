@@ -11,7 +11,6 @@ import json
 import os
 import re
 import shutil
-import socket
 import subprocess
 import sys
 import time
@@ -28,43 +27,18 @@ playwright = pytest.importorskip("playwright.sync_api")
 from rfnbo.config import load_config  # noqa: E402
 from rfnbo.config.schema import PlantConfig  # noqa: E402
 from tests.conftest import EXAMPLE  # noqa: E402
+from tests.e2e.conftest import free_port  # noqa: E402
 
 pytestmark = pytest.mark.e2e
 ROOT = Path(__file__).resolve().parents[2]
 expect = playwright.expect
 
 
-def _chromium() -> str | None:
-    env = os.environ.get("RFNBO_CHROMIUM")
-    if env:
-        return env
-    local = Path("/opt/pw-browsers/chromium")
-    return str(local) if local.exists() else None
-
-
-@pytest.fixture(scope="module")
-def browser() -> Iterator[Any]:
-    with playwright.sync_playwright() as p:
-        try:
-            b = p.chromium.launch(executable_path=_chromium())
-        except playwright.Error as exc:
-            pytest.skip(f"no Chromium for Playwright: {exc}")
-        yield b
-        b.close()
-
-
-def _free_port() -> int:
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        port: int = s.getsockname()[1]
-        return port
-
-
 @pytest.fixture
 def editor(tmp_path: Path) -> Iterator[tuple[str, Path]]:
     """Start ``rfnbo edit`` on a fresh file; yield (url, path)."""
     path = tmp_path / "plant.json"
-    port = _free_port()
+    port = free_port()
     proc = subprocess.Popen(
         [sys.executable, "-m", "rfnbo.cli", "edit", str(path), "--port", str(port), "--no-browser"],
         cwd=ROOT,

@@ -1,0 +1,117 @@
+"""Phase 9 acceptance, in a real browser: a user traces a consignment to 15-minute data."""
+
+from __future__ import annotations
+
+import os
+import subprocess
+import sys
+import time
+import urllib.request
+from collections.abc import Iterator
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+pytest.importorskip("nicegui")
+playwright = pytest.importorskip("playwright.sync_api")
+
+from rfnbo.trace import run as sealed  # noqa: E402
+from tests.e2e.conftest import free_port  # noqa: E402
+from tests.golden.test_golden import _run  # noqa: E402
+
+pytestmark = pytest.mark.e2e
+ROOT = Path(__file__).resolve().parents[2]
+expect = playwright.expect
+
+
+@pytest.fixture(scope="module")
+def results(tmp_path_factory: pytest.TempPathFactory) -> Iterator[tuple[str, str]]:
+    """Seal test case 1 and serve ``rfnbo results`` on it; yield (url, run id)."""
+    root = tmp_path_factory.mktemp("runs")
+    run, _, flags = _run("tc1")
+    run_id = sealed.load_record(sealed.seal(run, root / "tc1", flags))["run_id"]
+    port = free_port()
+    proc = subprocess.Popen(
+        [
+            sys.executable,
+            "-m",
+            "rfnbo.cli",
+            "results",
+            str(root),
+            "--port",
+            str(port),
+            "--no-browser",
+        ],
+        cwd=ROOT,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        env={k: v for k, v in os.environ.items() if k != "PYTEST_CURRENT_TEST"},
+    )
+    url = f"http://127.0.0.1:{port}/"
+    deadline = time.monotonic() + 60
+    try:
+        while True:
+            try:
+                urllib.request.urlopen(url, timeout=1)
+                break
+            except OSError:
+                if proc.poll() is not None or time.monotonic() > deadline:
+                    proc.kill()
+                    raise RuntimeError(proc.communicate()[0].decode(errors="replace")) from None
+                time.sleep(0.2)
+        yield url, run_id
+    finally:
+        proc.terminate()
+        proc.wait(timeout=10)
+
+
+def _link(page: Any, name: str) -> Any:
+    return page.locator(f'[data-testid="link-{name}"]').first
+
+
+def test_trace_a_consignment_to_15_minute_data(browser: Any, results: tuple[str, str]) -> None:
+    url, run_id = results
+    page = browser.new_page(viewport={"width": 1500, "height": 1000})
+    page.goto(url)
+    _link(page, run_id).click()
+    expect(page.get_by_test_id("reproduce")).to_have_text("reproduces byte for byte", timeout=30000)
+
+    _link(page, "C1").click()
+    expect(page.get_by_text("Consignment C1 · Customer A")).to_be_visible()
+    expect(page.get_by_test_id("cons-shipped")).to_have_text("15.000000")
+
+    _link(page, "N-2026-10").click()
+    expect(page.get_by_text("N-2026-10 · NH3 synthesis")).to_be_visible()
+    expect(page.get_by_test_id("recompute")).to_contain_text("✓")
+
+    _link(page, "E-2026-10-01").click()
+    expect(page.get_by_text("E-2026-10-01 · Electrolyser")).to_be_visible()
+    page.get_by_test_id("intervals-link").click()
+    expect(page.get_by_test_id("interval-count")).to_have_text("E-2026-10-01: 2,980 intervals")
+    expect(page.get_by_test_id("totals-check")).to_have_text(
+        "✓ Interval totals equal the batch record"
+    )
+    first = page.locator('[data-testid="intervals"] tbody tr').first
+    expect(first).to_contain_text("2026-10-01T00:00+02:00")
+    expect(first).to_contain_text("3,000.000")
+
+    # Back up the breadcrumb to the run, then into the opening entry.
+    page.get_by_test_id("crumb-1").click()
+    _link(page, "C2").click()
+    _link(page, "N-2026-09").click()
+    expect(page.get_by_test_id("opening-note")).to_contain_text("no 15-minute data")
+    page.close()
+
+
+def test_download_the_excel_report(browser: Any, results: tuple[str, str], tmp_path: Path) -> None:
+    url, run_id = results
+    page = browser.new_page()
+    page.goto(f"{url}run/{run_id}")
+    expect(page.get_by_test_id("reproduce")).to_be_visible(timeout=30000)
+    with page.expect_download() as dl:
+        page.get_by_test_id("download-report").click()
+    path = tmp_path / dl.value.suggested_filename
+    dl.value.save_as(path)
+    assert path.name == f"report_{run_id}.xlsx" and path.stat().st_size > 10000
+    page.close()

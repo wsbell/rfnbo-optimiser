@@ -51,6 +51,9 @@ uv run rfnbo validate examples/test_plant.json
   editing state and validation with no UI imports; `fields.py` defines the property forms
   (a test checks every schema field has one); `page.py` is the NiceGUI page; `static/` holds
   vendored Drawflow (MIT) and `bfd.js` glue. Decision record: `docs/adr/0001-diagram-editor.md`.
+- `src/rfnbo/ui/results/`: the results browser (`rfnbo results`). `views.py` builds every page
+  from a sealed run re-calculated by the calculator (no UI imports, fully unit-tested);
+  `app.py` lays it out: runs → run → consignment → batch → 15-minute intervals.
 - `src/rfnbo/optimise/batching.py`: stage A. Exact DP per unit and month over 15-minute
   intervals (hourly windows from the switch date for electrolytic units), Lagrangian value
   against the downstream blend limit, μ search on feedable RFNBO. Proposals only: re-run

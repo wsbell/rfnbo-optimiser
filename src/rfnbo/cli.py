@@ -9,6 +9,7 @@ rfnbo batch --config C --source S --data D --quarter 2026-Q4 --out decisions.jso
 rfnbo optimise --config C --source S --data D --quarter 2026-Q4
                --consignments requirements.json --out DIR
 rfnbo report <run-dir> --out DIR [--baseline <run-dir>] [--csv]
+rfnbo results <dir> [--port 8081] [--no-browser]
 """
 
 from __future__ import annotations
@@ -224,6 +225,16 @@ def _report(args: argparse.Namespace) -> int:
     return 0
 
 
+def _results(args: argparse.Namespace) -> int:
+    try:
+        from rfnbo.ui.results.app import run
+    except ImportError:
+        print("the results browser needs the ui extra: uv sync --extra ui", file=sys.stderr)
+        return 1
+    run(Path(args.root), port=args.port, show=not args.no_browser)
+    return 0
+
+
 def _edit(args: argparse.Namespace) -> int:
     try:
         from rfnbo.ui.bfd_editor.page import run
@@ -290,6 +301,12 @@ def main(argv: list[str] | None = None) -> int:
     rp.add_argument("--baseline", help="sealed baseline run to compare against")
     rp.add_argument("--csv", action="store_true", help="also write one CSV per table")
     rp.set_defaults(fn=_report)
+
+    rs = sub.add_parser("results", help="browse sealed runs down to 15-minute data")
+    rs.add_argument("root", help="a sealed run, or a folder containing sealed runs")
+    rs.add_argument("--port", type=int, default=8081)
+    rs.add_argument("--no-browser", action="store_true")
+    rs.set_defaults(fn=_results)
 
     e = sub.add_parser("edit", help="open the block flow diagram editor")
     e.add_argument("path", help="plant config JSON (created on first save if missing)")

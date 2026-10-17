@@ -18,7 +18,7 @@ plant dispatch.
 | 6 | Optimiser stage A (batching) | done (`rfnbo batch`; reproduces test case 1 and its 2030 hourly variant exactly) |
 | 7 | Optimiser stages B/C, pipeline, baseline | done (`rfnbo optimise`; matches test case 1, beats regenerated test case 2) |
 | 8 | Reports | done (`rfnbo report`; Excel and CSV; regenerates the workbook tables) |
-| 9 | Results UI | not started |
+| 9 | Results UI | done (`rfnbo results`; consignment → batches → 15-minute data) |
 | 10–15 | Multiple and parallel processing steps (e.g. electrolyser → liquefier and compressor) | planned; decisions settled (`docs/build-plan.md` §10.3) |
 
 The full build plan, including the multi-step extension and the decisions it needs, is in
@@ -35,6 +35,7 @@ at quarter end under the workbook's own decisions. The original values are kept 
 ```sh
 uv sync --extra ui            # the ui extra is only needed for the diagram editor
 uv run rfnbo edit examples/test_plant.json   # opens the block flow diagram editor
+uv run rfnbo results runs/                    # browse sealed runs down to 15-minute data
 uv run pytest
 uv run rfnbo validate examples/test_plant.json
 
