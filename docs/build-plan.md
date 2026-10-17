@@ -493,9 +493,8 @@ Draft rules:
    connects by flows to the units or storages it may feed; each flow carries a metered 15-minute
    series of the physical quantity delivered (kg). Not all of it is RFNBO: product without PoS
    credentials allocated to it is non-RFNBO.
-2. **Proof of sustainability.** Each PoS has an ID, supplier, product, dispatch date, production
-   month of its final processing step, quantity (kg) and GHG intensity (gCO₂e/MJ), which
-   includes distribution to this plant. It must be
+2. **Proof of sustainability.** Each PoS has an ID, supplier, product, dispatch date, quantity
+   (kg) and GHG intensity (gCO₂e/MJ), which includes distribution to this plant. It must be
    compliant (≤ 28.2 gCO₂e/MJ). It belongs to the mass balance period (calendar quarter, plant
    time zone) of its dispatch date. PoS records are entered in the UI (phase 17) or
    imported from CSV, and are part of the sealed run's inputs.
@@ -531,7 +530,7 @@ Decisions (2026-10-17):
 | 5 | Into a storage as well as a unit? | Yes: supply flows may go into units or storages |
 | 6 | Allocation against metered flow | Per batch (into a unit) or per interval range (into a storage), allocated kg ≤ metered kg, within the quarter |
 | 7 | May credentials be allocated to flow metered before the PoS's dispatch date? | Yes, as long as both are in the same mass balance period (calendar quarter) |
-| 8 | Production month of purchased RFNBO | The month of its final processing step. Held in a storage, it keeps the month of the supplier's final processing step (a PoS field), which sets its aggregated batch and write-off order. Processed further in the plant, it becomes part of that unit batch and takes the batch's month, so it aggregates with other batches processed in the same month |
+| 8 | How purchased RFNBO is aggregated | The PoS needs only its dispatch date; the supplier's production month plays no part. Processed further in the plant, it becomes part of that unit batch (e.g. LH₂, CH₂) and is aggregated as that batch. Passed through without processing (held in a storage that feeds distribution), it is aggregated only with other passed-through RFNBO of the same dispatch date, and its dispatch date sets its place in the write-off order |
 
 Phase 16 details. Before code, as for phase 10: build test case 4 as a workbook with live
 formulas, hand-calculated expected values and an independent Python check. Plant: test plant 3
