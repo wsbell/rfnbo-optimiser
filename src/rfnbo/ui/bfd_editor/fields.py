@@ -63,6 +63,12 @@ BLOCK_FIELDS: dict[str, tuple[FieldSpec | TableSpec, ...]] = {
         FieldSpec("product", "Product", "text"),
         FieldSpec("inventory_series", "Inventory series (kg)", "optional_text"),
         FieldSpec("opening_inventory_kg", "Opening physical inventory (kg)", "number"),
+        FieldSpec(
+            "carried_weight_fallback",
+            "Carried-weight fallback (MJ final product per MJ)",
+            "number",
+            hint="blank: measured from this quarter's data",
+        ),
         TableSpec(
             "opening_ledger",
             "Opening RFNBO ledger",

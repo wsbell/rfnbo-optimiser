@@ -101,7 +101,7 @@ def _batch(args: argparse.Namespace) -> int:
         for f in flags:
             print(f"  {f}", file=sys.stderr)
         return 1
-    result = optimise_batching(cfg, frame, eps=args.batch_penalty_MJ)
+    result = optimise_batching(cfg, frame, materiality_MJ=args.batch_materiality_MJ)
     decisions = Decisions(batches=result.batches)
     check = calculate(cfg, frame, decisions)
     Path(args.out).write_text(decisions.model_dump_json(indent=1) + "\n", encoding="utf-8")
@@ -151,7 +151,7 @@ def _optimise(args: argparse.Namespace) -> int:
     consignments = TypeAdapter(list[ConsignmentSpec]).validate_json(
         Path(args.consignments).read_text(encoding="utf-8")
     )
-    result = optimise(cfg, frame, consignments, batch_penalty_MJ=args.batch_penalty_MJ)
+    result = optimise(cfg, frame, consignments, batch_materiality_MJ=args.batch_materiality_MJ)
 
     out = Path(args.out)
     ids = {}
@@ -169,6 +169,7 @@ def _optimise(args: argparse.Namespace) -> int:
         "objectives": {
             name: {
                 "consignments_met": o.objectives.consignments_met,
+                "carried_value_MJ": o.objectives.carried_value_MJ,
                 "final_rfnbo_kg": o.objectives.final_rfnbo_kg,
                 "carried_emissions_g": o.objectives.carried_emissions_g,
                 "carried_ghg": o.objectives.carried_ghg,
@@ -187,6 +188,7 @@ def _optimise(args: argparse.Namespace) -> int:
     print(f"{'':>24} {'optimised':>18} {'baseline':>18}")
     o, b = result.optimised.objectives, result.baseline.objectives
     print(f"{'consignments met':>24} {o.consignments_met!s:>18} {b.consignments_met!s:>18}")
+    print(f"{'carried value (MJ)':>24} {o.carried_value_MJ:>18,.1f} {b.carried_value_MJ:>18,.1f}")
     print(f"{'final RFNBO (kg)':>24} {o.final_rfnbo_kg:>18,.1f} {b.final_rfnbo_kg:>18,.1f}")
     print(
         f"{'carried GHG (g)':>24} {o.carried_emissions_g:>18,.0f} {b.carried_emissions_g:>18,.0f}"
@@ -274,10 +276,10 @@ def main(argv: list[str] | None = None) -> int:
     b.add_argument("--quarter", required=True)
     b.add_argument("--out", required=True, help="decision set JSON (batches only)")
     b.add_argument(
-        "--batch-penalty-MJ",
+        "--batch-materiality-MJ",
         type=float,
-        default=0.01,
-        help="value a batch must add to be split off (fewest-batches tie-break)",
+        default=120.0,
+        help="final-product MJ a split must gain, else fewer batches win (default 120, 1 kg H2)",
     )
     b.set_defaults(fn=_batch)
 
@@ -292,7 +294,12 @@ def main(argv: list[str] | None = None) -> int:
         help="JSON list of consignments (target null = minimise mode)",
     )
     o.add_argument("--out", required=True)
-    o.add_argument("--batch-penalty-MJ", type=float, default=0.01)
+    o.add_argument(
+        "--batch-materiality-MJ",
+        type=float,
+        default=120.0,
+        help="final-product MJ a split must gain, else fewer batches win (default 120, 1 kg H2)",
+    )
     o.set_defaults(fn=_optimise)
 
     rp = sub.add_parser("report", help="Excel/CSV reports for a sealed run")

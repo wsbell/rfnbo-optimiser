@@ -19,6 +19,7 @@ from rfnbo.calc.ledger import (
     compute_ledgers,
     compute_reconciliation,
 )
+from rfnbo.calc.weights import StorageWeight, storage_weights
 from rfnbo.config.schema import PlantConfig
 from rfnbo.data.quality import Frame
 from rfnbo.model.entities import Decisions
@@ -34,6 +35,7 @@ class RunResult:
     ledgers: list[LedgerResult]
     reconciliation: list[Reconciliation]
     consignments: list[ConsignmentResult]
+    storage_weights: dict[str, StorageWeight] = field(default_factory=dict)
     checks: list[CheckResult] = field(default_factory=list)
 
     @property
@@ -49,6 +51,21 @@ class RunResult:
 
     def consignment(self, consignment_id: str) -> ConsignmentResult:
         return next(c for c in self.consignments if c.id == consignment_id)
+
+    @property
+    def carried_value_MJ(self) -> float | None:
+        """Objective 2: compliant RFNBO carried forward, in MJ of final product (storage
+        weights). None if a storage carrying RFNBO has no known weight."""
+        total = 0.0
+        for led in self.ledgers:
+            mj = sum(x.carried_kg * x.lhv_MJ_per_kg for x in led.lines if x.compliant)
+            if mj <= 0:
+                continue
+            w = self.storage_weights[led.storage].weight
+            if w is None:
+                return None
+            total += mj * w
+        return total
 
 
 def calculate(cfg: PlantConfig, frame: Frame, decisions: Decisions) -> RunResult:
@@ -68,6 +85,7 @@ def calculate(cfg: PlantConfig, frame: Frame, decisions: Decisions) -> RunResult
         ledgers=ledgers,
         reconciliation=compute_reconciliation(cfg, frame),
         consignments=consignments,
+        storage_weights=storage_weights(cfg, frame),
     )
     run.checks.extend(run_checks(run))
     return run

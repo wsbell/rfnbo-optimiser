@@ -7644,9 +7644,9 @@
   "out_feed_kg": 227261.2,
   "closing_before_kg": 108729.20000000001,
   "physical_kg": 14277.8,
-  "write_off_kg": 94451.40000000001,
-  "carried_kg": 14277.800000000003,
-  "carried_ghg": 58.33886729712445
+  "write_off_kg": 108729.20000000001,
+  "carried_kg": 0.0,
+  "carried_ghg": null
  },
  "h2_reconciliation": {
   "opening_physical_kg": 5000,

@@ -29,6 +29,10 @@ MASS_BALANCE = "Directive (EU) 2018/2001, Art. 30(1) (mass balance); certificati
 SCOPE_BATCH = "Scope document: batching (batches cover every interval once)"
 SCOPE_MATCHING = "Scope document: renewable power matching (shared pool)"
 SCOPE_WRITE_OFF = "Scope document: quarter-end write-off (highest GHG first, newest on ties)"
+SCOPE_CARRY = (
+    "Scope document decisions log: non-compliant RFNBO cannot be carried between quarters "
+    "(2026-10-17)"
+)
 SCOPE_AGGREGATION = "Scope document: consignment aggregation (one production month)"
 SCOPE_CONSIGNMENT = "Scope document: consignment requirements"
 
@@ -210,25 +214,43 @@ def ledger_within_physical(run: RunResult) -> Iterator[CheckResult]:
 
 
 @check
+def noncompliant_not_carried(run: RunResult) -> Iterator[CheckResult]:
+    """No non-compliant RFNBO is carried into the next quarter."""
+    for ledger in run.ledgers:
+        carried = sum(x.carried_kg for x in ledger.lines if not x.compliant)
+        yield _r(
+            "noncompliant_not_carried",
+            SCOPE_CARRY,
+            f"{ledger.storage} {ledger.quarter}",
+            carried <= ABS_KG,
+            f"non-compliant RFNBO carried {carried:.6f} kg",
+        )
+
+
+@check
 def write_off_amount(run: RunResult) -> Iterator[CheckResult]:
-    """Exactly the excess over physical inventory is written off: no more, no less."""
+    """Exactly what the rules require is written off: all non-compliant RFNBO, and at least the
+    excess over physical inventory. No more, no less."""
     for ledger in run.ledgers:
         yield _r(
             "write_off_amount",
             SCOPE_WRITE_OFF,
             f"{ledger.storage} {ledger.quarter}",
-            close(ledger.write_off_kg, ledger.excess_kg),
-            f"written off {ledger.write_off_kg:.6f} kg, excess {ledger.excess_kg:.6f} kg",
+            close(ledger.write_off_kg, ledger.required_write_off_kg),
+            f"written off {ledger.write_off_kg:.6f} kg, required {ledger.required_write_off_kg:.6f}"
+            f" kg (excess {ledger.excess_kg:.6f}, non-compliant "
+            f"{ledger.noncompliant_closing_kg:.6f})",
         )
 
 
 @check
 def write_off_order(run: RunResult) -> Iterator[CheckResult]:
-    """Write-off takes the highest-GHG batches first; equal GHG, newest month first."""
+    """Write-off takes non-compliant batches first, then the highest GHG; equal GHG, newest
+    month first."""
     for ledger in run.ledgers:
-        groups: dict[tuple[float, str], list[float]] = defaultdict(lambda: [0.0, 0.0])
+        groups: dict[tuple[bool, float, str], list[float]] = defaultdict(lambda: [0.0, 0.0])
         for x in ledger.lines:
-            g = groups[priority_key(x.ghg_gCO2e_per_MJ, x.month)]
+            g = groups[priority_key(x.ghg_gCO2e_per_MJ, x.month, x.compliant)]
             g[0] += x.closing_before_kg
             g[1] += x.write_off_kg
         problem = ""
@@ -237,8 +259,8 @@ def write_off_order(run: RunResult) -> Iterator[CheckResult]:
             closing, written = groups[key]
             if partial_seen is not None and written > ABS_KG:
                 problem = (
-                    f"{written:.6f} kg written off at GHG {key[0]} ({key[1]}) while "
-                    f"higher-priority GHG {partial_seen[0]} ({partial_seen[1]}) is carried"
+                    f"{written:.6f} kg written off at GHG {key[1]} ({key[2]}) while "
+                    f"higher-priority GHG {partial_seen[1]} ({partial_seen[2]}) is carried"
                 )
                 break
             if not close(written, closing) and partial_seen is None:

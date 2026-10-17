@@ -33,7 +33,7 @@ from rfnbo.model.entities import Decisions
 from rfnbo.optimise.lp import solver_info
 from rfnbo.trace import json_log, lineage
 
-RECORD_VERSION = 1
+RECORD_VERSION = 2  # 2: storage weights and the non-compliant write-off
 FRAME_FILE, BATCHES_FILE, RUN_FILE = "frame.csv", "batches.jsonl", "run.json"
 _PACKAGES = ("rfnbo", "numpy", "pydantic", "openpyxl", "tzdata", "highspy")
 
@@ -125,6 +125,8 @@ def _ledgers(run: RunResult) -> list[dict[str, Any]]:
                 "closing_before_kg": led.closing_before_kg,
                 "physical_kg": led.physical_kg,
                 "excess_kg": led.excess_kg,
+                "noncompliant_closing_kg": led.noncompliant_closing_kg,
+                "required_write_off_kg": led.required_write_off_kg,
                 "write_off_kg": led.write_off_kg,
                 "carried_kg": led.carried_kg,
                 "carried_ghg": led.carried_ghg_gCO2e_per_MJ,
@@ -295,6 +297,10 @@ def build(
             "summary": _summary(run),
             "ledgers": _ledgers(run),
             "reconciliation": _reconciliation(run),
+            "storage_weights": {
+                k: {"weight": w.weight, "source": w.source, "detail": w.detail}
+                for k, w in run.storage_weights.items()
+            },
             "consignments": _consignments(run),
             "lineage": lineage.graph(run),
             "checks": [
@@ -401,7 +407,8 @@ def with_opening_from(cfg: PlantConfig, run_dir: str | Path, quarter: str) -> Pl
     """``cfg`` for ``quarter`` with each storage's opening ledger from a prior sealed run.
 
     The prior run must be for the same plant and the quarter immediately before.
-    Opening physical inventory is taken from the prior run's measured closing inventory.
+    Opening physical inventory is taken from the prior run's measured closing inventory, and
+    each storage's carried-weight fallback from the prior run's storage weight.
     """
     rec = load_record(run_dir)
     if rec["plant"] != cfg.plant:
@@ -410,14 +417,19 @@ def with_opening_from(cfg: PlantConfig, run_dir: str | Path, quarter: str) -> Pl
         raise SealError(f"sealed run is for {rec['quarter']}; it cannot open {quarter}")
     carried = carried_ledger(run_dir)
     measured = {r["storage"]: r["measured_kg"] for r in rec["results"]["reconciliation"]}
+    weights = {k: v["weight"] for k, v in rec["results"].get("storage_weights", {}).items()}
     blocks = []
     for b in cfg.blocks:
         if isinstance(b, StorageUnit):
             if b.id not in carried:
                 raise SealError(f"sealed run has no ledger for storage {b.id!r}")
-            b = b.model_copy(
-                update={"opening_ledger": carried[b.id], "opening_inventory_kg": measured[b.id]}
-            )
+            update: dict[str, Any] = {
+                "opening_ledger": carried[b.id],
+                "opening_inventory_kg": measured[b.id],
+            }
+            if weights.get(b.id) is not None:
+                update["carried_weight_fallback"] = weights[b.id]
+            b = b.model_copy(update=update)
         blocks.append(b)
     return cfg.model_copy(update={"blocks": blocks})
 

@@ -27,16 +27,23 @@ The full build plan, including the multi-step extension and the decisions it nee
 
 Test case 2 predates the non-compliant RFNBO rule (build plan §2.5). Its golden fixtures were
 regenerated with `tests/golden/export_workbook.py --rule-2-5`: 88 H₂ sub-batches above
-28.2 gCO₂e/MJ (108,729.2 kg) now enter the H₂ ledger, and 94,451.4 kg of them are written off
-at quarter end under the workbook's own decisions. The original values are kept under
+28.2 gCO₂e/MJ (108,729.2 kg) now enter the H₂ ledger, and, since non-compliant RFNBO cannot be
+carried into the next quarter, all 108,729.2 kg left at quarter end under the workbook's own
+decisions is written off. The original values are kept under
 `superseded` in `tests/golden/tc2.expected.json`.
 
 Test case 3 (`tests/golden/workbooks/RFNBO_optimiser_test3_multistep_Q4_2026.xlsx`) is the
 multi-step plant for phases 11–15: electrolyser with a split, metered output → H₂ buffer →
 liquefier (boil-off) → LH₂, and a direct pass-through link → compressor → CH₂, sharing one
 renewable pool. `tests/golden/build_tc3_workbook.py` builds it, `tc3_reference.py` checks it
-independently and `export_tc3.py` writes the fixtures. Variant V2 (renewable shortfall) gives
-two answers until build plan §10.3 follow-up (b) is decided.
+independently and `export_tc3.py` writes the fixtures.
+
+Objectives (build plan §2.8, revised 2026-10-17): meet consignments; then maximise compliant
+RFNBO carried forward in MJ of final product, each storage weighted by its downstream energy
+yield; then lowest carried emissions; then fewest batches (a split must gain 120 MJ).
+Non-compliant RFNBO is written off at quarter end. Under these rules the optimiser keeps H₂ in
+storage rather than making NH₃ that is written off: test case 1 carries 619,652 MJ more than
+the workbook decisions, test case 2 1.49 million MJ more (5.9%).
 
 ## Quick start
 

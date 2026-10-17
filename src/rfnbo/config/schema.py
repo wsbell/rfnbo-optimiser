@@ -112,6 +112,9 @@ class StorageUnit(_Block):
     inventory_series: str | None = None  # kg at interval end; required by the validator
     opening_inventory_kg: float = Field(ge=0)
     opening_ledger: list[OpeningLedgerEntry] = Field(default_factory=list)
+    # MJ of final product per MJ carried here, used only when this quarter's data has no
+    # downstream flow to measure it from (rfnbo.calc.weights); --opening-from sets it.
+    carried_weight_fallback: float | None = Field(default=None, gt=0)
 
     @model_validator(mode="after")
     def _check(self) -> StorageUnit:

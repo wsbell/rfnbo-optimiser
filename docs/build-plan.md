@@ -93,19 +93,36 @@ Matched renewable electricity has EF = 0. Feed batches carry their own GHG.
 
 ### 2.7 Mass balance
 - Each storage unit keeps an RFNBO ledger per calendar quarter, checked at quarter end only.
-- Quarter end: closing ledger ≥ 0 and ≤ measured physical inventory. Any excess is written off,
-  highest-GHG batches first. Carried batches keep ID, GHG, RFNBO share and production month.
+- Quarter end: closing ledger ≥ 0 and ≤ measured physical inventory. Non-compliant RFNBO
+  (§2.5) cannot be stored and carried into the next quarter: all of it left at quarter end is
+  written off (decided 2026-10-17). Beyond that, any excess over physical inventory is written
+  off, highest-GHG batches first (non-compliant batches always first). Carried batches keep
+  ID, GHG, RFNBO share and production month.
 - Losses are not modelled; they appear in a physical reconciliation.
 - Opening ledger: manual entry or a prior sealed run (run setting).
 
-### 2.8 Objectives (lexicographic, never a weighted sum)
+### 2.8 Objectives (lexicographic, never a weighted sum; revised 2026-10-17)
 1. Meet every consignment (fixed targets) or minimise consignment GHG (minimise mode).
-2. Maximise compliant RFNBO volume of the final product.
+2. Maximise compliant RFNBO carried forward to the next quarter, in MJ of final product, summed
+   over every storage. Each storage's carried MJ is multiplied by its weight: 1 for a storage
+   that feeds a distribution block; otherwise Σ over its outflows of (share of its metered
+   outflow) × (the receiving unit's energy yield, product MJ ÷ feed MJ, over the quarter) ×
+   (weight of the storage that unit outputs to). So 100 MJ of H₂ in front of a liquefier that
+   loses 10% counts as 90 MJ. Weights come from the quarter's own metered data; if a unit did
+   not run, from the previous sealed run (`carried_weight_fallback`, set by `--opening-from`),
+   otherwise the run stops and asks.
 3. Minimise GHG of inventory carried forward.
+4. Fewest batches, with a materiality threshold: stage A splits a batch only if that gains at
+   least 120 MJ of final product (1 kg H₂; `--batch-materiality-MJ`). This replaces the 0.01 MJ
+   per-batch penalty.
 
-Minimising write-off is **not** an objective: it would reward making less RFNBO.
-Tie-breaks: fewest batches; consignments draw equal-GHG material oldest month first; equal-GHG
-write-offs take newest month first.
+Minimising write-off is **not** an objective: it would reward making less RFNBO. Objective 2
+replaces "compliant RFNBO volume of the final product": once consignments are fixed it differs
+only by counting what is held upstream, at what it would become downstream. It also stops the
+optimiser feeding product that would only be written off (test case 1: H₂ stays in storage
+instead of making December NH₃ that the spot sale writes off).
+Tie-breaks: consignments draw equal-GHG material oldest month first; equal-GHG write-offs take
+newest month first.
 
 ### 2.9 Out of scope (for now)
 Additionality/geography checks, grid-electricity routes, electricity storage, co-products,
@@ -238,8 +255,8 @@ report the gap to a bound.
 allowed window. Batch value = RFNBO volume, with a Lagrangian penalty μ·(GHG − downstream limit)
 so batches are shaped for what downstream units can absorb. Search μ to maximise final-product
 compliant RFNBO. Downstream limit example (test plant): H₂ feed must blend to ≤ 13.45 gCO₂e/MJ
-for NH₃ to stay ≤ 28.2. Add a tiny per-batch penalty for the fewest-batches tie-break. O(n²) per
-month is fine (n ≈ 2,976).
+for NH₃ to stay ≤ 28.2. A per-batch penalty (the §2.8 materiality threshold) breaks ties
+towards fewer batches. O(n²) per month is fine (n ≈ 2,976).
 
 **Stage B — feed allocation (LP).** Variables x[b, m] = kg of upstream batch b to downstream
 batch m. Each downstream batch's compliance is linear in x:
@@ -365,10 +382,10 @@ decisions, the lineage graph) already works on networks.
    one calendar month, and the optimiser chooses their boundaries; the electrolyser keeps its
    hourly limit from 2030.
 7. **Several final products.** Each final product has its own storages, ledgers, distribution
-   blocks and consignments. Aggregated batches never mix products. Objectives: first meet
-   every consignment (a specific quantity of a specific output for a specific customer); then
-   maximise the RFNBO that can be held in storage at the end of the period (carried forward,
-   within each storage's measured inventory), summed as energy (MJ) across products.
+   blocks and consignments. Aggregated batches never mix products. Objectives as §2.8: first
+   meet every consignment (a specific quantity of a specific output for a specific customer);
+   then maximise compliant RFNBO carried forward at the end of the period (within each
+   storage's measured inventory), in MJ of final product with the storage weights of §2.8.
 8. **Intermediate compliance.** An intermediate RFNBO batch above 28.2 gCO₂e/MJ is non-compliant
    RFNBO (§2.5): it may be fed on and saved by blending, never consigned. Only the step whose
    output is consigned must be compliant.
@@ -385,11 +402,12 @@ decisions, the lineage graph) already works on networks.
 | 6 | Recycle flows (boil-off gas back to a compressor)? | Out of scope; flows stay one way |
 | 7 | Hydrogen consigned at more than one point? | Allowed: every storage that feeds a distribution block is a final product point |
 
-**Follow-up (open).** Decision 1 measures objective 2 as RFNBO carried forward at period end,
-where §2.8 and phases 6–7 use compliant RFNBO volume of the final product. Two points to
-confirm before phase 14: (a) whether the single-chain optimiser should switch to the new
-measure now; (b) whether only compliant RFNBO counts, or also non-compliant RFNBO that may be
-blended next quarter.
+**Follow-up (settled 2026-10-17).** (a) The single-chain optimiser uses the new objective 2
+now (§2.8). (b) Non-compliant RFNBO cannot be stored and carried between quarters: it is
+written off at quarter end (§2.7), so only compliant RFNBO counts. Objective 2 weights each
+storage by its downstream energy yield, measured from the quarter's data (weighted over
+several downstream units by metered outflow). Stage A's tie-break is a 120 MJ materiality
+threshold.
 
 ### 10.4 Phase details
 
@@ -407,9 +425,8 @@ answer in the scope doc's decisions log.
 (built by `tests/golden/build_tc3_workbook.py`, checked by `tc3_reference.py`, fixtures from
 `export_tc3.py`); draft network config `tests/golden/tc3.plant.json`. The expected optimum keeps
 the H₂ buffer full of RFNBO rather than liquefying H₂ that would be written off as LH₂; this
-relies on objective 2 counting every storage, intermediate ones included. Variant V2 depends on
-follow-up (b) and is worked out for both readings; the scope doc's decisions log records
-decisions 1–7 and (b) as open.
+holds because liquefying it would only add LH₂ that is written off. Variant V2 shows the
+liquefier given just enough renewable to comply, since non-compliant LH₂ cannot be carried.
 
 **Phase 11 — Config, validation and editor.** Schema: output flows of a unit carry a metered
 series when there are several; storage `pass_through` flag (no inventory series, physical

@@ -135,7 +135,9 @@ def _assert_matches(result: dict[str, Any], expected: dict[str, Any]) -> None:
             assert close(got["by_month"].get(month, 0.0), kg), (cid, month)
     got, want = result["objectives"], expected["objectives"]
     assert got["consignments_met"] == want["consignments_met"]
-    assert close(got["stored_MJ"], want["stored_MJ"])
+    assert close(got["carried_value_MJ"], want["carried_value_MJ"])
+    for storage, w in want["weights"].items():
+        assert close(got["weights"][storage], w), storage
     assert close(got["carried_emissions_g"], want["carried_emissions_g"])
     assert got["batches"] == want["batches"]
     for storage, mj in want["stored_MJ_by_storage"].items():
@@ -210,7 +212,10 @@ def test_hand_calculated_values() -> None:
     lh2 = x["ledgers"]["lh2_storage"]
     assert close(lh2["shortfall_kg"], 57040)
     assert close(lh2["lines"]["L-2026-12"]["write_off_kg"], 57040)
-    assert close(x["objectives"]["stored_MJ"], (4880 + 47092 + 56720) * 120)
+    # Objective 2: the buffer's H₂ counts at the liquefier's yield over the quarter.
+    w = (2980 * 29.4 + 2880 * 29.1 + 2880 * 29.4) / ((8836 - 96) * 30)
+    assert close(x["objectives"]["weights"]["h2_buffer"], w)
+    assert close(x["objectives"]["carried_value_MJ"], (4880 * w + 47092 + 56720) * 120)
     assert x["objectives"]["at_upper_bound"] is True
     assert x["workbook_checks_pass"] is True
 
@@ -221,15 +226,22 @@ def test_variants() -> None:
     v1 = x["variants"]["v1_hourly"]
     assert v1["electrolyser_batches"] == len(cases["v1_hourly"]["units"]["electrolyser"]) == 2209
     assert v1["zero_share_batches"] == 12
-    assert close(v1["stored_MJ"], cases["v1_hourly"]["objectives"]["stored_MJ"])
+    assert close(v1["carried_value_MJ"], cases["v1_hourly"]["objectives"]["carried_value_MJ"])
     v2 = x["variants"]["v2_shortfall"]
-    a, b = v2["reading_a_noncompliant_counts"], v2["reading_b_compliant_only"]
-    assert close(a["stored_MJ"], cases["v2_including"]["objectives"]["stored_MJ"])
-    assert close(b["stored_MJ"], cases["v2_compliant"]["objectives"]["stored_compliant_MJ"])
-    assert a["december_lh2_ghg"] > R.THRESHOLD >= b["december_lh2_ghg"]
-    assert b["liquefier_renewable_kWh"] >= v2["least_liquefier_renewable_kWh"]
-    # Each reading's answer beats the other's under its own measure.
-    assert a["stored_MJ"] > b["stored_MJ"] > a["stored_compliant_MJ"]
+    rejected = v2["rejected_all_to_electrolyser"]
+    assert close(v2["carried_value_MJ"], cases["v2_shortfall"]["objectives"]["carried_value_MJ"])
+    assert close(
+        rejected["carried_value_MJ"],
+        cases["v2_all_to_electrolyser"]["objectives"]["carried_value_MJ"],
+    )
+    assert rejected["december_lh2_ghg"] > R.THRESHOLD >= v2["december_lh2_ghg"]
+    assert v2["liquefier_renewable_kWh"] >= v2["least_liquefier_renewable_kWh"]
+    assert v2["beats_rejected"] is True and v2["carried_value_MJ"] > rejected["carried_value_MJ"]
+    # Non-compliant LH₂ is never carried: the rejected alternative writes all of it off.
+    lh2 = cases["v2_all_to_electrolyser"]["ledgers"]["lh2_storage"]["lines"]["L-2026-12"]
+    assert lh2["carried_kg"] == 0 and close(
+        lh2["write_off_kg"], rejected["december_lh2_written_off_kg"]
+    )
     v3 = x["variants"]["v3_infeasible"]
     assert v3["ca_feasible"] is False and v3["cb_met"] is True
     assert v3["ca_max_volume_kg"] == 0 and v3["consignments_met"] == 1

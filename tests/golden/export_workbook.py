@@ -7,8 +7,10 @@ the workbook's cached results; nothing here uses the calculator.
 
 ``--rule-2-5`` regenerates what the non-compliant RFNBO rule (build plan §2.5) changes: an
 electrolyser sub-batch above 28.2 gCO2e/MJ is still RFNBO and enters the H2 ledger, so its RFNBO
-kg and the H2 ledger and write-off are recomputed here, independently of the app. Workbook
-values that change are kept under ``superseded``.
+kg and the H2 ledger and write-off are recomputed here, independently of the app. Non-compliant
+RFNBO cannot be carried into the next quarter (decided 2026-10-17), so all of it left at quarter
+end is written off, ahead of compliant batches. Workbook values that change are kept under
+``superseded``.
 """
 
 from __future__ import annotations
@@ -178,10 +180,12 @@ def export(path: Path, rule_2_5: bool) -> tuple[dict[str, Any], dict[str, Any]]:
             if v["rfnbo_kg"] > 0
         ]
         closing = sum(x[3] for x in lines)
-        excess = max(0.0, closing - h2_ledger["physical_kg"])
+        bad = {b for b, v in h2.items() if not v["compliant"]}
+        noncompliant = sum(kg for b, _g, _m, kg in lines if b in bad)
+        excess = max(0.0, closing - h2_ledger["physical_kg"], noncompliant)
         left = excess
         for b, _g, _m, kg in sorted(
-            lines, key=lambda x: (round(x[1], 9), x[2], x[0]), reverse=True
+            lines, key=lambda x: (x[0] in bad, round(x[1], 9), x[2], x[0]), reverse=True
         ):
             if left <= 0:
                 break
@@ -197,7 +201,9 @@ def export(path: Path, rule_2_5: bool) -> tuple[dict[str, Any], dict[str, Any]]:
             write_off_kg=excess,
             carried_kg=closing - excess,
             carried_ghg=(
-                sum(kg * 120.0 * h2[b]["ghg"] for b, kg in carried.items()) / mj if mj else None
+                sum(kg * 120.0 * h2[b]["ghg"] for b, kg in carried.items()) / mj
+                if closing - excess > 1e-6
+                else None
             ),
         )
     h2_recon = dict(

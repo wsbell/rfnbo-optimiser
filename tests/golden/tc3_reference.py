@@ -19,12 +19,14 @@ Rules applied (§10.2 and §10.3 decisions):
 - Conditioning units (rule 2): share = RFNBO feed ÷ feed consumed (same LHV, so by kg); GHG =
   (feed emissions + share × own emissions) ÷ RFNBO product energy + adder. Losses (rule 3) make
   the RFNBO product energy smaller than the RFNBO feed energy, so they raise GHG.
-- Storage ledgers close at quarter end by the §2.7 rule: the excess over measured inventory is
-  written off, highest GHG first, newest month first on ties (GHG rounded to 9 dp). A
-  pass-through storage (rule 5) has physical inventory zero.
-- Objectives (decision 1): consignments met; then RFNBO held in storage at period end, in MJ,
-  summed over every storage (pass-through storages are always zero); then carried emissions;
-  then fewest batches.
+- Storage ledgers close at quarter end by the §2.7 rule. Non-compliant RFNBO cannot be carried
+  into the next quarter, so all of it is written off (decided 2026-10-17); beyond that, the
+  excess over measured inventory is written off, highest GHG first, newest month first on ties
+  (GHG rounded to 9 dp). A pass-through storage (rule 5) has physical inventory zero.
+- Objectives (decided 2026-10-17): consignments met; then compliant RFNBO carried forward, in
+  MJ of final product: each storage's carried MJ times its weight (1 for a storage that feeds a
+  distribution block; otherwise the downstream unit's energy yield over the quarter times the
+  weight of the storage it outputs to); then carried emissions; then fewest batches.
 """
 
 from __future__ import annotations
@@ -288,16 +290,18 @@ def hourly_decisions(data: Data) -> Decisions:
     return d
 
 
-def v2_decisions(data: Data, reading: str) -> Decisions:
+def v2_decisions(data: Data, all_to_electrolyser: bool = False) -> Decisions:
     """V2: December renewable 2,500 kWh per interval, no LH₂ spot sale.
 
-    ``reading="including"``: non-compliant RFNBO held in storage counts towards objective 2, so
-    all renewable goes to the electrolyser and December LH₂ is left non-compliant.
-    ``reading="compliant"``: only compliant RFNBO counts, so the liquefier gets just enough
-    renewable for its December batch to comply. That renewable comes from the last intervals of
-    December, which become a 0% electrolyser batch, plus one 40% interval whose 20 kg of RFNBO
-    exactly fills that interval's metered flow to the compressor (so none of it reaches the
-    liquefier's feed)."""
+    Non-compliant RFNBO cannot be carried (decided 2026-10-17), so the liquefier gets just
+    enough renewable for its December batch to comply. That renewable comes from the last
+    intervals of December, which become a 0% electrolyser batch, plus one 40% interval whose
+    20 kg of RFNBO exactly fills that interval's metered flow to the compressor (so none of it
+    reaches the liquefier's feed). LH₂ storage is not full, and December's liquefier yield
+    (0.98) beats the buffer's weight (0.977), so the liquefier takes all the RFNBO it can.
+
+    ``all_to_electrolyser`` is the rejected alternative: December LH₂ is non-compliant and is
+    written off."""
     d = base_decisions(data)
     dec = [i for i, m in enumerate(data.month) if m == "2026-12"]
     first, last = dec[0], dec[-1] + 1
@@ -305,7 +309,9 @@ def v2_decisions(data: Data, reading: str) -> Decisions:
         d.renewable["electrolyser"][i] = V2_DEC_RENEWABLE_KWH
         d.renewable["liquefier"][i] = 0.0
         d.renewable["compressor"][i] = 0.0
-    if reading == "compliant":
+    carry = data.s["buffer_inv_kg"][-1]
+    if not all_to_electrolyser:
+        carry = 0.0
         a_l = v2_min_liquefier_kWh(data)
         dark = int(a_l // V2_DEC_RENEWABLE_KWH)
         partial_e = 20.0 / 50.0 * 2500.0  # 1,000 kWh: 20 kg RFNBO, the compressor flow
@@ -323,7 +329,7 @@ def v2_decisions(data: Data, reading: str) -> Decisions:
             ("E-2026-12-03", p + 1, last),
         ]
     d.outputs, d.feed = {}, {}
-    route(data, d, buffer_carry_kg=data.s["buffer_inv_kg"][-1])
+    route(data, d, buffer_carry_kg=carry)
     d.parts["CB"] = {"C-2026-10": 59600.0, "C-2026-11": 57600.0, "C-2026-12": 2800.0}
     return d
 
@@ -357,11 +363,14 @@ def _ghg_key(ghg: float) -> float:
 
 
 def _close(storage: str, lines: dict[str, dict[str, Any]], physical: float) -> None:
-    """§2.7: write off the excess over physical inventory, highest GHG first, newest first."""
+    """§2.7: write off all non-compliant RFNBO, and the excess over physical inventory, highest
+    GHG first, newest first."""
     closing = sum(x["closing_kg"] for x in lines.values())
-    excess = max(0.0, closing - physical)
+    bad = [b for b in lines if lines[b]["ghg"] > THRESHOLD + 1e-9]
+    excess = max(0.0, closing - physical, sum(lines[b]["closing_kg"] for b in bad))
     newest_first = sorted(lines, key=lambda b: lines[b]["month"], reverse=True)
-    for b in sorted(newest_first, key=lambda b: -_ghg_key(lines[b]["ghg"])):
+    by_ghg = sorted(newest_first, key=lambda b: -_ghg_key(lines[b]["ghg"]))
+    for b in sorted(by_ghg, key=lambda b: b not in bad):
         take = min(lines[b]["closing_kg"], excess)
         lines[b]["write_off_kg"] = take
         lines[b]["carried_kg"] = lines[b]["closing_kg"] - take
@@ -527,13 +536,13 @@ def run(data: Data, d: Decisions) -> dict[str, Any]:
             and shipped <= target + 1e-9
             and shipped <= THRESHOLD + 1e-9,
         }
-    stored = {k: v["carried_kg"] * LHV_MJ_PER_KG for k, v in ledgers.items()}
-    stored_compliant = {k: v["carried_compliant_kg"] * LHV_MJ_PER_KG for k, v in ledgers.items()}
+    weights = storage_weights(data)
+    stored = {k: v["carried_compliant_kg"] * LHV_MJ_PER_KG for k, v in ledgers.items()}
     objectives = {
         "consignments_met": sum(1 for c in cons.values() if c["met"]),
-        "stored_MJ": sum(stored.values()),
+        "carried_value_MJ": sum(mj * weights[k] for k, mj in stored.items()),
         "stored_MJ_by_storage": stored,
-        "stored_compliant_MJ": sum(stored_compliant.values()),
+        "weights": weights,
         "carried_emissions_g": sum(v["carried_emissions_g"] for v in ledgers.values()),
         "batches": sum(len(v) for v in d.batches.values()),
     }
@@ -543,6 +552,17 @@ def run(data: Data, d: Decisions) -> dict[str, Any]:
         "ledgers": ledgers,
         "consignments": cons,
         "objectives": objectives,
+    }
+
+
+def storage_weights(data: Data) -> dict[str, float]:
+    """MJ of final product per MJ carried in each storage, from the quarter's metered data."""
+    s = data.s
+    return {
+        "h2_buffer": sum(s["lh2_kg"]) / sum(s["liquefier_h2_kg"]),  # liquefier energy yield
+        "pt_compressor": sum(s["ch2_kg"]) / sum(s["compressor_h2_kg"]),
+        "lh2_storage": 1.0,
+        "ch2_storage": 1.0,
     }
 
 
@@ -570,7 +590,7 @@ def all_cases() -> dict[str, dict[str, Any]]:
     return {
         "base": run(base, base_decisions(base)),
         "v1_hourly": run(base, hourly_decisions(base)),
-        "v2_including": run(v2, v2_decisions(v2, "including")),
-        "v2_compliant": run(v2, v2_decisions(v2, "compliant")),
+        "v2_shortfall": run(v2, v2_decisions(v2)),
+        "v2_all_to_electrolyser": run(v2, v2_decisions(v2, all_to_electrolyser=True)),
         "v3_infeasible": run(base, v3_decisions(base)),
     }

@@ -167,6 +167,7 @@ def run_page(run_id: str) -> None:
     with ui.row().classes("gap-4"):
         for label, value in (
             ("Consignments met", fmt(o.consignments_met)),
+            ("RFNBO carried forward, final-product MJ", fmt(o.carried_value_MJ)),
             ("Compliant RFNBO, final product (kg)", fmt(o.final_rfnbo_kg)),
             ("Emissions carried forward (gCO2e)", fmt(o.carried_emissions_g)),
             ("Failed checks", fmt(len(run.failures))),

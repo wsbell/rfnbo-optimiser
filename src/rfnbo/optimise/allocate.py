@@ -8,7 +8,9 @@ when GHG_m ≤ T, which is linear in x:
     Σ_b x[b, m] · LHV_b · (g_b + own_m / C_m − (T − A) · MJ_m / C_m) ≤ 0
 
 Its RFNBO output is P_m · F_m / C_m kg. Objectives, lexicographic:
-    1. maximise RFNBO output of the downstream unit (compliant by construction);
+    1. maximise RFNBO output of the downstream unit (compliant by construction); from the
+       second pipeline round, maximise value instead: output MJ that stage C kept (consigned
+       or carried) plus compliant RFNBO left upstream, each times its storage weight;
     2. minimise GHG of inventory carried forward: the upstream storage's carried remainder
        (exact) plus the downstream batches' carried shares (weights from stage C);
     3. prefer same-month feed (readability).
@@ -19,7 +21,8 @@ below min(target, threshold) − distribution adder. Objectives: minimise-mode c
 GHG first, then GHG carried forward, then oldest month first into consignments. Write-offs
 then follow the §2.7 rule exactly (highest GHG first, newest month on ties).
 
-Non-compliant RFNBO (§2.5) is a valid feed source in stage B and never a consignment source.
+Non-compliant RFNBO (§2.5) is a valid feed source in stage B and never a consignment source;
+it cannot be carried forward either, so what is not fed is written off.
 """
 
 from __future__ import annotations
@@ -28,7 +31,7 @@ from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 
-from rfnbo.calc.batch import BatchResult
+from rfnbo.calc.batch import BatchResult, output_storage
 from rfnbo.calc.calculator import RunResult
 from rfnbo.calc.consign import consignment_route
 from rfnbo.calc.ledger import LedgerLine, LedgerResult, rule_write_offs
@@ -75,6 +78,7 @@ def stage_b(
     unit: ProcessingUnit,
     carried_weight: Mapping[str, float] | None = None,
     min_rfnbo_kg: float | None = None,
+    kept_share: Mapping[str, float] | None = None,
 ) -> FeedPlan:
     """Allocate RFNBO feed to one downstream unit's batches.
 
@@ -82,6 +86,13 @@ def stage_b(
     ``carried_weight`` (downstream batch → share of its RFNBO expected to be carried
     forward, from stage C) steers objective 2; ``min_rfnbo_kg`` lowers objective 1 when a
     consignment can only be met with less RFNBO output (objective 1 of the run).
+
+    Objective 1 is the most RFNBO output, unless ``kept_share`` (downstream batch → share of
+    its RFNBO that stage C consigned or carried) is given: then it is the most value, with
+    each batch's output in MJ times its kept share and times its storage weight, plus the
+    compliant RFNBO left upstream (within measured inventory) times the upstream storage
+    weight. Feeding product that would only be written off is then worth less than keeping
+    the feed.
     """
     store = feed_storage(cfg, unit)
     if store is None:
@@ -97,18 +108,22 @@ def stage_b(
         for t in targets:
             if t.feed_consumed_MJ > 0:
                 x[s.batch, t.id] = lp.var()
+    if not x:
+        return FeedPlan(unit.id, [], 0.0, "no feed")
     by_source: dict[str, list[int]] = defaultdict(list)
     for (sb, _), j in x.items():
         by_source[sb].append(j)
     src = {s.batch: s for s in sources}
 
+    # k[s]: compliant RFNBO left in the upstream storage and carried forward. Non-compliant
+    # RFNBO cannot be carried: whatever is not fed is written off.
+    k = {s.batch: lp.var() for s in sources if s.compliant}
     for s in sources:
-        if by_source[s.batch]:
-            lp.row(
-                by_source[s.batch],
-                [1.0] * len(by_source[s.batch]),
-                upper=s.in_kg - s.out_consignment_kg,
-            )
+        cols = [*by_source[s.batch], *([k[s.batch]] if s.batch in k else [])]
+        lp.row(cols, [1.0] * len(cols), upper=s.in_kg - s.out_consignment_kg)
+    if k:
+        lp.row(list(k.values()), [1.0] * len(k), upper=ledger.physical_kg)
+
     rfnbo_coef: dict[int, float] = {}
     emissions_coef: dict[int, float] = {}
     for t in targets:
@@ -137,35 +152,43 @@ def stage_b(
             emissions_coef[j] = mj * (
                 src[sb].ghg_gCO2e_per_MJ + own_per_mj + t.adder_gCO2e_per_MJ * out_per_mj
             )
-    if not x:
-        return FeedPlan(unit.id, [], 0.0, "no feed")
 
-    # 1. Most RFNBO output.
-    lp.set_cost(rfnbo_coef)
+    # 1. Most RFNBO output, or most value.
+    if kept_share is None:
+        cost1 = dict(rfnbo_coef)
+    else:
+        w_up = run.storage_weights[store.id].weight
+        w_down = run.storage_weights[output_storage(cfg, unit.id).id].weight
+        if w_up is None or w_down is None:
+            raise ValueError(f"stage B {unit.id}: storage weight unknown; set a fallback")
+        unit_of = {j: tb for (_, tb), j in x.items()}
+        cost1 = {
+            j: c * unit.lhv_MJ_per_kg * w_down * kept_share.get(unit_of[j], 1.0)
+            for j, c in rfnbo_coef.items()
+        }
+        cost1.update({kj: src[sb].lhv_MJ_per_kg * w_up for sb, kj in k.items()})
+    lp.set_cost(cost1)
     best = lp.solve(maximise=True)
     if not best.optimal:
         return FeedPlan(unit.id, [], 0.0, best.status)
-    floor = best.objective if min_rfnbo_kg is None else min(best.objective, min_rfnbo_kg)
-    lp.row(list(rfnbo_coef), list(rfnbo_coef.values()), lower=floor * (1 - KEEP) - 1e-6)
+    if kept_share is None:
+        floor = best.objective if min_rfnbo_kg is None else min(best.objective, min_rfnbo_kg)
+        lp.row(list(rfnbo_coef), list(rfnbo_coef.values()), lower=floor * (1 - KEEP) - 1e-6)
+        fed = {sb: sum(best.x[j] for j in by_source[sb]) for sb in k}
+        left = sum(src[sb].in_kg - src[sb].out_consignment_kg - fed[sb] for sb in k)
+        carry = min(ledger.physical_kg, left)
+    else:
+        lp.row(list(cost1), list(cost1.values()), lower=best.objective * (1 - KEEP) - 1e-6)
+        carry = sum(best.x[kj] for kj in k.values())
+    # Keep the upstream storage as full of compliant RFNBO as objective 1 left it.
+    if k:
+        lp.row(list(k.values()), [1.0] * len(k), lower=carry * (1 - KEEP) - 1e-6)
 
-    # 2. Least GHG carried forward: the upstream remainder (exact) and the downstream share.
-    fed_kg = float(sum(best.x[j] for j in x.values()))
-    available = sum(s.in_kg - s.out_consignment_kg for s in sources)
-    physical = ledger.physical_kg
-    carry_all = available - fed_kg <= physical
-    k: dict[str, int] = {}
-    for s in sources:
-        k[s.batch] = lp.var()
-        cols = [k[s.batch], *by_source[s.batch]]
-        avail = s.in_kg - s.out_consignment_kg
-        if carry_all:
-            lp.row(cols, [1.0] * len(cols), lower=avail, upper=avail)
-        else:
-            lp.row(cols, [1.0] * len(cols), upper=avail)
-    if not carry_all:
-        lp.row(list(k.values()), [1.0] * len(k), lower=physical, upper=physical)
+    # 2. Least GHG carried forward: the upstream remainder and the downstream share.
     weights = carried_weight or {}
-    cost2: dict[int, float] = {k[s.batch]: s.lhv_MJ_per_kg * s.ghg_gCO2e_per_MJ for s in sources}
+    cost2: dict[int, float] = {
+        kj: src[sb].lhv_MJ_per_kg * src[sb].ghg_gCO2e_per_MJ for sb, kj in k.items()
+    }
     for (_, tb), j in x.items():
         cost2[j] = cost2.get(j, 0.0) + weights.get(tb, 0.0) * emissions_coef[j]
     lp.set_cost(cost2)
@@ -240,10 +263,15 @@ def stage_c(
             if line.compliant:
                 for c in cons:
                     y[line.batch, c.id] = lp.var()
-        k = {line.batch: lp.var() for line in lines}
+        # Only compliant RFNBO can be carried forward; non-compliant is written off.
+        k = {line.batch: lp.var() for line in lines if line.compliant}
         for line in lines:
-            cols = [k[line.batch], *[y[line.batch, c.id] for c in cons if (line.batch, c.id) in y]]
-            lp.row(cols, [1.0] * len(cols), upper=line.in_kg - line.out_feed_kg)
+            cols = [
+                *([k[line.batch]] if line.batch in k else []),
+                *[y[line.batch, c.id] for c in cons if (line.batch, c.id) in y],
+            ]
+            if cols:
+                lp.row(cols, [1.0] * len(cols), upper=line.in_kg - line.out_feed_kg)
         limits: dict[str, float] = {}
         for c in cons:
             cols = [y[line.batch, c.id] for line in lines if (line.batch, c.id) in y]
@@ -259,11 +287,12 @@ def stage_c(
                 [line.ghg_gCO2e_per_MJ - limits[c.id] for line in lines if (line.batch, c.id) in y],
                 upper=0.0,
             )
-        remaining = sum(line.in_kg - line.out_feed_kg for line in lines) - sum(
+        remaining = sum(line.in_kg - line.out_feed_kg for line in lines if line.compliant) - sum(
             c.volume_kg for c in cons
         )
-        carried = min(ledger.physical_kg, remaining)
-        lp.row(list(k.values()), [1.0] * len(k), lower=carried, upper=carried)
+        carried = max(0.0, min(ledger.physical_kg, remaining))
+        if k:
+            lp.row(list(k.values()), [1.0] * len(k), lower=carried, upper=carried)
 
         ghg = {line.batch: line.ghg_gCO2e_per_MJ for line in lines}
         lhv = {line.batch: line.lhv_MJ_per_kg for line in lines}
@@ -362,7 +391,8 @@ def write_offs(run: RunResult) -> list[WriteOff]:
             for x in led.lines
             if x.closing_before_kg > 0
         ]
-        for batch, kg in rule_write_offs(lines, led.excess_kg).items():
+        bad = [x.batch for x in led.lines if not x.compliant]
+        for batch, kg in rule_write_offs(lines, led.required_write_off_kg, bad).items():
             out.append(WriteOff(storage=led.storage, batch=batch, kg=kg))
     return out
 
@@ -374,6 +404,18 @@ def carried_weights(run: RunResult, unit: str) -> dict[str, float]:
     for b in run.batches.values():
         if b.unit == unit and b.id in lines and lines[b.id].in_kg > 0:
             out[b.id] = max(0.0, lines[b.id].carried_kg) / lines[b.id].in_kg
+    return out
+
+
+def kept_shares(run: RunResult, unit: str) -> dict[str, float]:
+    """Share of each of ``unit``'s batches' RFNBO that is consigned or carried forward, not
+    written off (for stage B's value objective)."""
+    lines = {x.batch: x for led in run.ledgers for x in led.lines}
+    out: dict[str, float] = {}
+    for b in run.batches.values():
+        if b.unit == unit and b.id in lines and lines[b.id].in_kg > 0:
+            x = lines[b.id]
+            out[b.id] = max(0.0, x.out_consignment_kg + x.carried_kg) / x.in_kg
     return out
 
 

@@ -1,9 +1,11 @@
 """Storage RFNBO ledgers, quarter-end write-off and physical reconciliation (§2.7).
 
-Each storage keeps an RFNBO ledger per calendar quarter, checked at quarter end only. The
-closing ledger may not exceed measured physical inventory; the excess is written off from
-the highest-GHG batches first (equal GHG: newest production month first). Carried batches
-keep their ID, GHG, RFNBO share and production month.
+Each storage keeps an RFNBO ledger per calendar quarter, checked at quarter end only. Non-
+compliant RFNBO (§2.5) cannot be carried into the next quarter, so it is written off in full
+(decided 2026-10-17). The compliant closing ledger may not exceed measured physical inventory;
+the excess is written off from the highest-GHG batches first (equal GHG: newest production
+month first). Non-compliant batches come first in that order. Carried batches keep their ID,
+GHG, RFNBO share and production month.
 """
 
 from __future__ import annotations
@@ -72,8 +74,19 @@ class LedgerResult:
 
     @property
     def excess_kg(self) -> float:
-        """What the rules require to be written off."""
+        """Closing ledger above measured physical inventory."""
         return max(0.0, self.closing_before_kg - self.physical_kg)
+
+    @property
+    def noncompliant_closing_kg(self) -> float:
+        """Non-compliant RFNBO left at quarter end: it may not be carried."""
+        return sum(max(0.0, x.closing_before_kg) for x in self.lines if not x.compliant)
+
+    @property
+    def required_write_off_kg(self) -> float:
+        """What the rules require to be written off: all non-compliant RFNBO, and at least the
+        excess over physical inventory (non-compliant batches are taken first)."""
+        return max(self.excess_kg, self.noncompliant_closing_kg)
 
     @property
     def write_off_kg(self) -> float:
@@ -110,22 +123,28 @@ class Reconciliation:
         return self.expected_kg - self.measured_kg
 
 
-def priority_key(ghg: float, month: str) -> tuple[float, str]:
-    """Sort descending on this key: highest GHG first, then newest month first."""
-    return (round(ghg, RANK_DECIMALS), month)
+def priority_key(ghg: float, month: str, compliant: bool = True) -> tuple[bool, float, str]:
+    """Sort descending on this key: non-compliant first, then highest GHG, then newest month."""
+    return (not compliant, round(ghg, RANK_DECIMALS), month)
 
 
 def rule_write_offs(
-    lines: Iterable[tuple[str, float, str, float]], excess_kg: float
+    lines: Iterable[tuple[str, float, str, float]],
+    required_kg: float,
+    noncompliant: Iterable[str] = (),
 ) -> dict[str, float]:
     """Write-off required by §2.7 for (batch, GHG, month, closing kg) lines.
 
-    Within an exact tie (same rounded GHG and month), batches are taken in descending id
-    order, so the result is deterministic.
+    ``noncompliant`` names the batches above the threshold; they go first. Within an exact
+    tie (same rounded GHG and month), batches are taken in descending id order, so the result
+    is deterministic.
     """
-    ordered = sorted(lines, key=lambda x: (*priority_key(x[1], x[2]), x[0]), reverse=True)
+    bad = set(noncompliant)
+    ordered = sorted(
+        lines, key=lambda x: (*priority_key(x[1], x[2], x[0] not in bad), x[0]), reverse=True
+    )
     out: dict[str, float] = {}
-    left = excess_kg
+    left = required_kg
     for batch, _, _, closing in ordered:
         if left <= 0:
             break
@@ -223,7 +242,8 @@ def compute_ledgers(
                 )
             )
         lines.sort(
-            key=lambda x: (*priority_key(x.ghg_gCO2e_per_MJ, x.month), x.batch), reverse=True
+            key=lambda x: (*priority_key(x.ghg_gCO2e_per_MJ, x.month, x.compliant), x.batch),
+            reverse=True,
         )
         physical = float(frame.series[s.inventory_series or ""][-1])
         results.append(LedgerResult(s.id, frame.quarter, tuple(lines), physical))

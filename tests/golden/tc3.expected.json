@@ -369,13 +369,19 @@
  },
  "objectives": {
   "consignments_met": 2,
+  "weights": {
+   "h2_buffer": 0.976704805491991,
+   "pt_compressor": 1,
+   "lh2_storage": 1,
+   "ch2_storage": 1
+  },
   "stored_MJ_by_storage": {
    "h2_buffer": 585600,
    "pt_compressor": 0,
    "lh2_storage": 5651040,
    "ch2_storage": 6806400
   },
-  "stored_MJ": 13043040,
+  "carried_value_MJ": 13029398.3340961,
   "carried_emissions_g": 21580148.5714286,
   "batches": 9,
   "at_upper_bound": true
@@ -394,36 +400,36 @@
    "rfnbo_lh2_kg": 252735.2,
    "lh2_carried_kg": 47092,
    "ch2_carried_kg": 55760,
-   "stored_MJ": 12927840
+   "carried_value_MJ": 12914198.3340961
   },
   "v2_shortfall": {
-   "note": "December renewable 2,500 kWh per interval and no LH2 spot sale. The optimum depends on build plan §10.3 follow-up (b); both readings are given.",
+   "note": "December renewable 2,500 kWh per interval and no LH2 spot sale. Non-compliant RFNBO cannot be carried, so the liquefier gets just enough renewable for December LH2 to comply.",
    "december_renewable_per_interval_kWh": 2500,
    "lh2_ghg_without_renewable": 35.7040816326531,
    "least_liquefier_renewable_kWh": 190615.68,
-   "reading_a_noncompliant_counts": {
+   "rejected_all_to_electrolyser": {
     "liquefier_renewable_kWh": 0,
     "december_rfnbo_h2_kg": 148800,
     "december_lh2_ghg": 35.7040816326531,
-    "lh2_held_kg": 104132,
-    "ch2_held_kg": 56720,
-    "stored_MJ": 19887840,
-    "stored_compliant_MJ": 9962400
+    "lh2_carried_kg": 21420,
+    "ch2_carried_kg": 56720,
+    "carried_value_MJ": 9948758.33409611,
+    "december_lh2_written_off_kg": 82712
    },
-   "reading_b_compliant_only": {
-    "zero_share_intervals": 76,
-    "part_interval_electrolyser_kWh": 1000,
-    "liquefier_renewable_kWh": 191500,
-    "december_rfnbo_h2_kg": 144970,
-    "december_lh2_ghg": 28.1651864449484,
-    "liquefier_rfnbo_feed_kg": 82090,
-    "compressor_rfnbo_feed_kg": 58000,
-    "part_interval_ghg": 101.166666666667,
-    "december_ch2_ghg": 8.36781609195402,
-    "lh2_held_kg": 101868.2,
-    "ch2_held_kg": 55200,
-    "stored_MJ": 19433784
-   }
+   "zero_share_intervals": 76,
+   "part_interval_electrolyser_kWh": 1000,
+   "liquefier_renewable_kWh": 191500,
+   "december_rfnbo_h2_kg": 144970,
+   "december_lh2_ghg": 28.1651864449484,
+   "liquefier_rfnbo_feed_kg": 86400,
+   "compressor_rfnbo_feed_kg": 58000,
+   "part_interval_ghg": 101.166666666667,
+   "december_ch2_ghg": 8.36781609195402,
+   "lh2_carried_kg": 106092,
+   "ch2_carried_kg": 55200,
+   "h2_buffer_carried_kg": 570,
+   "carried_value_MJ": 19421846.6086957,
+   "beats_rejected": true
   },
   "v3_infeasible": {
    "ca_target": 3.5,
@@ -434,7 +440,7 @@
    "cb_met": true,
    "lh2_write_off_kg": 207040,
    "consignments_met": 1,
-   "stored_MJ": 13043040
+   "carried_value_MJ": 13029398.3340961
   }
  },
  "workbook_checks_pass": true

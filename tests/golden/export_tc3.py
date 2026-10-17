@@ -221,7 +221,9 @@ def export(path: Path) -> tuple[dict[str, Any], dict[str, Any]]:
             ledgers[storage] = {
                 "lines": table(wb, sheet, ledger_keys),
                 "measured_kg": num(lab["Measured physical inventory at quarter end (kg)"]),
-                "shortfall_kg": num(lab["Shortfall to write off (kg)"]),
+                "shortfall_kg": num(
+                    lab["Shortfall to write off (kg): over inventory, and all non-compliant"]
+                ),
                 "carried_ghg": num(lab["Energy-weighted GHG of carried inventory (gCO₂e/MJ)"]),
             }
     recon: dict[str, Any] = {}
@@ -259,13 +261,19 @@ def export(path: Path) -> tuple[dict[str, Any], dict[str, Any]]:
     obj = labelled(wb, "Objectives")
     objectives = {
         "consignments_met": num(obj["1. Consignments met"]),
-        "stored_MJ_by_storage": {
-            "h2_buffer": num(obj["2. RFNBO held at period end: H₂ buffer (MJ)"]),
-            "pt_compressor": num(obj["2. RFNBO held at period end: pass-through (MJ)"]),
-            "lh2_storage": num(obj["2. RFNBO held at period end: LH₂ storage (MJ)"]),
-            "ch2_storage": num(obj["2. RFNBO held at period end: CH₂ storage (MJ)"]),
+        "weights": {
+            "h2_buffer": num(obj["Storage weight: H₂ buffer (MJ final product per MJ)"]),
+            "pt_compressor": num(obj["Storage weight: pass-through"]),
+            "lh2_storage": num(obj["Storage weight: LH₂ storage"]),
+            "ch2_storage": num(obj["Storage weight: CH₂ storage"]),
         },
-        "stored_MJ": num(obj["2. RFNBO held at period end, all storages (MJ)"]),
+        "stored_MJ_by_storage": {
+            "h2_buffer": num(obj["Compliant RFNBO carried: H₂ buffer (MJ)"]),
+            "pt_compressor": num(obj["Compliant RFNBO carried: pass-through (MJ)"]),
+            "lh2_storage": num(obj["Compliant RFNBO carried: LH₂ storage (MJ)"]),
+            "ch2_storage": num(obj["Compliant RFNBO carried: CH₂ storage (MJ)"]),
+        },
+        "carried_value_MJ": num(obj["2. Compliant RFNBO carried forward (MJ of final product)"]),
         "carried_emissions_g": num(obj["3. Carried emissions (gCO₂e)"]),
         "batches": num(obj["4. Batches"]),
         "at_upper_bound": obj["Objective 2 at its upper bound?"],
@@ -290,48 +298,49 @@ def export(path: Path) -> tuple[dict[str, Any], dict[str, Any]]:
             "rfnbo_lh2_kg": at(11),
             "lh2_carried_kg": at(12),
             "ch2_carried_kg": at(13),
-            "stored_MJ": at(14),
+            "carried_value_MJ": at(14),
         },
         "v2_shortfall": {
-            "note": "December renewable 2,500 kWh per interval and no LH2 spot sale. The optimum "
-            "depends on build plan §10.3 follow-up (b); both readings are given.",
+            "note": "December renewable 2,500 kWh per interval and no LH2 spot sale. "
+            "Non-compliant RFNBO cannot be carried, so the liquefier gets just enough renewable "
+            "for December LH2 to comply.",
             "december_renewable_per_interval_kWh": at(17),
             "lh2_ghg_without_renewable": at(24),
             "least_liquefier_renewable_kWh": at(25),
-            "reading_a_noncompliant_counts": {
+            "rejected_all_to_electrolyser": {
                 "liquefier_renewable_kWh": at(27),
                 "december_rfnbo_h2_kg": at(28),
                 "december_lh2_ghg": at(29),
-                "lh2_held_kg": at(30),
-                "ch2_held_kg": at(31),
-                "stored_MJ": at(32),
-                "stored_compliant_MJ": at(33),
+                "lh2_carried_kg": at(30),
+                "ch2_carried_kg": at(31),
+                "carried_value_MJ": at(32),
+                "december_lh2_written_off_kg": at(33),
             },
-            "reading_b_compliant_only": {
-                "zero_share_intervals": at(35),
-                "part_interval_electrolyser_kWh": at(36),
-                "liquefier_renewable_kWh": at(37),
-                "december_rfnbo_h2_kg": at(38),
-                "december_lh2_ghg": at(39),
-                "liquefier_rfnbo_feed_kg": at(41),
-                "compressor_rfnbo_feed_kg": at(42),
-                "part_interval_ghg": at(43),
-                "december_ch2_ghg": at(44),
-                "lh2_held_kg": at(45),
-                "ch2_held_kg": at(46),
-                "stored_MJ": at(47),
-            },
+            "zero_share_intervals": at(35),
+            "part_interval_electrolyser_kWh": at(36),
+            "liquefier_renewable_kWh": at(37),
+            "december_rfnbo_h2_kg": at(38),
+            "december_lh2_ghg": at(39),
+            "liquefier_rfnbo_feed_kg": at(41),
+            "compressor_rfnbo_feed_kg": at(42),
+            "part_interval_ghg": at(43),
+            "december_ch2_ghg": at(44),
+            "lh2_carried_kg": at(45),
+            "ch2_carried_kg": at(46),
+            "h2_buffer_carried_kg": at(47),
+            "carried_value_MJ": at(48),
+            "beats_rejected": v["Better than the rejected alternative?"],
         },
         "v3_infeasible": {
-            "ca_target": at(51),
-            "limit": at(52),
-            "lowest_lh2_ghg": at(53),
+            "ca_target": at(52),
+            "limit": at(53),
+            "lowest_lh2_ghg": at(54),
             "ca_feasible": v["CA feasible?"],
-            "ca_max_volume_kg": at(55),
+            "ca_max_volume_kg": at(56),
             "cb_met": v["CB still met?"],
-            "lh2_write_off_kg": at(57),
-            "consignments_met": at(58),
-            "stored_MJ": at(59),
+            "lh2_write_off_kg": at(58),
+            "consignments_met": at(59),
+            "carried_value_MJ": at(60),
         },
     }
     checks = rows(wb, "Checks")

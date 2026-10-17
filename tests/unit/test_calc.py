@@ -110,6 +110,8 @@ def test_short_rfnbo_feed_prorates_own_emissions(cfg: PlantConfig) -> None:
         {**ELECTROLYSER, **NH3},
         batches=[*E_BATCHES, *N_BATCH],
         feed=[{"source": "E1", "target": "N1", "kg": 150}],
+        # E2's 20 kg of non-compliant RFNBO H₂ is not fed, so it cannot be carried.
+        write_offs=[{"storage": "h2_storage", "batch": "E2", "kg": 20}],
     )
     n = r.batches["N1"]
     share = 150 / 170
@@ -175,10 +177,35 @@ def test_h2_write_off_highest_ghg_first(cfg: PlantConfig) -> None:
             {"storage": "h2_storage", "batch": "E2", "kg": 15},
         ],
     )
-    assert {f.name for f in wrong_order.failures} == {"write_off_order"}
+    assert {f.name for f in wrong_order.failures} == {"write_off_order", "noncompliant_not_carried"}
 
     none = run(cfg, cols, **base)
-    assert {f.name for f in none.failures} == {"write_off_amount", "ledger_within_physical"}
+    assert {f.name for f in none.failures} == {
+        "write_off_amount",
+        "ledger_within_physical",
+        "noncompliant_not_carried",
+    }
+
+
+def test_noncompliant_rfnbo_is_never_carried(cfg: PlantConfig) -> None:
+    """Decided 2026-10-17: non-compliant RFNBO left at quarter end is written off in full, even
+    when measured inventory has room for it."""
+    cols = {**ELECTROLYSER, **NH3, "h2_storage_inventory_kg": [BIG] * 4}
+    base = dict(batches=[*E_BATCHES, *N_BATCH], feed=[{"source": "E1", "target": "N1", "kg": 140}])
+    lines = [("E1", 1.17, "2026-10", 10.0), ("E2", 101.2, "2026-10", 20.0)]
+    assert rule_write_offs(lines, 20, noncompliant=["E2"]) == {"E2": 20}
+    kept = run(cfg, cols, **base)
+    assert {f.name for f in kept.failures} == {"write_off_amount", "noncompliant_not_carried"}
+    led = kept.ledger("h2_storage")
+    assert led.excess_kg == 0 and led.required_write_off_kg == pytest.approx(20)
+    good = run(cfg, cols, **base, write_offs=[{"storage": "h2_storage", "batch": "E2", "kg": 20}])
+    assert good.passed, good.failures
+    assert good.ledger("h2_storage").carried_kg == pytest.approx(10)
+
+
+def test_noncompliant_goes_first_even_on_a_ghg_tie() -> None:
+    lines = [("A", 28.2, "2026-12", 10.0), ("B", 28.2, "2026-10", 10.0)]
+    assert rule_write_offs(lines, 10, noncompliant=["B"]) == {"B": 10}
 
 
 def test_write_off_ties_take_newest_month_first() -> None:
@@ -217,6 +244,7 @@ def test_renewable_split_between_units(cfg: PlantConfig) -> None:
         batches=batches,
         renewable_allocations=alloc,
         feed=[{"source": "E1", "target": "N1", "kg": 150}],
+        write_offs=[{"storage": "h2_storage", "batch": "E2", "kg": 16}],
     )
     assert r.passed, r.failures
     assert r.batches["E2"].rfnbo_share == pytest.approx(800 / 2500)
@@ -236,19 +264,21 @@ def test_renewable_split_between_units(cfg: PlantConfig) -> None:
         batches=batches,
         renewable_allocations=over,
         feed=[{"source": "E1", "target": "N1", "kg": 150}],
+        write_offs=[{"storage": "h2_storage", "batch": "E2", "kg": 20}],
     )
     assert [f.name for f in bad.failures] == ["renewable_pool"]
 
 
 def test_batches_must_cover_each_unit(cfg: PlantConfig) -> None:
+    lit = dict(ELECTROLYSER, renewable_available_kWh=[2500] * 4)  # every batch compliant
     gap = run(
         cfg,
-        ELECTROLYSER,
+        lit,
         batches=[batch("E1", "electrolyser", 0, 2), batch("E2", "electrolyser", 3, 4), *N_BATCH],
     )
     overlap = run(
         cfg,
-        ELECTROLYSER,
+        lit,
         batches=[batch("E1", "electrolyser", 0, 3), batch("E2", "electrolyser", 2, 4), *N_BATCH],
     )
     for r in (gap, overlap):
@@ -335,6 +365,10 @@ def test_consignment_rules(cfg: PlantConfig) -> None:
         aggregated_batches=[
             {"id": "A1", "consignment": "C", "parts": [{"batch": "OLD-A", "kg": 500}]}
         ],
+        write_offs=[
+            {"storage": "h2_storage", "batch": "E2", "kg": 20},
+            {"storage": "nh3_storage", "batch": "OLD-B", "kg": 1000},
+        ],
     )
     assert ok.passed, ok.failures
     assert ok.consignment("C").shipped_ghg_gCO2e_per_MJ == pytest.approx(9.0)
@@ -350,6 +384,10 @@ def test_consignment_rules(cfg: PlantConfig) -> None:
                 "consignment": "C",
                 "parts": [{"batch": "OLD-A", "kg": 400}, {"batch": "OLD-B", "kg": 100}],
             }
+        ],
+        write_offs=[
+            {"storage": "h2_storage", "batch": "E2", "kg": 20},
+            {"storage": "nh3_storage", "batch": "OLD-B", "kg": 900},
         ],
     )
     assert {f.name for f in mixed.failures} == {

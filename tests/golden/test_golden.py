@@ -226,14 +226,15 @@ def test_minimise_mode_variant(case: str) -> None:
 
 
 def test_rule_2_5_regeneration() -> None:
-    """Test case 2 under §2.5: non-compliant RFNBO H₂ is in the ledger and written off."""
+    """Test case 2 under §2.5: non-compliant RFNBO H₂ is in the ledger and written off. It
+    cannot be carried into the next quarter, and under the workbook's decisions all of the H₂
+    left at quarter end (108,729.2 kg) is non-compliant, so all of it is written off."""
     run, expected, _ = _run("tc2")
     assert expected["rule_2_5_applied"]
     noncompliant = [b for b in run.batches.values() if b.is_rfnbo and not b.compliant]
     assert len(noncompliant) == len(expected["superseded"]["h2_rfnbo_kg"]) == 88
     led = run.ledger("h2_storage")
-    approx(led.carried_kg, led.physical_kg, "H2 ledger carried equals physical")
-    # Everything carried is the lowest-GHG remainder: no carried line outranks a written one.
-    written = [x for x in led.lines if x.write_off_kg > 0]
-    carried = [x for x in led.lines if x.carried_kg > 1e-6]
-    assert min(x.ghg_gCO2e_per_MJ for x in written) >= max(x.ghg_gCO2e_per_MJ for x in carried)
+    approx(led.write_off_kg, 108729.2, "H2 write-off")
+    approx(led.carried_kg, 0.0, "H2 carried")
+    assert all(x.carried_kg <= 1e-6 for x in led.lines if not x.compliant)
+    assert run.passed, run.failures

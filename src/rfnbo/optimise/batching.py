@@ -7,9 +7,12 @@ chooses where batches start and end. Every candidate batch [s, e) inside the all
     value = RFNBO_MJ · (1 − μ · (GHG − L))      floored at 0, then minus ε per batch
 
 L is the GHG the downstream unit can absorb (blended feed GHG that keeps its own product at
-the RFNBO threshold), so batches are shaped for what downstream can use; ε breaks ties towards
-fewer batches. μ is searched to maximise the RFNBO feed that downstream can take while staying
-compliant, then the lowest GHG attributed to RFNBO, then the fewest batches.
+the RFNBO threshold), so batches are shaped for what downstream can use. ε is the materiality
+threshold (decided 2026-10-17): a batch is split off only if that gains at least
+``materiality_MJ`` of final-product MJ (120 MJ, 1 kg H₂, by default), converted to the unit's
+own product with its output storage's weight (``rfnbo.calc.weights``). μ is searched to
+maximise the RFNBO feed that downstream can take while staying compliant, then the lowest GHG
+attributed to RFNBO, then the fewest batches.
 
 Matching follows the calculator exactly (renewable matched within the batch; emission factors
 in force on the batch's first local day). The optimiser only proposes boundaries: every
@@ -27,6 +30,7 @@ import numpy as np
 import numpy.typing as npt
 
 from rfnbo.calc.batch import output_storage, unit_order
+from rfnbo.calc.weights import storage_weights
 from rfnbo.config.schema import ELECTRICITY, InputBlock, PlantConfig, ProcessingUnit, StorageUnit
 from rfnbo.data import calendar as cal
 from rfnbo.data.ingest import FloatArray
@@ -34,7 +38,8 @@ from rfnbo.data.quality import Frame
 from rfnbo.model.entities import BatchSpec
 
 IntArray = npt.NDArray[np.int64]
-EPS_MJ = 0.01  # per-batch penalty: far below any real gain, far above float noise
+EPS_MJ = 0.01  # smallest per-batch penalty: far below any real gain, far above float noise
+MATERIALITY_MJ = 120.0  # final-product MJ a split must gain (1 kg H₂)
 MU_GRID = (0.0, *np.geomspace(1e-4, 1.0, 17).tolist())
 REFINE_STEPS = 6
 
@@ -373,8 +378,19 @@ def batch_ids(prefix: str, months: Sequence[str]) -> list[str]:
     return out
 
 
+def materiality_eps(
+    cfg: PlantConfig, frame: Frame, unit: ProcessingUnit, materiality_MJ: float
+) -> float:
+    """Per-batch penalty in the unit's own product MJ for a final-product materiality."""
+    w = storage_weights(cfg, frame)[output_storage(cfg, unit.id).id].weight
+    return max(EPS_MJ, materiality_MJ / w if w else materiality_MJ)
+
+
 def optimise_batching(
-    cfg: PlantConfig, frame: Frame, mus: Sequence[float] = MU_GRID, eps: float = EPS_MJ
+    cfg: PlantConfig,
+    frame: Frame,
+    mus: Sequence[float] = MU_GRID,
+    materiality_MJ: float = MATERIALITY_MJ,
 ) -> BatchingResult:
     """Batches for every unit: stage A for electrolytic units, one per month for the rest."""
     end = frame.end
@@ -383,6 +399,7 @@ def optimise_batching(
     specs: list[BatchSpec] = []
     for unit in unit_order(cfg):
         if unit.electricity_adds_to_lhv:
+            eps = materiality_eps(cfg, frame, unit, materiality_MJ)
             ub = batch_unit(cfg, frame, unit, mus, eps)
             results.append(ub)
             cuts = ub.cuts

@@ -188,10 +188,11 @@ def readme(wb: Workbook) -> None:
         ("", False),
         ("Rules and decisions used (build plan §10.2 and §10.3, settled 2026-10-17)", True),
         (
-            "1. Objectives, in order: meet every consignment; then maximise RFNBO held in storage "
-            "at period end, in MJ, summed over every storage (H₂ buffer, LH₂, CH₂; the "
-            "pass-through is always zero); then lowest carried emissions; then fewest batches "
-            "(decision 1).",
+            "1. Objectives, in order (decided 2026-10-17): meet every consignment; then maximise "
+            "compliant RFNBO carried forward, in MJ of final product: each storage's carried MJ "
+            "times its weight (1 for LH₂ and CH₂; for the H₂ buffer, the liquefier's energy "
+            "yield over the quarter); then lowest carried emissions; then fewest batches, where "
+            "a batch is split only if that gains at least 120 MJ.",
             False,
         ),
         (
@@ -225,8 +226,10 @@ def readme(wb: Workbook) -> None:
             False,
         ),
         (
-            "7. Storage ledgers close by the §2.7 rule: the excess over measured inventory is "
-            "written off, highest GHG first, newest month first on ties.",
+            "7. Storage ledgers close by the §2.7 rule. Non-compliant RFNBO cannot be carried "
+            "into the next quarter, so all of it is written off (decided 2026-10-17); beyond "
+            "that, the excess over measured inventory is written off, highest GHG first, newest "
+            "month first on ties.",
             False,
         ),
         (
@@ -241,11 +244,11 @@ def readme(wb: Workbook) -> None:
             "Every electrolyser batch is 100% RFNBO and every downstream batch fully renewable-"
             "covered, so no decision can add RFNBO. Stored RFNBO is then capped by measured "
             "inventory: the buffer and LH₂ storage end full of RFNBO, and CH₂ storage holds all "
-            "CH₂ RFNBO left after CB. Keeping 4,880 kg of RFNBO H₂ in the buffer, rather than "
-            "liquefying it into LH₂ that would only be written off, is what reaches the cap: the "
-            "liquefier's December batch therefore takes 2,000 kg less RFNBO feed than it "
-            "consumed (97.7% share). Carried LH₂ is all at the lowest LH₂ GHG (Oct/Dec, "
-            "1.6905). One batch per unit and month is the fewest possible.",
+            "CH₂ RFNBO left after CB. The buffer's 4,880 kg of RFNBO H₂ is worth 0.977 MJ of "
+            "LH₂ per MJ (the liquefier's yield), while liquefying it would only add LH₂ that is "
+            "written off, worth 0. So the liquefier's December batch takes 2,000 kg less RFNBO "
+            "feed than it consumed (97.7% share). Carried LH₂ is all at the lowest LH₂ GHG "
+            "(Oct/Dec, 1.6905). One batch per unit and month is the fewest possible.",
             False,
         ),
         ("", False),
@@ -257,9 +260,10 @@ def readme(wb: Workbook) -> None:
         ),
         (
             "V2 — renewable shortfall: December renewable cut to 2,500 kWh per interval and no "
-            "LH₂ spot sale. Every kWh for the liquefier is a kWh the electrolyser loses. The "
-            "answer depends on open follow-up (b) in build plan §10.3 (does non-compliant RFNBO "
-            "held in storage count?), so both readings are worked out.",
+            "LH₂ spot sale. Every kWh for the liquefier is a kWh the electrolyser loses. "
+            "Non-compliant RFNBO cannot be carried, so the liquefier gets just enough renewable "
+            "for December LH₂ to comply; giving it all to the electrolyser would leave December "
+            "LH₂ non-compliant and written off.",
             False,
         ),
         (
@@ -495,7 +499,11 @@ def feed_ledger(
             "Physical inventory at quarter end (kg)",
             "=0" if pass_through else f"={last('T')}",
         ),
-        (14, "Write-off (kg)", "=MAX(0,B12-B13)"),
+        (
+            14,
+            "Write-off (kg)",
+            f"=MAX(0,B12-B13,SUMPRODUCT(--(B2:B4>{P(8)}+0.000000001),G2:G4))",
+        ),
         (15, "RFNBO H₂ carried to Q1 2027 (kg)", "=B12-B14"),
         (
             16,
@@ -657,8 +665,11 @@ def product_ledger(
         s.put(f"{c}5", f"=SUM({c}2:{c}4)")
     s.note("A7", "Measured physical inventory at quarter end (kg)")
     s.put("B7", f"={last(inv_col)}")
-    s.note("A8", "Shortfall to write off (kg)")
-    s.put("B8", f"=MAX(0,{P(opening_ledger)}+F5-B7)")
+    s.note("A8", "Shortfall to write off (kg): over inventory, and all non-compliant")
+    s.put(
+        "B8",
+        f"=MAX(0,{P(opening_ledger)}+F5-B7,SUMPRODUCT(--(C2:C4>{P(8)}+0.000000001),F2:F4))",
+    )
     s.note("A9", "Energy-weighted GHG of carried inventory (gCO₂e/MJ)")
     s.put("B9", "=IF(H5>0,SUMPRODUCT(C2:C4,H2:H4)/H5,0)")
     s.note("A10", "Rows in priority order (highest GHG, then newest month)?")
@@ -771,10 +782,10 @@ def consignments(wb: Workbook) -> None:
 
 
 def objectives(wb: Workbook) -> None:
-    s = Sheet(wb, "Objectives", {"A": 70, "B": 18, "C": 60})
+    s = Sheet(wb, "Objectives", {"A": 70, "B": 18, "C": 70})
     s.header(1, ["Objective (in order)", "Value", "Note"])
     lhv = P(2)
-    rows = [
+    rows: list[tuple[int, str, Any, str]] = [
         (
             2,
             "1. Consignments met",
@@ -782,13 +793,32 @@ def objectives(wb: Workbook) -> None:
             "+AND(Consignments!O3,Consignments!P3,Consignments!Q3,Consignments!R3)",
             "Of 2",
         ),
-        (3, "2. RFNBO held at period end: H₂ buffer (MJ)", f"=Buffer_Ledger!B15*{lhv}", ""),
-        (4, "2. RFNBO held at period end: pass-through (MJ)", f"=PT_Ledger!B15*{lhv}", "Always 0"),
-        (5, "2. RFNBO held at period end: LH₂ storage (MJ)", f"=LH2_Ledger!H5*{lhv}", ""),
-        (6, "2. RFNBO held at period end: CH₂ storage (MJ)", f"=CH2_Ledger!H5*{lhv}", ""),
-        (7, "2. RFNBO held at period end, all storages (MJ)", "=SUM(B3:B6)", "Key answer"),
         (
-            8,
+            3,
+            "Storage weight: H₂ buffer (MJ final product per MJ)",
+            f"=SUM({rng('P')})/SUM({rng('O')})",
+            "Liquefier energy yield over the quarter (same LHV in and out)",
+        ),
+        (
+            4,
+            "Storage weight: pass-through",
+            f"=SUM({rng('S')})/SUM({rng('R')})",
+            "Compressor energy yield; the pass-through always closes at zero",
+        ),
+        (5, "Storage weight: LH₂ storage", 1, "Final product"),
+        (6, "Storage weight: CH₂ storage", 1, "Final product"),
+        (7, "Compliant RFNBO carried: H₂ buffer (MJ)", f"=Buffer_Ledger!B15*{lhv}", ""),
+        (8, "Compliant RFNBO carried: pass-through (MJ)", f"=PT_Ledger!B15*{lhv}", ""),
+        (9, "Compliant RFNBO carried: LH₂ storage (MJ)", f"=LH2_Ledger!H5*{lhv}", ""),
+        (10, "Compliant RFNBO carried: CH₂ storage (MJ)", f"=CH2_Ledger!H5*{lhv}", ""),
+        (
+            11,
+            "2. Compliant RFNBO carried forward (MJ of final product)",
+            "=SUMPRODUCT(B3:B6,B7:B10)",
+            "Key answer: each storage's carried MJ times its weight",
+        ),
+        (
+            12,
             "3. Carried emissions (gCO₂e)",
             f"=Buffer_Ledger!B15*Buffer_Ledger!B16*{lhv}"
             f"+SUMPRODUCT(LH2_Ledger!C2:C4,LH2_Ledger!H2:H4)*{lhv}"
@@ -796,53 +826,59 @@ def objectives(wb: Workbook) -> None:
             "",
         ),
         (
-            9,
+            13,
             "4. Batches",
             "=COUNTA(E_Batches!A2:A4)+COUNTA(L_Batches!A2:A4)+COUNTA(C_Batches!A2:A4)",
-            "One per unit and month",
+            "One per unit and month; a split must gain at least 120 MJ",
         ),
     ]
     for row, label, f, note in rows:
         s.note(f"A{row}", label)
-        s.put(f"B{row}", f, fill=KEY if row in (2, 7) else None)
+        s.put(f"B{row}", f, fill=KEY if row in (2, 11) else None)
         s.note(f"C{row}", note)
-    s.ws["B2"].number_format = "0"
-    s.ws["B9"].number_format = "0"
-    s.note("A11", "Upper-bound argument for objective 2")
+    for row in (2, 13):
+        s.ws[f"B{row}"].number_format = "0"
+    s.note("A15", "Upper-bound argument for objective 2")
     bound = [
-        (12, "Every electrolyser batch 100% RFNBO?", "=MIN(E_Batches!I2:I4)>=1-0.000000001"),
+        (16, "Every electrolyser batch 100% RFNBO?", "=MIN(E_Batches!I2:I4)>=1-0.000000001"),
         (
-            13,
+            17,
             "H₂ buffer holds RFNBO up to its measured inventory?",
             "=ABS(Buffer_Ledger!B15-Buffer_Ledger!B13)<=0.000001",
         ),
         (
-            14,
+            18,
             "LH₂ storage holds RFNBO up to its measured inventory?",
             "=ABS(LH2_Ledger!H5-LH2_Ledger!B7)<=0.000001",
         ),
         (
-            15,
+            19,
             "CH₂ storage holds all compressor RFNBO less CB?",
             "=ABS(CH2_Ledger!H5-(C_Batches!G5-Consignments!F3))<=0.000001",
         ),
-        (16, "Objective 2 at its upper bound?", "=AND(B12:B15)"),
+        (20, "Objective 2 at its upper bound?", "=AND(B16:B19)"),
     ]
     for row, label, f in bound:
         s.note(f"A{row}", label)
         s.put(f"B{row}", f, fmt="General")
     s.note(
-        "A18",
-        "Objective 2 counts every storage, intermediate H₂ included, as §10.2 rule 7 reads "
-        '("within each storage\'s measured inventory, summed as energy across products"). '
-        "Rows 3–6 give each storage so a narrower reading can be compared.",
+        "A22",
+        "Objective 2 (decided 2026-10-17): compliant RFNBO carried forward at every storage, "
+        "weighted by the MJ of final product it becomes, so H₂ held in front of the liquefier "
+        "counts at the liquefier's yield. Non-compliant RFNBO cannot be carried and is written "
+        "off at quarter end.",
+    )
+    s.note(
+        "A23",
+        "Here the buffer still ends full: the extra LH₂ that liquefying its 4,880 kg would make "
+        "is worth 0, because LH₂ storage is already full and the excess would be written off.",
     )
 
 
 def variants(wb: Workbook) -> None:
     s = Sheet(wb, "Variants", {"A": 74, "B": 18, "C": 90})
     s.header(1, ["Variant", "Value", "Note"])
-    D, E, lhv = rng("D"), rng("E"), P(2)
+    D, E, lhv, w = rng("D"), rng("E"), P(2), "Objectives!$B$3"
     rows: list[tuple[int, str, Any, str]] = [
         (
             2,
@@ -897,7 +933,12 @@ def variants(wb: Workbook) -> None:
             "Still capped by measured inventory",
         ),
         (13, "CH₂ carried (kg)", "=B10-Consignments!F3", "No CH₂ write-off"),
-        (14, "RFNBO held at period end (MJ)", f"=(Buffer_Ledger!B13+B12+B13)*{lhv}", "Key answer"),
+        (
+            14,
+            "RFNBO carried forward (MJ of final product)",
+            f"=(Buffer_Ledger!B13*{w}+B12+B13)*{lhv}",
+            "Key answer",
+        ),
         (
             16,
             "V2 — Renewable shortfall in December",
@@ -908,7 +949,12 @@ def variants(wb: Workbook) -> None:
         (17, "December renewable per interval (kWh)", 2500, "Input for this variant"),
         (18, "December intervals", f'=COUNTIF({D},"2026-12")', ""),
         (19, "December renewable available (kWh)", "=B17*B18", "Exactly the electrolyser's demand"),
-        (20, "December liquefier electricity (kWh)", f'=SUMIF({D},"2026-12",{rng("N")})', ""),
+        (
+            20,
+            "December liquefier electricity (kWh)",
+            f'=SUMIF({D},"2026-12",{rng("N")})',
+            "",
+        ),
         (21, "December liquefier H₂ consumed (kg)", f'=SUMIF({D},"2026-12",{rng("O")})', ""),
         (22, "December LH₂ produced (kg)", f'=SUMIF({D},"2026-12",{rng("P")})', ""),
         (23, "GHG of 100% electrolyser H₂ (gCO₂e/MJ)", "=E_Batches!N4", "Water and adder only"),
@@ -924,30 +970,45 @@ def variants(wb: Workbook) -> None:
             f"=B20-({P(8)}-{P(6)}-B23*B21/B22)*B22*{lhv}/{P(4)}",
             "Each kWh comes off the electrolyser: 0.02 kg less RFNBO H₂",
         ),
-        (26, "Reading A: non-compliant RFNBO in storage counts (follow-up (b) = yes)", None, ""),
-        (27, "Renewable to the liquefier (kWh)", 0, "All renewable to the electrolyser"),
+        (
+            26,
+            "Rejected: all renewable to the electrolyser",
+            None,
+            "Non-compliant RFNBO cannot be carried into the next quarter (decided 2026-10-17)",
+        ),
+        (27, "Renewable to the liquefier (kWh)", 0, ""),
         (28, "December electrolyser RFNBO H₂ (kg)", "=(B19-B27)/2500*50", ""),
-        (29, "December LH₂ GHG (gCO₂e/MJ)", "=B24", "Non-compliant, but stored"),
+        (29, "December LH₂ GHG (gCO₂e/MJ)", "=B24", "Non-compliant"),
         (
             30,
-            "LH₂ held at period end (kg)",
-            "=L_Batches!O2+L_Batches!O3+(B28*30/50-Buffer_Ledger!B13)*B22/B21-Consignments!F2",
-            "December LH₂ RFNBO = buffer RFNBO less the 4,880 kg kept in the buffer",
+            "LH₂ carried (kg)",
+            "=L_Batches!O2+L_Batches!O3-Consignments!F2",
+            "October and November only",
         ),
         (
             31,
-            "CH₂ held at period end (kg)",
+            "CH₂ carried (kg)",
             "=C_Batches!O2+C_Batches!O3+B28*20/50-Consignments!F3",
             "",
         ),
         (
             32,
-            "RFNBO held at period end (MJ)",
-            f"=(Buffer_Ledger!B13+B30+B31)*{lhv}",
-            "Key answer, reading A",
+            "RFNBO carried forward (MJ of final product)",
+            f"=(Buffer_Ledger!B13*{w}+B30+B31)*{lhv}",
+            "",
         ),
-        (33, "Of which compliant (MJ)", f"=B32-(B28*30/50-Buffer_Ledger!B13)*B22/B21*{lhv}", ""),
-        (34, "Reading B: only compliant RFNBO counts (follow-up (b) = no)", None, ""),
+        (
+            33,
+            "December LH₂ written off (kg)",
+            "=(B28*30/50-Buffer_Ledger!B13)*B22/B21",
+            "All of it: non-compliant",
+        ),
+        (
+            34,
+            "Answer: the liquefier gets just enough renewable to comply",
+            None,
+            "",
+        ),
         (
             35,
             "0% electrolyser intervals at the end of December",
@@ -977,8 +1038,9 @@ def variants(wb: Workbook) -> None:
         (
             41,
             "December liquefier RFNBO feed (kg)",
-            "=B40*30-Buffer_Ledger!B13",
-            "Buffer kept full, as in the base case",
+            "=MIN(B21,B40*30)",
+            "LH₂ storage is not full and December's yield (B22/B21) beats the buffer weight, "
+            "so the liquefier takes all the RFNBO it can",
         ),
         (
             42,
@@ -1001,64 +1063,65 @@ def variants(wb: Workbook) -> None:
         ),
         (
             45,
-            "LH₂ held at period end (kg)",
+            "LH₂ carried (kg)",
             "=L_Batches!O2+L_Batches!O3+B41*B22/B21-Consignments!F2",
             "",
         ),
-        (46, "CH₂ held at period end (kg)", "=C_Batches!O2+C_Batches!O3+B42-Consignments!F3", ""),
-        (
-            47,
-            "RFNBO held at period end (MJ)",
-            f"=(Buffer_Ledger!B13+B45+B46)*{lhv}",
-            "Key answer, reading B; all compliant",
-        ),
+        (46, "CH₂ carried (kg)", "=C_Batches!O2+C_Batches!O3+B42-Consignments!F3", ""),
+        (47, "H₂ buffer carried (kg)", "=B40*30-B41", "What the liquefier could not take"),
         (
             48,
-            "Which reading changes the answer?",
-            "=B32>B47",
-            "TRUE: under A the optimiser leaves December LH₂ non-compliant",
+            "RFNBO carried forward (MJ of final product)",
+            f"=(B47*{w}+B45+B46)*{lhv}",
+            "Key answer",
         ),
+        (49, "Better than the rejected alternative?", "=B48>B32", "Expected: TRUE"),
         (
-            50,
+            51,
             "V3 — Infeasible target on one product",
             None,
             "CA's target cut from 5.0 to 3.5 gCO₂e/MJ; CB unchanged.",
         ),
-        (51, "CA target (gCO₂e/MJ)", 3.5, "Input for this variant"),
+        (52, "CA target (gCO₂e/MJ)", 3.5, "Input for this variant"),
         (
-            52,
+            53,
             "Limit for aggregated batches (gCO₂e/MJ)",
-            "=B51-Consignments!H2",
+            "=B52-Consignments!H2",
             "Target − Customer A adder",
         ),
-        (53, "Lowest-GHG LH₂ available (gCO₂e/MJ)", "=MIN(L_Batches!Q2:Q4)", ""),
-        (54, "CA feasible?", "=B53<=B52", "Expected: FALSE. Binding: no LH₂ below the limit"),
-        (55, "Largest achievable CA volume (kg)", "=IF(B54,Consignments!F2,0)", "Expected: 0 kg"),
+        (54, "Lowest-GHG LH₂ available (gCO₂e/MJ)", "=MIN(L_Batches!Q2:Q4)", ""),
+        (55, "CA feasible?", "=B54<=B53", "Expected: FALSE. Binding: no LH₂ below the limit"),
+        (56, "Largest achievable CA volume (kg)", "=IF(B55,Consignments!F2,0)", "Expected: 0 kg"),
         (
-            56,
+            57,
             "CB still met?",
             "=AND(Consignments!O3,Consignments!P3,Consignments!Q3,Consignments!R3)",
             "One product's infeasibility does not touch the other",
         ),
         (
-            57,
+            58,
             "LH₂ write-off without CA (kg)",
             "=MAX(0,LH2_Ledger!D5-LH2_Ledger!B7)",
             "November, then December, then part of October",
         ),
-        (58, "Consignments met", "=B56*1", "Of 2"),
-        (59, "RFNBO held at period end (MJ)", "=Objectives!B7", "Unchanged: storage is still full"),
+        (59, "Consignments met", "=B57*1", "Of 2"),
+        (
+            60,
+            "RFNBO carried forward (MJ of final product)",
+            "=Objectives!B11",
+            "Unchanged: storage is still full",
+        ),
     ]
     for row, label, value, note in rows:
         bold = value is None
         s.put(f"A{row}", label, kind="text", bold=bold)
         if value is not None:
-            key = row in (14, 32, 47, 54, 55)
+            key = row in (14, 48, 55, 56)
             s.put(f"B{row}", value, fill=KEY if key else None)
         s.note(f"C{row}", note)
-    for row in (3, 4, 5, 18, 35, 40, 58):
+    for row in (3, 4, 5, 18, 35, 40, 59):
         s.ws[f"B{row}"].number_format = "#,##0"
-    for row in (48, 54, 56):
+    for row in (49, 55, 57):
         s.ws[f"B{row}"].number_format = "General"
 
 
@@ -1129,14 +1192,17 @@ def check_rows(cases: dict[str, Any]) -> list[tuple[str, str, float]]:
                 (f"{cid} {month} (kg)", f"=Consignments!{col}{r}", c["by_month"].get(month, 0.0))
             )
         out.append((f"{cid} shipped GHG (gCO₂e/MJ)", f"=Consignments!N{r}", c["shipped_ghg"]))
+    w = obj["weights"]
     out += [
         ("Consignments met", "=Objectives!B2", obj["consignments_met"]),
-        ("RFNBO held at period end (MJ)", "=Objectives!B7", obj["stored_MJ"]),
-        ("Carried emissions (gCO₂e)", "=Objectives!B8", obj["carried_emissions_g"]),
-        ("Batches", "=Objectives!B9", obj["batches"]),
+        ("H₂ buffer weight", "=Objectives!B3", w["h2_buffer"]),
+        ("Pass-through weight", "=Objectives!B4", w["pt_compressor"]),
+        ("RFNBO carried forward (MJ final product)", "=Objectives!B11", obj["carried_value_MJ"]),
+        ("Carried emissions (gCO₂e)", "=Objectives!B12", obj["carried_emissions_g"]),
+        ("Batches", "=Objectives!B13", obj["batches"]),
     ]
-    v1, v2a, v2b, v3 = (
-        cases[k] for k in ("v1_hourly", "v2_including", "v2_compliant", "v3_infeasible")
+    v1, v2, v2x, v3 = (
+        cases[k] for k in ("v1_hourly", "v2_shortfall", "v2_all_to_electrolyser", "v3_infeasible")
     )
     zero = sum(1 for e in v1["units"]["electrolyser"].values() if e["rfnbo_share"] == 0)
     out += [
@@ -1154,51 +1220,53 @@ def check_rows(cases: dict[str, Any]) -> list[tuple[str, str, float]]:
             v1["ledgers"]["pt_compressor"]["out_kg"],
         ),
         ("V1 RFNBO LH₂ (kg)", "=Variants!B11", v1["ledgers"]["lh2_storage"]["in_kg"]),
-        ("V1 RFNBO held at period end (MJ)", "=Variants!B14", v1["objectives"]["stored_MJ"]),
+        ("V1 RFNBO carried (MJ)", "=Variants!B14", v1["objectives"]["carried_value_MJ"]),
         (
             "V2 least liquefier renewable (kWh)",
             "=Variants!B25",
             R.v2_min_liquefier_kWh(R.build_data(R.V2_DEC_RENEWABLE_KWH, spot=False)),
         ),
         (
-            "V2 reading A: December LH₂ GHG (gCO₂e/MJ)",
+            "V2 rejected: December LH₂ GHG (gCO₂e/MJ)",
             "=Variants!B29",
-            v2a["units"]["liquefier"]["L-2026-12"]["ghg"],
+            v2x["units"]["liquefier"]["L-2026-12"]["ghg"],
         ),
-        ("V2 reading A: RFNBO held (MJ)", "=Variants!B32", v2a["objectives"]["stored_MJ"]),
+        ("V2 rejected: RFNBO carried (MJ)", "=Variants!B32", v2x["objectives"]["carried_value_MJ"]),
         (
-            "V2 reading A: compliant RFNBO held (MJ)",
+            "V2 rejected: December LH₂ written off (kg)",
             "=Variants!B33",
-            v2a["objectives"]["stored_compliant_MJ"],
+            v2x["ledgers"]["lh2_storage"]["write_off_kg"],
         ),
         (
-            "V2 reading B: December electrolyser RFNBO H₂ (kg)",
+            "V2 December electrolyser RFNBO H₂ (kg)",
             "=Variants!B38",
             sum(
                 e["rfnbo_kg"]
-                for k, e in v2b["units"]["electrolyser"].items()
+                for k, e in v2["units"]["electrolyser"].items()
                 if k.startswith("E-2026-12")
             ),
         ),
         (
-            "V2 reading B: December LH₂ GHG (gCO₂e/MJ)",
+            "V2 December LH₂ GHG (gCO₂e/MJ)",
             "=Variants!B39",
-            v2b["units"]["liquefier"]["L-2026-12"]["ghg"],
+            v2["units"]["liquefier"]["L-2026-12"]["ghg"],
         ),
         (
-            "V2 reading B: December CH₂ GHG (gCO₂e/MJ)",
+            "V2 December liquefier RFNBO feed (kg)",
+            "=Variants!B41",
+            v2["units"]["liquefier"]["L-2026-12"]["rfnbo_feed_kg"],
+        ),
+        (
+            "V2 December CH₂ GHG (gCO₂e/MJ)",
             "=Variants!B44",
-            v2b["units"]["compressor"]["C-2026-12"]["ghg"],
+            v2["units"]["compressor"]["C-2026-12"]["ghg"],
         ),
-        (
-            "V2 reading B: RFNBO held (MJ)",
-            "=Variants!B47",
-            v2b["objectives"]["stored_compliant_MJ"],
-        ),
-        ("V3 largest CA volume (kg)", "=Variants!B55", v3["consignments"]["CA"]["allocated_kg"]),
-        ("V3 LH₂ write-off (kg)", "=Variants!B57", v3["ledgers"]["lh2_storage"]["write_off_kg"]),
-        ("V3 consignments met", "=Variants!B58", v3["objectives"]["consignments_met"]),
-        ("V3 RFNBO held at period end (MJ)", "=Variants!B59", v3["objectives"]["stored_MJ"]),
+        ("V2 H₂ buffer carried (kg)", "=Variants!B47", v2["ledgers"]["h2_buffer"]["carried_kg"]),
+        ("V2 RFNBO carried (MJ)", "=Variants!B48", v2["objectives"]["carried_value_MJ"]),
+        ("V3 largest CA volume (kg)", "=Variants!B56", v3["consignments"]["CA"]["allocated_kg"]),
+        ("V3 LH₂ write-off (kg)", "=Variants!B58", v3["ledgers"]["lh2_storage"]["write_off_kg"]),
+        ("V3 consignments met", "=Variants!B59", v3["objectives"]["consignments_met"]),
+        ("V3 RFNBO carried (MJ)", "=Variants!B60", v3["objectives"]["carried_value_MJ"]),
     ]
     return out
 
@@ -1222,7 +1290,8 @@ def checks(wb: Workbook, cases: dict[str, Any]) -> int:
         "LH2_Ledger!B10",
         "CH2_Ledger!B10",
         "PT_Ledger!B17",
-        "Objectives!B16",
+        "Objectives!B20",
+        "Variants!B49",
     ]
     s.note(
         f"A{end + 2}",

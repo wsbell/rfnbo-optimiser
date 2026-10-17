@@ -429,9 +429,11 @@ def ledger_summary(run: RunResult) -> Table:
         _c("closing_before_kg", "Closing before write-off", "kg"),
         _c("physical_kg", "Measured physical inventory", "kg"),
         _c("excess_kg", "Excess over physical", "kg"),
+        _c("noncompliant_kg", "Non-compliant at quarter end (not carried)", "kg"),
         _c("write_off_kg", "Write-off", "kg"),
         _c("carried_kg", "Carried forward", "kg"),
         _c("carried_ghg", "GHG of carried RFNBO", "gCO2e/MJ"),
+        _c("weight", "Storage weight (MJ final product per MJ)", ""),
     )
     rows = [
         {
@@ -444,9 +446,13 @@ def ledger_summary(run: RunResult) -> Table:
             "closing_before_kg": led.closing_before_kg,
             "physical_kg": led.physical_kg,
             "excess_kg": led.excess_kg,
+            "noncompliant_kg": led.noncompliant_closing_kg,
             "write_off_kg": led.write_off_kg,
             "carried_kg": led.carried_kg,
             "carried_ghg": led.carried_ghg_gCO2e_per_MJ,
+            "weight": run.storage_weights[led.storage].weight
+            if led.storage in run.storage_weights
+            else None,
         }
         for led in run.ledgers
     ]
@@ -541,7 +547,14 @@ def baseline_comparison(optimised: RunResult, baseline: RunResult) -> Table:
             "difference": None,
         },
         {
-            "metric": "2. Compliant RFNBO of the final product",
+            "metric": "2. Compliant RFNBO carried forward (storage-weighted)",
+            "unit": "MJ final product",
+            "optimised": o.carried_value_MJ,
+            "baseline": b.carried_value_MJ,
+            "difference": o.carried_value_MJ - b.carried_value_MJ,
+        },
+        {
+            "metric": "Compliant RFNBO of the final product",
             "unit": "kg",
             "optimised": o.final_rfnbo_kg,
             "baseline": b.final_rfnbo_kg,
