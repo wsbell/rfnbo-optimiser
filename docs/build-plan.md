@@ -530,7 +530,7 @@ Decisions (2026-10-17):
 | 5 | Into a storage as well as a unit? | Yes: supply flows may go into units or storages |
 | 6 | Allocation against metered flow | Per batch (into a unit) or per interval range (into a storage), allocated kg ≤ metered kg, within the quarter |
 | 7 | May credentials be allocated to flow metered before the PoS's dispatch date? | Yes, as long as both are in the same mass balance period (calendar quarter) |
-| 8 | How purchased RFNBO is aggregated | The PoS needs only its dispatch date; the supplier's production month plays no part. Processed further in the plant, it becomes part of that unit batch (e.g. LH₂, CH₂) and is aggregated as that batch. Passed through without processing (held in a storage that feeds distribution), it is aggregated only with other passed-through RFNBO of the same dispatch date, and its dispatch date sets its place in the write-off order |
+| 8 | How purchased RFNBO is aggregated | The PoS needs only its dispatch date; the supplier's production month plays no part. Processed further in the plant, it becomes part of that unit batch (e.g. LH₂, CH₂) and is aggregated as that batch. Passed through without processing (held in a storage that feeds distribution), it is aggregated only with other passed-through RFNBO dispatched in the same calendar month (plant time zone), and its dispatch month sets its place in the write-off order |
 
 Phase 16 details. Before code, as for phase 10: build test case 4 as a workbook with live
 formulas, hand-calculated expected values and an independent Python check. Plant: test plant 3
