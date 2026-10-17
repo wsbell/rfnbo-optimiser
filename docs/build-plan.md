@@ -52,6 +52,8 @@ production series.
   consignment). Or "minimise mode": one volume, find the lowest GHG.
 - Never fill data gaps silently. Flag gaps, negatives and meter-balance breaks; any substitution
   rule is explicit and logged.
+- Purchased RFNBO from third-party suppliers, each delivery backed by a proof of
+  sustainability (PoS): phase 16, §11.1. Entering plant data in the UI: phase 17, §11.2.
 
 ### 2.3 Batches and temporal correlation
 - A batch is a contiguous run of 15-minute intervals on one unit, with one RFNBO share and one
@@ -216,6 +218,8 @@ Each phase ends with passing tests and a short demo. Do them in order.
 | 13 | Optimiser stage A for several electricity users | Renewable pool split between the electrolyser and conditioning units (per interval, within correlation periods); batching of conditioning units where their GHG depends on boundaries | Never over-allocates a pool; on test case 3 splits renewable as the hand calculation does; stage A results unchanged on test cases 1 and 2 |
 | 14 | Optimiser stage B on networks | Joint feed LP for parallel units sharing a storage; successive LP with back-propagated GHG limits for units in series; objective across several final products; bound per product | Matches or beats test case 3; series test (H₂ → compressor → NH₃) meets every check; gap to bound reported |
 | 15 | Stage C, reports and UI for several final products | Consignments per product and storage; ledgers, reports and drill-down across N steps; baseline for networks; performance budget for larger plants | Every check passes on test case 3; a consignment traces to 15-minute data through every step; one quarter of test plant 3 in under 10 minutes |
+| 16 | Purchased RFNBO (proof of sustainability) | RFNBO supply block with metered flows into chosen units; PoS records (dispatch date, kg, GHG); optimiser allocates each PoS to supply flows within the mass balance period; checks, lineage, reports; test case 4 workbook first | Given test case 4's decisions, reproduces every value to 1e-6; optimiser matches or beats it; every PoS kg traces to the unit batches it fed; §11.1 questions answered |
+| 17 | Plant data entry in the UI | Data screen: upload files, map columns to the series the plant needs, preview with quality flags, logged corrections with reasons, forms for consignments, PoS and opening ledger; run the optimiser from the UI | Test case 1 set up entirely in the UI seals the same run id as the CLI; a correction shows in the run record and report; browser test |
 
 ---
 
@@ -470,3 +474,85 @@ performance budget on test plant 3 and a five-unit plant; profile before optimis
 Phases 10 and 11 can start now (the §10.3 decisions are settled). Do phase 12 before phase 8 (reports), so that reports are
 written once for any network rather than reworked; then 13–15, with phase 9 (results UI)
 built on the network drill-down from phase 15.
+
+---
+
+## 11. Extension: purchased RFNBO and plant data entry (phases 16–17)
+
+Requested 2026-10-17. The rules in §11.1 are a draft: the open questions must be answered
+(and logged in the scope doc) before phase 16's code, as for §10.3.
+
+### 11.1 Purchased RFNBO with a proof of sustainability (phase 16)
+
+RFNBO bought from a third-party supplier (for example H₂ delivered by tube trailer) enters the
+plant as an input to units the user chooses, such as the liquefier or the compressor.
+
+Draft rules:
+
+1. **Supply block.** A new block kind, *RFNBO supply*: supplier, product (e.g. H₂) and LHV. It
+   connects by flows to the units it may feed; each flow carries a metered 15-minute series of
+   the physical quantity delivered (kg). Without a PoS, supplied product is non-RFNBO feed.
+2. **Proof of sustainability.** Each PoS has an ID, supplier, product, dispatch date, quantity
+   (kg) and GHG intensity (gCO₂e/MJ). It belongs to the mass balance period (calendar quarter,
+   plant time zone) of its dispatch date. PoS records are entered in the UI (phase 17) or
+   imported from CSV, and are part of the sealed run's inputs.
+3. **Allocation is a decision.** The optimiser allocates each PoS's quantity to the supply
+   flows into downstream unit batches in the same quarter: for each batch and flow, allocated
+   kg ≤ metered kg delivered in that batch's intervals; for each PoS, allocated kg ≤ its
+   quantity; product must match. One PoS may be split across flows, units and batches.
+4. **Effect on the unit.** Allocated PoS kg is RFNBO feed with the PoS's GHG intensity, treated
+   exactly like RFNBO feed from a storage (§2.4): it counts in the unit batch's RFNBO share by
+   energy over all RFNBO feeds and adds its emissions to the feed emissions. Purchased RFNBO
+   carries its own certification, so the temporal-correlation rules for electrolysers do not
+   apply to it.
+5. **Objectives unchanged (§2.8).** Allocation is chosen with feed allocation (stage B), which
+   stays linear: a low-GHG PoS goes where it rescues compliance or a consignment target, and PoS
+   quantity is not pushed into product that would be written off.
+6. **Traceability and checks.** Each PoS is a lineage node, so a consignment drills down to the
+   PoS that fed it as well as to 15-minute data. New named checks: PoS dispatched in the
+   quarter; allocation within metered delivery per batch and flow; allocation within the PoS
+   quantity; product match. A reconciliation flags metered supply against PoS totals.
+7. **Reports.** A PoS register (received, allocated, unallocated, where it went) and PoS
+   columns in the feed allocation and lineage reports.
+
+Open questions (answer before phase 16):
+
+| # | Question | Draft answer |
+| --- | --- | --- |
+| 1 | Which period does a PoS fall in: dispatch date, or the date the product arrives in the metered flow? | Dispatch date, as requested |
+| 2 | PoS quantity not allocated by quarter end (more PoS than metered delivery): written off, carried to the next quarter, or must every PoS be fully allocated? | Open |
+| 3 | Does the PoS GHG intensity already include transport to this plant, or is a transport adder added on receipt? | Open |
+| 4 | Is a PoS above 28.2 gCO₂e/MJ accepted (non-compliant RFNBO, §2.5, saved by blending), or rejected? | Open |
+| 5 | May purchased RFNBO go into a storage (e.g. the H₂ buffer) as well as straight into a unit? | Units only, as requested; storage later if needed |
+| 6 | Must allocated PoS kg be covered by metered physical delivery in the same batch, or only in the same quarter? | Same batch (rule 3), the stricter reading |
+
+Phase 16 details. Before code, as for phase 10: build test case 4 as a workbook with live
+formulas, hand-calculated expected values and an independent Python check. Plant: test plant 3
+plus a supplier delivering H₂ into the compressor and the liquefier; three PoS (one low-GHG,
+one near the threshold, one only part covered by metered delivery). Then: schema and editor
+(supply block, metered flows), `PoS` and `PoSAllocation` entities in decision sets, calculator
+and checks, lineage and traceability records, stage B allocation, reports. Depends on phase 12
+(units with several RFNBO feeds).
+
+### 11.2 Plant data entry in the UI (phase 17)
+
+Today plant data comes in as CSV or Excel files with a JSON column mapping, through the CLI. A
+*Data* screen in the app does the same without hand-written files:
+
+- **Run setup.** Choose the plant config and quarter; upload the data file(s); map columns to
+  the series the plant needs (the list comes from the config; headers are matched
+  automatically where they agree); preview in the plant time zone with every quality flag
+  (gaps, negatives, meter-balance breaks). Nothing is filled silently.
+- **Corrections.** A value or range can be corrected only with a reason. Corrections are kept
+  as a log applied on top of the original file; the sealed run records the original file's
+  hash and the corrections, and reports list them.
+- **Forms** for consignments (customer, output, kg, ship date, target or minimise mode), PoS
+  records (phase 16) and the opening ledger (manual entry or a previous sealed run). Constants
+  (emission factors, LHVs, adders) stay in the diagram editor.
+- **Run.** Optimise from the UI; the sealed run opens in the results browser.
+- **Project folder.** The data files, mapping, corrections, consignments and PoS records are
+  saved as plain files, so the CLI and the UI work on the same inputs.
+
+Typing whole 15-minute series by hand (8,836 intervals a quarter) is not offered; series come
+from files and are corrected in the UI. Phase 17 does not depend on the network phases and
+can be done at any time; the PoS form arrives with phase 16.
