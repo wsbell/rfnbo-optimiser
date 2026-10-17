@@ -21,7 +21,7 @@ plant dispatch.
 | 9 | Results UI | done (`rfnbo results`; consignment → batches → 15-minute data) |
 | 10 | Multi-step specification and test case 3 | done (workbook with live formulas, independent check, fixtures; electrolyser → liquefier and compressor) |
 | 11–15 | Multiple and parallel processing steps in config, calculator, optimiser, reports and UI | planned; decisions settled (`docs/build-plan.md` §10.3) |
-| 16 | Purchased RFNBO with a proof of sustainability, allocated to unit inputs | planned; decisions in `docs/build-plan.md` §11.1 (two points open) |
+| 16 | Purchased RFNBO with a proof of sustainability, allocated to unit inputs | planned; decisions settled (`docs/build-plan.md` §11.1) |
 | 17 | Plant data entry in the UI | planned (`docs/build-plan.md` §11.2) |
 
 The full build plan, including the multi-step extension and the decisions it needs, is in

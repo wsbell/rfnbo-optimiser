@@ -479,8 +479,8 @@ built on the network drill-down from phase 15.
 
 ## 11. Extension: purchased RFNBO and plant data entry (phases 16–17)
 
-Requested 2026-10-17. §11.1's questions are answered except points 7 and 8, which must be
-settled (and logged in the scope doc) before phase 16's code.
+Requested 2026-10-17. §11.1's questions are all answered (2026-10-17) and logged in the scope
+doc.
 
 ### 11.1 Purchased RFNBO with a proof of sustainability (phase 16)
 
@@ -493,8 +493,9 @@ Draft rules:
    connects by flows to the units or storages it may feed; each flow carries a metered 15-minute
    series of the physical quantity delivered (kg). Not all of it is RFNBO: product without PoS
    credentials allocated to it is non-RFNBO.
-2. **Proof of sustainability.** Each PoS has an ID, supplier, product, dispatch date, quantity
-   (kg) and GHG intensity (gCO₂e/MJ), which includes distribution to this plant. It must be
+2. **Proof of sustainability.** Each PoS has an ID, supplier, product, dispatch date, production
+   month of its final processing step, quantity (kg) and GHG intensity (gCO₂e/MJ), which
+   includes distribution to this plant. It must be
    compliant (≤ 28.2 gCO₂e/MJ). It belongs to the mass balance period (calendar quarter, plant
    time zone) of its dispatch date. PoS records are entered in the UI (phase 17) or
    imported from CSV, and are part of the sealed run's inputs.
@@ -519,7 +520,7 @@ Draft rules:
 7. **Reports.** A PoS register (received, allocated, unallocated, where it went) and PoS
    columns in the feed allocation and lineage reports.
 
-Decisions (2026-10-17) and the two points still open:
+Decisions (2026-10-17):
 
 | # | Question | Decision |
 | --- | --- | --- |
@@ -529,8 +530,8 @@ Decisions (2026-10-17) and the two points still open:
 | 4 | PoS above 28.2 gCO₂e/MJ? | Not allowed: a PoS must be compliant. A named validation rule rejects it |
 | 5 | Into a storage as well as a unit? | Yes: supply flows may go into units or storages |
 | 6 | Allocation against metered flow | Per batch (into a unit) or per interval range (into a storage), allocated kg ≤ metered kg, within the quarter |
-| 7 | May credentials be allocated to flow metered before the PoS's dispatch date (same quarter)? | Open. Draft: yes, the quarter is the mass balance period |
-| 8 | Production month of a PoS held in a storage (one-month aggregated batches, write-off order)? | Open. Draft: the dispatch month |
+| 7 | May credentials be allocated to flow metered before the PoS's dispatch date? | Yes, as long as both are in the same mass balance period (calendar quarter) |
+| 8 | Production month of purchased RFNBO | The month of its final processing step. Held in a storage, it keeps the month of the supplier's final processing step (a PoS field), which sets its aggregated batch and write-off order. Processed further in the plant, it becomes part of that unit batch and takes the batch's month, so it aggregates with other batches processed in the same month |
 
 Phase 16 details. Before code, as for phase 10: build test case 4 as a workbook with live
 formulas, hand-calculated expected values and an independent Python check. Plant: test plant 3
