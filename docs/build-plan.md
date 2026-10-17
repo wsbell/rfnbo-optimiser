@@ -335,7 +335,7 @@ decisions, the lineage graph) already works on networks.
 | `optimise/allocate.py` `feed_storage` | One product feed per downstream unit; one downstream stage |
 | `optimise/pipeline.py` `bound` | Bound reported only for a single downstream stage |
 
-### 10.2 Domain rules to add (proposed; each needs the sign-off in §10.3)
+### 10.2 Domain rules to add (decided 2026-10-17; see §10.3)
 
 1. **Networks.** Units, storages and flows form a directed acyclic graph. A storage may feed
    several units; a unit may take product from several storages (RFNBO share by energy over
@@ -349,35 +349,47 @@ decisions, the lineage graph) already works on networks.
 3. **Losses in a unit** (boil-off in a liquefier, leakage in a compressor) are the difference
    between metered feed and metered output. Emissions of the feed are spread over the output
    that remains, so losses raise GHG per MJ; they are not written off separately.
-4. **Split outputs.** When one batch's output is metered to several destinations, its RFNBO
-   and non-RFNBO sub-batches split in proportion to the metered quantities, and each part
-   enters the destination's ledger with the batch's ID, GHG, RFNBO share and month.
+4. **Split outputs.** When one batch's output is metered to several destinations, the
+   optimiser assigns the batch's RFNBO to each output flow individually (a decision, not a
+   pro-rata split): each flow receives at most its metered quantity of RFNBO, the parts add up
+   to the batch's RFNBO, and each part enters the destination's ledger with the batch's ID,
+   GHG, RFNBO share and month.
 5. **Pass-through storage.** A direct unit → unit link is modelled as a storage with no
    inventory meter whose physical inventory is zero. Its RFNBO ledger must close at zero each
    quarter: anything not consumed downstream is written off by the §2.7 rule.
 6. **Shared renewable pool.** Renewable power is split between all units that draw on it, per
    interval, never above what was available (rule exists; the optimiser now decides it).
    Matched renewable electricity counts as zero emissions for any unit; it raises RFNBO share
-   only for units where electricity adds to product LHV. Each unit matches within its own
-   batch and correlation window (hourly from 2030 for the electrolyser, monthly for others).
+   only for units where electricity adds to product LHV. Every unit matches renewable within
+   its own batch. Batches of conditioning units are variable in size, from one interval up to
+   one calendar month, and the optimiser chooses their boundaries; the electrolyser keeps its
+   hourly limit from 2030.
 7. **Several final products.** Each final product has its own storages, ledgers, distribution
-   blocks and consignments. Aggregated batches never mix products. Objective 2 (§2.8) becomes
-   "maximise compliant RFNBO of the final products", measured as in §10.3 question 1.
+   blocks and consignments. Aggregated batches never mix products. Objectives: first meet
+   every consignment (a specific quantity of a specific output for a specific customer); then
+   maximise the RFNBO that can be held in storage at the end of the period (carried forward,
+   within each storage's measured inventory), summed as energy (MJ) across products.
 8. **Intermediate compliance.** An intermediate RFNBO batch above 28.2 gCO₂e/MJ is non-compliant
    RFNBO (§2.5): it may be fed on and saved by blending, never consigned. Only the step whose
    output is consigned must be compliant.
 
-### 10.3 Decisions needed before phase 11
+### 10.3 Decisions (settled 2026-10-17)
 
-| # | Question | Proposed answer |
+| # | Question | Decision |
 | --- | --- | --- |
-| 1 | With several final products, how is objective 2 measured? | Total compliant RFNBO energy (MJ) across final products. Alternative: a product priority order, still lexicographic |
-| 2 | Can a split batch assign its RFNBO preferentially to one destination (mass balance), or must it split in proportion to the metered flows? | In proportion to metered flows (rule 4); confirm with the certification scheme |
-| 3 | Direct unit → unit links: pass-through storage closing at zero (rule 5), or require a metered buffer storage? | Pass-through storage; the editor creates it automatically |
-| 4 | Do conditioning units use within-batch renewable matching with a monthly window after 2030? | Yes, as the scope doc assumes for units where electricity does not add to LHV |
-| 5 | Do losses inside a unit stay inside its GHG (rule 3), or are they written off as product? | Inside GHG, as metered output |
-| 6 | Recycle flows (boil-off gas back to a compressor)? | Still out of scope; flows stay one way |
-| 7 | Hydrogen consigned at more than one point (e.g. some compressed H₂ sold directly, the rest to NH₃)? | Allowed: every storage that feeds a distribution block is a final product point |
+| 1 | What does the optimiser pursue with several products? | Meet each consignment first (a specific amount of a specific output for a specific customer); then maximise the RFNBO that can be stored at the end of the period, in MJ across products |
+| 2 | How is RFNBO assigned when a batch's output is split? | The optimiser assigns RFNBO to each output flow individually (rule 4) |
+| 3 | Direct unit → unit links? | Pass-through storage whose RFNBO ledger must be zero at quarter end (rule 5); the editor creates it |
+| 4 | Renewable matching for conditioning units? | Within the batch; batches of variable size, up to one month, boundaries chosen by the optimiser (rule 6) |
+| 5 | Losses inside a unit? | They raise the GHG of the batch produced: emissions of the whole feed over the smaller output (rule 3) |
+| 6 | Recycle flows (boil-off gas back to a compressor)? | Out of scope; flows stay one way |
+| 7 | Hydrogen consigned at more than one point? | Allowed: every storage that feeds a distribution block is a final product point |
+
+**Follow-up (open).** Decision 1 measures objective 2 as RFNBO carried forward at period end,
+where §2.8 and phases 6–7 use compliant RFNBO volume of the final product. Two points to
+confirm before phase 14: (a) whether the single-chain optimiser should switch to the new
+measure now; (b) whether only compliant RFNBO counts, or also non-compliant RFNBO that may be
+blended next quarter.
 
 ### 10.4 Phase details
 
@@ -430,6 +442,6 @@ performance budget on test plant 3 and a five-unit plant; profile before optimis
 
 ### 10.5 Order
 
-Phases 10 and 11 can start now. Do phase 12 before phase 8 (reports), so that reports are
+Phases 10 and 11 can start now (the §10.3 decisions are settled). Do phase 12 before phase 8 (reports), so that reports are
 written once for any network rather than reworked; then 13–15, with phase 9 (results UI)
 built on the network drill-down from phase 15.

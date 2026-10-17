@@ -3,7 +3,7 @@
 RFNBO GHG and mass balance optimiser: retrospective accounting of one quarter of 15-minute
 plant data under Delegated Regulations (EU) 2023/1184 and 2023/1185 and certification-scheme
 mass balance rules. The build plan (`docs/build-plan.md`) and scope document define the domain
-rules; follow them. Phases 10–15 (multi-step networks) need the §10.3 decisions first.
+rules; follow them. Phases 10–15 (multi-step networks) follow the decisions in §10.3.
 
 ## Commands
 
@@ -60,6 +60,9 @@ uv run rfnbo validate examples/test_plant.json
   `pipeline.py` runs A → B → C with B↔C feedback and relaxation when a consignment cannot be
   met; `baseline.py` is one batch per month, FIFO; `lp.py` wraps HiGHS with fixed, recorded
   options (`solver_info()` goes into every sealed run).
+- `src/rfnbo/report/`: `tables.py` builds every report table from a calculated run (never
+  from solver output); `excel.py` and `csv_export.py` write them; `build.py` reports a sealed
+  run by re-running the calculator on its files.
 - `examples/test_plant.json`: the test plant from the workbooks;
   `examples/test_workbook_source.json` maps workbook columns to series;
   `examples/test_consignments_*.json` are the workbooks' consignment requirements.

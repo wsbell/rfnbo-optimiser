@@ -17,8 +17,9 @@ plant dispatch.
 | 5 | Traceability | done (per-batch JSON, lineage, sealed runs reproduce byte for byte) |
 | 6 | Optimiser stage A (batching) | done (`rfnbo batch`; reproduces test case 1 and its 2030 hourly variant exactly) |
 | 7 | Optimiser stages B/C, pipeline, baseline | done (`rfnbo optimise`; matches test case 1, beats regenerated test case 2) |
-| 8–9 | Reports, results UI | not started |
-| 10–15 | Multiple and parallel processing steps (e.g. electrolyser → liquefier and compressor) | planned: see `docs/build-plan.md` §10 |
+| 8 | Reports | done (`rfnbo report`; Excel and CSV; regenerates the workbook tables) |
+| 9 | Results UI | not started |
+| 10–15 | Multiple and parallel processing steps (e.g. electrolyser → liquefier and compressor) | planned; decisions settled (`docs/build-plan.md` §10.3) |
 
 The full build plan, including the multi-step extension and the decisions it needs, is in
 `docs/build-plan.md`.
@@ -56,5 +57,11 @@ A sealed run directory holds `frame.csv` (the exact 15-minute data used), `batch
 (one traceability record per batch) and `run.json` (config, decisions, hashes, environment,
 ledgers, consignments, lineage and every rule check). The run id is a hash of the inputs.
 `--opening-from <dir>` opens the next quarter from a sealed run's closing ledger.
+
+`rfnbo report <run-dir> --out DIR [--baseline <run-dir>] [--csv]` writes the reports for a
+sealed run (it first checks the run still reproduces): batch register per unit, feed
+allocation, lineage, consignment report, renewable matching, storage ledgers, physical
+reconciliation, calculation log and, with a baseline, the baseline comparison. `rfnbo
+optimise` writes the same report automatically.
 
 See `CLAUDE.md` for conventions.

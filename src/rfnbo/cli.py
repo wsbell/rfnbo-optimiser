@@ -1,9 +1,14 @@
 """Command-line entry point.
 
 rfnbo validate <config.json>
+rfnbo edit <config.json> [--port 8080] [--no-browser]
 rfnbo run --config C --source S --data D --decisions X --quarter 2026-Q4 --out DIR
           [--opening-from PRIOR_RUN_DIR]
 rfnbo verify <run-dir>
+rfnbo batch --config C --source S --data D --quarter 2026-Q4 --out decisions.json
+rfnbo optimise --config C --source S --data D --quarter 2026-Q4
+               --consignments requirements.json --out DIR
+rfnbo report <run-dir> --out DIR [--baseline <run-dir>] [--csv]
 """
 
 from __future__ import annotations
@@ -193,10 +198,30 @@ def _optimise(args: argparse.Namespace) -> int:
             f"  {s.consignment} not met: {s.reason}; achievable {s.achievable_kg:,.1f} kg",
             file=sys.stderr,
         )
+    from rfnbo.report.build import report_sealed
+
+    written = report_sealed(out / "optimised", out, baseline_dir=out / "baseline")
     print(f"sealed to {out}/optimised and {out}/baseline; comparison in {out}/comparison.json")
+    print(f"report: {written.xlsx}")
     if not result.feasible:
         return 3
     return 0 if result.optimised.run.passed else 1
+
+
+def _report(args: argparse.Namespace) -> int:
+    from rfnbo.report.build import report_sealed
+
+    problems = sealed.verify(args.run_dir)
+    if problems:
+        print("sealed run does not reproduce; refusing to report it:", file=sys.stderr)
+        for p in problems:
+            print(f"  {p}", file=sys.stderr)
+        return 1
+    written = report_sealed(args.run_dir, args.out, args.baseline, with_csv=args.csv)
+    print(f"report: {written.xlsx}")
+    if written.csv:
+        print(f"csv: {len(written.csv)} files in {written.csv[0].parent}")
+    return 0
 
 
 def _edit(args: argparse.Namespace) -> int:
@@ -258,6 +283,13 @@ def main(argv: list[str] | None = None) -> int:
     o.add_argument("--out", required=True)
     o.add_argument("--batch-penalty-MJ", type=float, default=0.01)
     o.set_defaults(fn=_optimise)
+
+    rp = sub.add_parser("report", help="Excel/CSV reports for a sealed run")
+    rp.add_argument("run_dir")
+    rp.add_argument("--out", required=True)
+    rp.add_argument("--baseline", help="sealed baseline run to compare against")
+    rp.add_argument("--csv", action="store_true", help="also write one CSV per table")
+    rp.set_defaults(fn=_report)
 
     e = sub.add_parser("edit", help="open the block flow diagram editor")
     e.add_argument("path", help="plant config JSON (created on first save if missing)")
