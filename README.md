@@ -19,7 +19,8 @@ plant dispatch.
 | 7 | Optimiser stages B/C, pipeline, baseline | done (`rfnbo optimise`; matches test case 1, beats regenerated test case 2) |
 | 8 | Reports | done (`rfnbo report`; Excel and CSV; regenerates the workbook tables) |
 | 9 | Results UI | done (`rfnbo results`; consignment → batches → 15-minute data) |
-| 10–15 | Multiple and parallel processing steps (e.g. electrolyser → liquefier and compressor) | planned; decisions settled (`docs/build-plan.md` §10.3) |
+| 10 | Multi-step specification and test case 3 | done (workbook with live formulas, independent check, fixtures; electrolyser → liquefier and compressor) |
+| 11–15 | Multiple and parallel processing steps in config, calculator, optimiser, reports and UI | planned; decisions settled (`docs/build-plan.md` §10.3) |
 
 The full build plan, including the multi-step extension and the decisions it needs, is in
 `docs/build-plan.md`.
@@ -29,6 +30,13 @@ regenerated with `tests/golden/export_workbook.py --rule-2-5`: 88 H₂ sub-batch
 28.2 gCO₂e/MJ (108,729.2 kg) now enter the H₂ ledger, and 94,451.4 kg of them are written off
 at quarter end under the workbook's own decisions. The original values are kept under
 `superseded` in `tests/golden/tc2.expected.json`.
+
+Test case 3 (`tests/golden/workbooks/RFNBO_optimiser_test3_multistep_Q4_2026.xlsx`) is the
+multi-step plant for phases 11–15: electrolyser with a split, metered output → H₂ buffer →
+liquefier (boil-off) → LH₂, and a direct pass-through link → compressor → CH₂, sharing one
+renewable pool. `tests/golden/build_tc3_workbook.py` builds it, `tc3_reference.py` checks it
+independently and `export_tc3.py` writes the fixtures. Variant V2 (renewable shortfall) gives
+two answers until build plan §10.3 follow-up (b) is decided.
 
 ## Quick start
 

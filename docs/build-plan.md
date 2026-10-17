@@ -403,6 +403,14 @@ renewable shortfall that forces a choice between electrolyser share and liquefie
 infeasible target on one product only. Export fixtures to `tests/golden/`. Record every §10.3
 answer in the scope doc's decisions log.
 
+*Done 2026-10-17.* Workbook `tests/golden/workbooks/RFNBO_optimiser_test3_multistep_Q4_2026.xlsx`
+(built by `tests/golden/build_tc3_workbook.py`, checked by `tc3_reference.py`, fixtures from
+`export_tc3.py`); draft network config `tests/golden/tc3.plant.json`. The expected optimum keeps
+the H₂ buffer full of RFNBO rather than liquefying H₂ that would be written off as LH₂; this
+relies on objective 2 counting every storage, intermediate ones included. Variant V2 depends on
+follow-up (b) and is worked out for both readings; the scope doc's decisions log records
+decisions 1–7 and (b) as open.
+
 **Phase 11 — Config, validation and editor.** Schema: output flows of a unit carry a metered
 series when there are several; storage `pass_through` flag (no inventory series, physical
 zero); unit → unit links allowed and saved as an implicit pass-through storage. Rules (each

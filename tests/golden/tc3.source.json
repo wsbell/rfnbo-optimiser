@@ -1,0 +1,26 @@
+{
+  "format": "excel",
+  "sheet": "Data_15min",
+  "time_column": "Start (UTC)",
+  "timestamps": "UTC",
+  "columns": {
+    "renewable_available_kWh": "Renewable power available (kWh)",
+    "electrolyser_electricity_kWh": "Electrolyser electricity (kWh)",
+    "electrolyser_water_kg": "Electrolyser water (kg)",
+    "electrolyser_H2_kg": "Electrolyser H₂ produced (kg)",
+    "electrolyser_to_buffer_kg": "Electrolyser H₂ to buffer storage (kg)",
+    "electrolyser_to_compressor_kg": "Electrolyser H₂ direct to compressor (kg)",
+    "liquefier_electricity_kWh": "Liquefier electricity (kWh)",
+    "liquefier_H2_kg": "Liquefier H₂ consumed (kg)",
+    "liquefier_LH2_kg": "LH₂ produced (kg)",
+    "compressor_electricity_kWh": "Compressor electricity (kWh)",
+    "compressor_H2_kg": "Compressor H₂ consumed (kg)",
+    "compressor_CH2_kg": "CH₂ produced (kg)",
+    "h2_buffer_inventory_kg": "H₂ buffer inventory, end of interval (kg)",
+    "lh2_shipped_ca_kg": "LH₂ shipped CA (kg)",
+    "lh2_shipped_spot_kg": "LH₂ shipped spot, no claim (kg)",
+    "lh2_storage_inventory_kg": "LH₂ storage inventory, end of interval (kg)",
+    "ch2_shipped_cb_kg": "CH₂ shipped CB (kg)",
+    "ch2_storage_inventory_kg": "CH₂ storage inventory, end of interval (kg)"
+  }
+}

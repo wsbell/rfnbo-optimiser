@@ -1,0 +1,441 @@
+{
+ "source": "RFNBO_optimiser_test3_multistep_Q4_2026.xlsx",
+ "intervals": 8836,
+ "electrolyser_batches": {
+  "E-2026-10": {
+   "month": "2026-10",
+   "intervals": 2980,
+   "renewable_allocated_kWh": 7599000,
+   "electricity_kWh": 7450000,
+   "renewable_matched_kWh": 7450000,
+   "rfnbo_share": 1,
+   "product_kg": 149000,
+   "energy_MJ": 17880000,
+   "water_emissions_g": 2980000,
+   "grid_emissions_g": 0,
+   "ghg": 1.16666666666667,
+   "compliant": true,
+   "rfnbo_kg": 149000,
+   "rfnbo_MJ": 17880000
+  },
+  "E-2026-11": {
+   "month": "2026-11",
+   "intervals": 2880,
+   "renewable_allocated_kWh": 7221600,
+   "electricity_kWh": 7200000,
+   "renewable_matched_kWh": 7200000,
+   "rfnbo_share": 1,
+   "product_kg": 144000,
+   "energy_MJ": 17280000,
+   "water_emissions_g": 2880000,
+   "grid_emissions_g": 0,
+   "ghg": 1.16666666666667,
+   "compliant": true,
+   "rfnbo_kg": 144000,
+   "rfnbo_MJ": 17280000
+  },
+  "E-2026-12": {
+   "month": "2026-12",
+   "intervals": 2976,
+   "renewable_allocated_kWh": 7588800,
+   "electricity_kWh": 7440000,
+   "renewable_matched_kWh": 7440000,
+   "rfnbo_share": 1,
+   "product_kg": 148800,
+   "energy_MJ": 17856000,
+   "water_emissions_g": 2976000,
+   "grid_emissions_g": 0,
+   "ghg": 1.16666666666667,
+   "compliant": true,
+   "rfnbo_kg": 148800,
+   "rfnbo_MJ": 17856000
+  }
+ },
+ "output_split": {
+  "E-2026-10": {
+   "rfnbo_kg": 149000,
+   "metered_to_buffer_kg": 89400,
+   "metered_to_compressor_kg": 59600,
+   "assigned_to_compressor_kg": 59600,
+   "assigned_to_buffer_kg": 89400
+  },
+  "E-2026-11": {
+   "rfnbo_kg": 144000,
+   "metered_to_buffer_kg": 86400,
+   "metered_to_compressor_kg": 57600,
+   "assigned_to_compressor_kg": 57600,
+   "assigned_to_buffer_kg": 86400
+  },
+  "E-2026-12": {
+   "rfnbo_kg": 148800,
+   "metered_to_buffer_kg": 89280,
+   "metered_to_compressor_kg": 59520,
+   "assigned_to_compressor_kg": 59520,
+   "assigned_to_buffer_kg": 89280
+  }
+ },
+ "liquefier_batches": {
+  "L-2026-10": {
+   "month": "2026-10",
+   "feed_consumed_kg": 89400,
+   "rfnbo_feed_kg": 89400,
+   "feed_ghg": 1.16666666666667,
+   "rfnbo_share": 1,
+   "product_kg": 87612,
+   "loss_kg": 1788,
+   "loss_fraction": 0.02,
+   "renewable_allocated_kWh": 1192000,
+   "electricity_kWh": 894000,
+   "renewable_matched_kWh": 894000,
+   "own_emissions_g": 0,
+   "feed_emissions_g": 12516000,
+   "rfnbo_kg": 87612,
+   "rfnbo_MJ": 10513440,
+   "ghg": 1.69047619047619,
+   "compliant": true,
+   "intervals": 2980
+  },
+  "L-2026-11": {
+   "month": "2026-11",
+   "feed_consumed_kg": 86400,
+   "rfnbo_feed_kg": 86400,
+   "feed_ghg": 1.16666666666667,
+   "rfnbo_share": 1,
+   "product_kg": 83808,
+   "loss_kg": 2592,
+   "loss_fraction": 0.03,
+   "renewable_allocated_kWh": 1132800,
+   "electricity_kWh": 864000,
+   "renewable_matched_kWh": 864000,
+   "own_emissions_g": 0,
+   "feed_emissions_g": 12096000,
+   "rfnbo_kg": 83808,
+   "rfnbo_MJ": 10056960,
+   "ghg": 1.70274914089347,
+   "compliant": true,
+   "intervals": 2880
+  },
+  "L-2026-12": {
+   "month": "2026-12",
+   "feed_consumed_kg": 86400,
+   "rfnbo_feed_kg": 84400,
+   "feed_ghg": 1.16666666666667,
+   "rfnbo_share": 0.976851851851852,
+   "product_kg": 84672,
+   "loss_kg": 1728,
+   "loss_fraction": 0.02,
+   "renewable_allocated_kWh": 1190400,
+   "electricity_kWh": 864000,
+   "renewable_matched_kWh": 864000,
+   "own_emissions_g": 0,
+   "feed_emissions_g": 11816000,
+   "rfnbo_kg": 82712,
+   "rfnbo_MJ": 9925440,
+   "ghg": 1.69047619047619,
+   "compliant": true,
+   "intervals": 2976
+  }
+ },
+ "compressor_batches": {
+  "C-2026-10": {
+   "month": "2026-10",
+   "feed_consumed_kg": 59600,
+   "rfnbo_feed_kg": 59600,
+   "feed_ghg": 1.16666666666667,
+   "rfnbo_share": 1,
+   "product_kg": 59600,
+   "loss_kg": 0,
+   "loss_fraction": 0,
+   "renewable_allocated_kWh": 149000,
+   "electricity_kWh": 119200,
+   "renewable_matched_kWh": 119200,
+   "own_emissions_g": 0,
+   "feed_emissions_g": 8344000,
+   "rfnbo_kg": 59600,
+   "rfnbo_MJ": 7152000,
+   "ghg": 1.66666666666667,
+   "compliant": true,
+   "intervals": 2980
+  },
+  "C-2026-11": {
+   "month": "2026-11",
+   "feed_consumed_kg": 57600,
+   "rfnbo_feed_kg": 57600,
+   "feed_ghg": 1.16666666666667,
+   "rfnbo_share": 1,
+   "product_kg": 57600,
+   "loss_kg": 0,
+   "loss_fraction": 0,
+   "renewable_allocated_kWh": 141600,
+   "electricity_kWh": 115200,
+   "renewable_matched_kWh": 115200,
+   "own_emissions_g": 0,
+   "feed_emissions_g": 8064000,
+   "rfnbo_kg": 57600,
+   "rfnbo_MJ": 6912000,
+   "ghg": 1.66666666666667,
+   "compliant": true,
+   "intervals": 2880
+  },
+  "C-2026-12": {
+   "month": "2026-12",
+   "feed_consumed_kg": 59520,
+   "rfnbo_feed_kg": 59520,
+   "feed_ghg": 1.16666666666667,
+   "rfnbo_share": 1,
+   "product_kg": 59520,
+   "loss_kg": 0,
+   "loss_fraction": 0,
+   "renewable_allocated_kWh": 148800,
+   "electricity_kWh": 119040,
+   "renewable_matched_kWh": 119040,
+   "own_emissions_g": 0,
+   "feed_emissions_g": 8332800,
+   "rfnbo_kg": 59520,
+   "rfnbo_MJ": 7142400,
+   "ghg": 1.66666666666667,
+   "compliant": true,
+   "intervals": 2976
+  }
+ },
+ "ledgers": {
+  "h2_buffer": {
+   "opening_kg": 0,
+   "in_kg": 265080,
+   "out_feed_kg": 260200,
+   "closing_before_kg": 4880,
+   "physical_kg": 4880,
+   "write_off_kg": 0,
+   "carried_kg": 4880,
+   "carried_ghg": 1.16666666666667,
+   "left_by_batch_kg": {
+    "E-2026-10": 0,
+    "E-2026-11": 0,
+    "E-2026-12": 4880
+   },
+   "feed_ghg": {
+    "L-2026-10": 1.16666666666667,
+    "L-2026-11": 1.16666666666667,
+    "L-2026-12": 1.16666666666667
+   }
+  },
+  "pt_compressor": {
+   "opening_kg": 0,
+   "in_kg": 176720,
+   "out_feed_kg": 176720,
+   "closing_before_kg": 0,
+   "physical_kg": 0,
+   "write_off_kg": 0,
+   "carried_kg": 0,
+   "carried_ghg": 0,
+   "left_by_batch_kg": {
+    "E-2026-10": 0,
+    "E-2026-11": 0,
+    "E-2026-12": 0
+   },
+   "feed_ghg": {
+    "C-2026-10": 1.16666666666667,
+    "C-2026-11": 1.16666666666667,
+    "C-2026-12": 1.16666666666667
+   }
+  },
+  "lh2_storage": {
+   "lines": {
+    "L-2026-11": {
+     "month": "2026-11",
+     "ghg": 1.70274914089347,
+     "in_kg": 83808,
+     "out_consignment_kg": 83808,
+     "closing_before_kg": 0,
+     "write_off_kg": 0,
+     "carried_kg": 0
+    },
+    "L-2026-12": {
+     "month": "2026-12",
+     "ghg": 1.69047619047619,
+     "in_kg": 82712,
+     "out_consignment_kg": 0,
+     "closing_before_kg": 82712,
+     "write_off_kg": 57040,
+     "carried_kg": 25672
+    },
+    "L-2026-10": {
+     "month": "2026-10",
+     "ghg": 1.69047619047619,
+     "in_kg": 87612,
+     "out_consignment_kg": 66192,
+     "closing_before_kg": 21420,
+     "write_off_kg": 0,
+     "carried_kg": 21420
+    }
+   },
+   "measured_kg": 47092,
+   "shortfall_kg": 57040,
+   "carried_ghg": 1.69047619047619
+  },
+  "ch2_storage": {
+   "lines": {
+    "C-2026-12": {
+     "month": "2026-12",
+     "ghg": 1.66666666666667,
+     "in_kg": 59520,
+     "out_consignment_kg": 2800,
+     "closing_before_kg": 56720,
+     "write_off_kg": 0,
+     "carried_kg": 56720
+    },
+    "C-2026-11": {
+     "month": "2026-11",
+     "ghg": 1.66666666666667,
+     "in_kg": 57600,
+     "out_consignment_kg": 57600,
+     "closing_before_kg": 0,
+     "write_off_kg": 0,
+     "carried_kg": 0
+    },
+    "C-2026-10": {
+     "month": "2026-10",
+     "ghg": 1.66666666666667,
+     "in_kg": 59600,
+     "out_consignment_kg": 59600,
+     "closing_before_kg": 0,
+     "write_off_kg": 0,
+     "carried_kg": 0
+    }
+   },
+   "measured_kg": 57220,
+   "shortfall_kg": 0,
+   "carried_ghg": 1.66666666666667
+  }
+ },
+ "reconciliation": {
+  "h2_buffer": {
+   "expected_kg": 4880,
+   "measured_kg": 4880,
+   "implied_loss_kg": 0
+  },
+  "lh2_storage": {
+   "expected_kg": 47092,
+   "measured_kg": 47092,
+   "implied_loss_kg": 0
+  },
+  "ch2_storage": {
+   "expected_kg": 57220,
+   "measured_kg": 57220,
+   "implied_loss_kg": 0
+  }
+ },
+ "consignments": {
+  "CA": {
+   "customer": "Customer A",
+   "product": "LH₂",
+   "storage": "lh2_storage",
+   "volume_kg": 150000,
+   "target": 5,
+   "distribution_adder": 2,
+   "limit": 3,
+   "weighted_ghg": 1.69733333333333,
+   "shipped_ghg": 3.69733333333333,
+   "meets_target": true,
+   "within_threshold": true,
+   "compliant_parts_only": true,
+   "volume_met": true,
+   "parts_by_month": {
+    "2026-10": 66192,
+    "2026-11": 83808,
+    "2026-12": 0
+   }
+  },
+  "CB": {
+   "customer": "Customer B",
+   "product": "CH₂",
+   "storage": "ch2_storage",
+   "volume_kg": 120000,
+   "target": 4,
+   "distribution_adder": 1,
+   "limit": 3,
+   "weighted_ghg": 1.66666666666667,
+   "shipped_ghg": 2.66666666666667,
+   "meets_target": true,
+   "within_threshold": true,
+   "compliant_parts_only": true,
+   "volume_met": true,
+   "parts_by_month": {
+    "2026-10": 59600,
+    "2026-11": 57600,
+    "2026-12": 2800
+   }
+  }
+ },
+ "objectives": {
+  "consignments_met": 2,
+  "stored_MJ_by_storage": {
+   "h2_buffer": 585600,
+   "pt_compressor": 0,
+   "lh2_storage": 5651040,
+   "ch2_storage": 6806400
+  },
+  "stored_MJ": 13043040,
+  "carried_emissions_g": 21580148.5714286,
+  "batches": 9,
+  "at_upper_bound": true
+ },
+ "variants": {
+  "v1_hourly": {
+   "note": "Same data re-dated to Q4 2030; electrolyser batches within clock hours.",
+   "electrolyser_batches": 2209,
+   "zero_share_batches": 12,
+   "conditioning_batches": 6,
+   "rfnbo_h2_kg": 439400,
+   "rfnbo_to_buffer_kg": 263640,
+   "rfnbo_to_pass_through_kg": 175760,
+   "liquefier_rfnbo_feed_kg": 258760,
+   "compressor_rfnbo_feed_kg": 175760,
+   "rfnbo_lh2_kg": 252735.2,
+   "lh2_carried_kg": 47092,
+   "ch2_carried_kg": 55760,
+   "stored_MJ": 12927840
+  },
+  "v2_shortfall": {
+   "note": "December renewable 2,500 kWh per interval and no LH2 spot sale. The optimum depends on build plan §10.3 follow-up (b); both readings are given.",
+   "december_renewable_per_interval_kWh": 2500,
+   "lh2_ghg_without_renewable": 35.7040816326531,
+   "least_liquefier_renewable_kWh": 190615.68,
+   "reading_a_noncompliant_counts": {
+    "liquefier_renewable_kWh": 0,
+    "december_rfnbo_h2_kg": 148800,
+    "december_lh2_ghg": 35.7040816326531,
+    "lh2_held_kg": 104132,
+    "ch2_held_kg": 56720,
+    "stored_MJ": 19887840,
+    "stored_compliant_MJ": 9962400
+   },
+   "reading_b_compliant_only": {
+    "zero_share_intervals": 76,
+    "part_interval_electrolyser_kWh": 1000,
+    "liquefier_renewable_kWh": 191500,
+    "december_rfnbo_h2_kg": 144970,
+    "december_lh2_ghg": 28.1651864449484,
+    "liquefier_rfnbo_feed_kg": 82090,
+    "compressor_rfnbo_feed_kg": 58000,
+    "part_interval_ghg": 101.166666666667,
+    "december_ch2_ghg": 8.36781609195402,
+    "lh2_held_kg": 101868.2,
+    "ch2_held_kg": 55200,
+    "stored_MJ": 19433784
+   }
+  },
+  "v3_infeasible": {
+   "ca_target": 3.5,
+   "limit": 1.5,
+   "lowest_lh2_ghg": 1.69047619047619,
+   "ca_feasible": false,
+   "ca_max_volume_kg": 0,
+   "cb_met": true,
+   "lh2_write_off_kg": 207040,
+   "consignments_met": 1,
+   "stored_MJ": 13043040
+  }
+ },
+ "workbook_checks_pass": true
+}
