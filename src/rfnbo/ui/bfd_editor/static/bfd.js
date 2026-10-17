@@ -48,6 +48,30 @@ window.bfd = {
     }
   },
 
+  addConnection(source, target) {
+    this.silent = true;
+    try {
+      this.editor.addConnection(source, target, "output_1", "input_1");
+    } finally {
+      this.silent = false;
+    }
+  },
+
+  // Flow colour by product and dashed pass-through links; pass-through nodes get a class.
+  style(edges, passThrough) {
+    for (const e of edges) {
+      const sel = `.connection.node_out_node-${e.source}.node_in_node-${e.target}`;
+      document.querySelectorAll(sel).forEach((el) => {
+        el.classList.toggle("bfd-dashed", e.dashed);
+        el.querySelectorAll(".main-path").forEach((p) => { p.style.stroke = e.colour; });
+      });
+    }
+    const pt = new Set(passThrough.map(String));
+    document.querySelectorAll(".drawflow-node").forEach((el) => {
+      el.classList.toggle("bfd-pass_through", pt.has(el.id.replace("node-", "")));
+    });
+  },
+
   removeConnection(source, target) {
     this.silent = true;
     try {

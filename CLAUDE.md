@@ -73,5 +73,5 @@ uv run rfnbo validate examples/test_plant.json
   `*.decisions.json` / `*.expected.json` fixtures. Regenerate fixtures with the script, never
   by hand (test case 2 uses `--rule-2-5`). Test case 3 (multi-step plant): `build_tc3_workbook.py`
   writes the workbook (recalculate it with LibreOffice before committing), `tc3_reference.py` is
-  the independent check, `export_tc3.py` writes `tc3.*.json`; `tc3.plant.json` is the draft
-  network config for phase 11.
+  the independent check, `export_tc3.py` writes `tc3.*.json`; `tc3.plant.json` is test plant 3
+  (validates from phase 11; the calculator runs it from phase 12).

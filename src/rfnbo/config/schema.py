@@ -105,22 +105,38 @@ class OpeningLedgerEntry(_Model):
 
 
 class StorageUnit(_Block):
-    """Holds product between units and across periods; keeps a quarterly RFNBO ledger."""
+    """Holds product between units and across periods; keeps a quarterly RFNBO ledger.
+
+    A pass-through storage models a direct unit → unit link (build plan §10.2 rule 5): it has
+    no inventory meter, its physical inventory is zero, and its RFNBO ledger must close at
+    zero each quarter.
+    """
 
     kind: Literal["storage_unit"] = "storage_unit"
     product: str = Field(min_length=1)
-    inventory_series: str | None = None  # kg at interval end; required by the validator
+    pass_through: bool = False
+    inventory_series: str | None = None  # kg at interval end; required unless pass-through
     opening_inventory_kg: float = Field(ge=0)
     opening_ledger: list[OpeningLedgerEntry] = Field(default_factory=list)
     # MJ of final product per MJ carried here, used only when this quarter's data has no
     # downstream flow to measure it from (rfnbo.calc.weights); --opening-from sets it.
     carried_weight_fallback: float | None = Field(default=None, gt=0)
 
+    @field_validator("inventory_series")
+    @classmethod
+    def _blank_is_none(cls, v: str | None) -> str | None:
+        return v or None
+
     @model_validator(mode="after")
     def _check(self) -> StorageUnit:
         ids = [e.batch_id for e in self.opening_ledger]
         if len(set(ids)) != len(ids):
             raise ValueError("opening ledger repeats a batch id")
+        if self.pass_through:
+            if self.inventory_series:
+                raise ValueError("a pass-through storage has no inventory series")
+            if self.opening_inventory_kg or self.opening_ledger:
+                raise ValueError("a pass-through storage opens empty (inventory and ledger zero)")
         return self
 
 

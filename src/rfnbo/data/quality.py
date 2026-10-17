@@ -166,12 +166,18 @@ def check(cfg: PlantConfig, frame: Frame) -> list[QualityFlag]:
 def _storage_balance(cfg: PlantConfig, frame: Frame) -> list[QualityFlag]:
     """Flag intervals where measured inventory moves differently from metered flows.
 
-    Losses (boil-off, venting) show up here; they are not modelled, only reported.
+    Losses (boil-off, venting) show up here; they are not modelled, only reported. A
+    pass-through storage has inventory zero, so what flows in must flow out each interval.
+    Product from a unit that splits its output is counted by the metered flow, otherwise by
+    the unit's production series.
     """
     flags: list[QualityFlag] = []
     tol = cfg.settings.balance_tolerance_kg_per_interval
     for s in cfg.blocks_of(StorageUnit):
-        inv = frame.series.get(s.inventory_series or "")
+        if s.pass_through:
+            inv: FloatArray | None = np.zeros(len(frame))
+        else:
+            inv = frame.series.get(s.inventory_series or "")
         if inv is None:
             continue
         net = np.zeros(len(frame))
@@ -179,7 +185,7 @@ def _storage_balance(cfg: PlantConfig, frame: Frame) -> list[QualityFlag]:
         for f in cfg.flows_into(s.id):
             unit = cfg.block(f.source)
             if isinstance(unit, ProcessingUnit):
-                parts.append(frame.series.get(unit.production_series or ""))
+                parts.append(frame.series.get(f.series or unit.production_series or ""))
         for f in cfg.flows_out_of(s.id):
             out = frame.series.get(f.series or "")
             parts.append(None if out is None else -out)
@@ -199,7 +205,7 @@ def _storage_balance(cfg: PlantConfig, frame: Frame) -> list[QualityFlag]:
                     f"inventory change differs from metered flows by more than {tol} kg "
                     f"(largest {float(np.nanmax(np.abs(residual))):.3f} kg)",
                     [frame.index[i] for i in bad],
-                    s.inventory_series,
+                    s.inventory_series or s.id,
                 )
             )
     return flags

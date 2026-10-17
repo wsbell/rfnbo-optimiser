@@ -16,7 +16,6 @@ from pathlib import Path
 from typing import Any
 
 import openpyxl
-import pytest
 
 from rfnbo.config import load_config
 from rfnbo.data import ingest, quality
@@ -250,8 +249,12 @@ def test_variants() -> None:
     )
 
 
-@pytest.mark.xfail(
-    strict=True, reason="phase 11: pass-through storages, split outputs, unit → unit"
-)
 def test_plant_config_validates() -> None:
-    load_config(GOLDEN / "tc3.plant.json")
+    """Phase 11: pass-through storage, split outputs and conditioning units validate."""
+    cfg = load_config(GOLDEN / "tc3.plant.json")
+    source = ingest.load_source_spec(GOLDEN / "tc3.source.json")
+    frame, flags = quality.prepare(cfg, ingest.load(WORKBOOK, source), 2026, 4)
+    assert not quality.has_errors(flags), flags
+    # The workbook's meters balance: buffer, LH₂, CH₂ and the pass-through (in = out).
+    assert not [f for f in flags if f.code == "meter_balance"], flags
+    assert len(frame) == 8836

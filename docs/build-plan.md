@@ -348,8 +348,8 @@ decisions, the lineage graph) already works on networks.
 
 | Where | Assumption |
 | --- | --- |
-| `config/validate.py` `unit_outputs` | A unit sends its whole output to exactly one flow |
-| `config/validate.py` `ALLOWED_CONNECTIONS` | Product always passes through a storage; no unit → unit link |
+| ~~`config/validate.py` `unit_outputs`~~ | ~~A unit sends its whole output to exactly one flow~~ (removed in phase 11) |
+| ~~`config/validate.py` `ALLOWED_CONNECTIONS`~~ | ~~No unit → unit link~~ (phase 11: a pass-through storage) |
 | `calc/batch.py` `output_storage` | One output storage per unit |
 | `calc/consign.py` `consignment_route` | One storage feeds each distribution block |
 | `optimise/batching.py` | One unit per renewable pool; the product feeds one downstream unit with one feed |
@@ -432,7 +432,11 @@ the H₂ buffer full of RFNBO rather than liquefying H₂ that would be written 
 holds because liquefying it would only add LH₂ that is written off. Variant V2 shows the
 liquefier given just enough renewable to comply, since non-compliant LH₂ cannot be carried.
 
-**Phase 11 — Config, validation and editor.** Schema: output flows of a unit carry a metered
+**Phase 11 — Config, validation and editor.** *Done 2026-10-17:* `pass_through` storages,
+rules `split_outputs_metered`, `pass_through_links`, `unit_feed_products`, `storages_produced`
+(and `unit_outputs` relaxed to at least one output); a unit dragged onto a unit in the editor
+inserts a pass-through storage; flows coloured by product, pass-through links dashed; data
+quality balances split outputs on their meters and pass-throughs to zero. Plan: Schema: output flows of a unit carry a metered
 series when there are several; storage `pass_through` flag (no inventory series, physical
 zero); unit → unit links allowed and saved as an implicit pass-through storage. Rules (each
 with a failing-case test): every split output metered; product consistent along every path;

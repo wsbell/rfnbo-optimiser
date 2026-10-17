@@ -61,6 +61,11 @@ BLOCK_FIELDS: dict[str, tuple[FieldSpec | TableSpec, ...]] = {
     ),
     "storage_unit": (
         FieldSpec("product", "Product", "text"),
+        FieldSpec(
+            "pass_through",
+            "Pass-through (direct unit → unit link, no inventory)",
+            "bool",
+        ),
         FieldSpec("inventory_series", "Inventory series (kg)", "optional_text"),
         FieldSpec("opening_inventory_kg", "Opening physical inventory (kg)", "number"),
         FieldSpec(

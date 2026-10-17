@@ -1,5 +1,6 @@
-"""Phase 2 acceptance, in a real browser: the test plant can be drawn, saved, reloaded and
-passes validation.
+"""Phases 2 and 11 acceptance, in a real browser: test plants 1 and 3 can be drawn, saved,
+reloaded and pass validation; a unit dragged onto a unit is linked through a pass-through
+storage.
 
 Needs the ``ui`` extra and a Chromium for Playwright; skipped otherwise. Set
 ``RFNBO_CHROMIUM`` to use a specific Chromium binary.
@@ -174,9 +175,16 @@ def _draw(page: Any, spec: PlantConfig) -> None:
             _fill(page, "field-series", f.series)
 
 
-def test_test_plant_drawn_saved_reloaded_and_valid(browser: Any, editor: tuple[str, Path]) -> None:
+PLANT_3 = ROOT / "tests" / "golden" / "tc3.plant.json"
+
+
+@pytest.mark.parametrize("plant", [EXAMPLE, PLANT_3], ids=["test_plant", "test_plant_3"])
+def test_test_plant_drawn_saved_reloaded_and_valid(
+    browser: Any, editor: tuple[str, Path], plant: Path
+) -> None:
+    """Phases 2 and 11: test plants 1 and 3 (split output, pass-through, parallel units)."""
     url, path = editor
-    spec = load_config(EXAMPLE)
+    spec = load_config(plant)
     page = _open(browser, url)
     _draw(page, spec)
     _assert_valid(page)
@@ -240,4 +248,39 @@ def test_editing_an_existing_plant(browser: Any, editor: tuple[str, Path]) -> No
     spot = next(b for b in saved["blocks"] if b["id"] == "spot")
     assert spot["distribution_block"] == ""
     assert saved["layout"]["water"]["y"] > load_config(EXAMPLE).layout["water"].y + 100
+    page.close()
+
+
+def test_unit_to_unit_link_adds_a_pass_through_storage(
+    browser: Any, editor: tuple[str, Path]
+) -> None:
+    url, path = editor
+    page = _open(browser, url)
+    for block_id, product in (("electrolyser", "H2"), ("compressor", "CH2")):
+        page.get_by_test_id("add-processing_unit").click()
+        expect(_input(page, "field-id")).to_have_value(re.compile(r"^processing_unit_\d+$"))
+        _fill(page, "field-id", block_id)
+        expect(_input(page, "field-id")).to_have_value(block_id)
+        _fill(page, "field-product", product)
+    _drag(
+        page,
+        _node(page, "electrolyser").locator(".output_1"),
+        _node(page, "compressor").locator(".input_1"),
+    )
+    expect(
+        page.get_by_text("through pass-through storage pt_electrolyser_compressor")
+    ).to_be_visible()
+    expect(page.locator(".drawflow-node")).to_have_count(3)
+    expect(page.locator(".drawflow svg.connection")).to_have_count(2)
+    expect(page.locator(".drawflow svg.connection.bfd-dashed")).to_have_count(2)
+    expect(_node(page, "pt_electrolyser_compressor")).to_have_class(re.compile("bfd-pass_through"))
+    page.get_by_test_id("save").click()
+    expect(page.get_by_text(re.compile(r"Saved plant\.json"))).to_be_visible()
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    pt = next(b for b in saved["blocks"] if b["id"] == "pt_electrolyser_compressor")
+    assert pt["pass_through"] is True and pt["product"] == "H2"
+    assert {(f["source"], f["target"]) for f in saved["flows"]} == {
+        ("electrolyser", "pt_electrolyser_compressor"),
+        ("pt_electrolyser_compressor", "compressor"),
+    }
     page.close()

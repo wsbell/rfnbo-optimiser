@@ -10,11 +10,12 @@ from typing import Any
 import pytest
 
 from rfnbo.config import ConfigError, load_config, validate
-from rfnbo.config.schema import PlantConfig
+from rfnbo.config.schema import PlantConfig, StorageUnit
 from rfnbo.config.validate import RULES
 from tests.conftest import EXAMPLE
 
 Raw = dict[str, Any]
+PLANT_3 = Path(__file__).resolve().parents[1] / "golden" / "tc3.plant.json"
 
 
 def _block(raw: Raw, block_id: str) -> dict[str, Any]:
@@ -36,6 +37,31 @@ def _rules(raw: Raw) -> set[str]:
 def test_example_is_valid() -> None:
     cfg = load_config(EXAMPLE)
     assert validate(cfg) == []
+
+
+def test_multi_step_plant_is_valid() -> None:
+    """Test plant 3: split electrolyser output, pass-through link, liquefier and compressor."""
+    cfg = load_config(PLANT_3)
+    assert validate(cfg) == []
+    pt = cfg.block("pt_compressor")
+    assert isinstance(pt, StorageUnit) and pt.pass_through
+
+
+def _plant_3(r: Raw) -> None:
+    """Replace the test plant with test plant 3 (the network cases mutate that)."""
+    r.clear()
+    r.update(json.loads(PLANT_3.read_text(encoding="utf-8")))
+
+
+def test_pass_through_storage_has_no_inventory() -> None:
+    raw = json.loads(PLANT_3.read_text(encoding="utf-8"))
+    _block(raw, "pt_compressor")["inventory_series"] = "pt_kg"
+    with pytest.raises(ValueError, match="no inventory series"):
+        PlantConfig.model_validate(raw)
+    raw = json.loads(PLANT_3.read_text(encoding="utf-8"))
+    _block(raw, "pt_compressor")["opening_inventory_kg"] = 10.0
+    with pytest.raises(ValueError, match="opens empty"):
+        PlantConfig.model_validate(raw)
 
 
 def _dup_block(r: Raw) -> None:
@@ -179,6 +205,40 @@ def _cycle(r: Raw) -> None:
     )
 
 
+def _split_output_unmetered(r: Raw) -> None:
+    _plant_3(r)
+    del _flow(r, "f_el_buf")["series"]
+
+
+def _pass_through_to_distribution(r: Raw) -> None:
+    _plant_3(r)
+    _flow(r, "f_pt_comp")["target"] = "dist_customer_b"
+
+
+def _pass_through_two_sources(r: Raw) -> None:
+    _plant_3(r)
+    r["flows"].append(
+        {"id": "f_liq_pt", "source": "liquefier", "target": "pt_compressor", "material": "LH2"}
+    )
+
+
+def _unit_takes_two_products(r: Raw) -> None:
+    _plant_3(r)
+    r["flows"].append(
+        {
+            "id": "f_lh2s_comp",
+            "source": "lh2_storage",
+            "target": "compressor",
+            "material": "LH2",
+            "series": "compressor_LH2_kg",
+        }
+    )
+
+
+def _storage_not_produced(r: Raw) -> None:
+    _drop_flow(r, "f_el_h2s")
+
+
 def _layout_for_missing_block(r: Raw) -> None:
     r["layout"] = {"electrolyser": {"x": 0, "y": 0}, "ghost": {"x": 10, "y": 10}}
 
@@ -194,6 +254,10 @@ CASES: dict[str, list[Callable[[Raw], None]]] = {
     "flow_series": [_no_input_series, _no_transfer_series, _series_on_electricity_flow],
     "storage_series": [_no_inventory_series],
     "unit_outputs": [_no_unit_output],
+    "split_outputs_metered": [_split_output_unmetered],
+    "pass_through_links": [_pass_through_to_distribution, _pass_through_two_sources],
+    "unit_feed_products": [_unit_takes_two_products],
+    "storages_produced": [_storage_not_produced],
     "unit_feeds": [_electrolyser_without_renewable, _downstream_without_feed],
     "electricity_inputs": [_second_grid_input, _grid_ef_varies, _renewable_without_grid],
     "emission_factor_coverage": [_ef_starts_late],

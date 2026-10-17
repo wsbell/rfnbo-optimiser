@@ -38,6 +38,9 @@ CSS = """
 #bfd-canvas .bfd-storage_unit { background: #e3f2fd; }
 #bfd-canvas .bfd-distribution { background: #f3e5f5; }
 #bfd-canvas .bfd-consignment_output { background: #fce4ec; }
+#bfd-canvas .drawflow-node.bfd-pass_through { border-style: dashed; min-height: 40px; }
+#bfd-canvas .connection .main-path { stroke-width: 3px; }
+#bfd-canvas .connection.bfd-dashed .main-path { stroke-dasharray: 8 5; }
 .bfd-title { font-weight: 600; font-size: 13px; }
 .bfd-sub { font-size: 11px; color: #555; }
 """
@@ -46,6 +49,8 @@ CSS = """
 def node_html(block: dict[str, Any]) -> str:
     name = html.escape(str(block.get("name", "")))
     label = KIND_LABELS.get(block.get("kind", ""), "")
+    if block.get("kind") == "storage_unit" and block.get("pass_through"):
+        label = "Pass-through"
     bid = html.escape(str(block.get("id", "")))
     return f'<div class="bfd-title">{name}</div><div class="bfd-sub">{label} · {bid}</div>'
 
@@ -165,9 +170,13 @@ class Editor:
         self.select(("block", block_id))
         self.refresh()
 
-    def on_connection_created(self, e: events.GenericEventArguments) -> None:
+    async def on_connection_created(self, e: events.GenericEventArguments) -> None:
         src, tgt = self.block_of(e.args["output_id"]), self.block_of(e.args["input_id"])
         if src is None or tgt is None:
+            return
+        kinds = (self.doc.block(src)["kind"], self.doc.block(tgt)["kind"])
+        if kinds == ("processing_unit", "processing_unit"):
+            await self.link_units(src, tgt, int(e.args["output_id"]), int(e.args["input_id"]))
             return
         try:
             flow_id = self.doc.connect(src, tgt)
@@ -178,6 +187,32 @@ class Editor:
             )
             return
         self.select(("flow", flow_id))
+        self.refresh()
+
+    async def link_units(self, src: str, tgt: str, src_node: int, tgt_node: int) -> None:
+        """A unit dragged onto a unit: replace the drawn link with a pass-through storage."""
+        ui.run_javascript(f"bfd.removeConnection({src_node}, {tgt_node})")
+        try:
+            pt = self.doc.link_units(src, tgt)
+        except EditorError as exc:
+            ui.notify(str(exc), type="negative")
+            return
+        b = self.doc.block(pt)
+        x, y = self.doc.position(pt)
+        node = {
+            "block": pt,
+            "kind": "storage_unit",
+            "inputs": 1,
+            "outputs": 1,
+            "x": x,
+            "y": y,
+            "html": node_html(b),
+        }
+        n = int(await ui.run_javascript(f"return bfd.addNode({json.dumps(node)})"))
+        self.node_of[pt] = n
+        ui.run_javascript(f"bfd.addConnection({src_node}, {n}); bfd.addConnection({n}, {tgt_node})")
+        ui.notify(f"Linked {src} → {tgt} through pass-through storage {pt}")
+        self.select(("block", pt))
         self.refresh()
 
     def on_connection_removed(self, e: events.GenericEventArguments) -> None:
@@ -471,6 +506,13 @@ class Editor:
                 )
         bad = [self.node_of[i.ref] for i in issues if i.ref in self.node_of]
         ui.run_javascript(f"bfd.setBad({json.dumps(bad)})")
+        edges = [
+            dict(s, source=self.node_of[s["source"]], target=self.node_of[s["target"]])
+            for s in self.doc.edge_styles()
+            if s["source"] in self.node_of and s["target"] in self.node_of
+        ]
+        passing = [n for b, n in self.node_of.items() if self.doc.is_pass_through(b)]
+        ui.run_javascript(f"bfd.style({json.dumps(edges)}, {json.dumps(passing)})")
 
     def issue_list(self, ref: str) -> None:
         for i in self.doc.issues_by_ref().get(ref, []):

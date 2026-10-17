@@ -245,7 +245,7 @@ def compute_ledgers(
             key=lambda x: (*priority_key(x.ghg_gCO2e_per_MJ, x.month, x.compliant), x.batch),
             reverse=True,
         )
-        physical = float(frame.series[s.inventory_series or ""][-1])
+        physical = 0.0 if s.pass_through else float(frame.series[s.inventory_series or ""][-1])
         results.append(LedgerResult(s.id, frame.quarter, tuple(lines), physical))
     return results
 
@@ -257,7 +257,8 @@ def compute_reconciliation(cfg: PlantConfig, frame: Frame) -> list[Reconciliatio
         for f in cfg.flows_into(s.id):
             unit = cfg.block(f.source)
             if isinstance(unit, ProcessingUnit):
-                produced += float(frame.series[unit.production_series or ""].sum())
+                # A split output is counted by its metered flow (§10.2 rule 4).
+                produced += float(frame.series[f.series or unit.production_series or ""].sum())
         outflows = tuple(
             (f.id, float(frame.series[f.series or ""].sum())) for f in cfg.flows_out_of(s.id)
         )
@@ -268,7 +269,9 @@ def compute_reconciliation(cfg: PlantConfig, frame: Frame) -> list[Reconciliatio
                 opening_physical_kg=s.opening_inventory_kg,
                 produced_kg=produced,
                 outflows_kg=outflows,
-                measured_kg=float(frame.series[s.inventory_series or ""][-1]),
+                measured_kg=0.0
+                if s.pass_through
+                else float(frame.series[s.inventory_series or ""][-1]),
             )
         )
     return out

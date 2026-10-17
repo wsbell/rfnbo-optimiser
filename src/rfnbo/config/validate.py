@@ -43,7 +43,8 @@ class ConfigError(ValueError):
 
 
 # Permitted (source kind, target kind) pairs. Flows run one way; product always passes
-# through storage between units so that it enters an RFNBO ledger.
+# through storage between units so that it enters an RFNBO ledger. A direct unit → unit link
+# is a pass-through storage (build plan §10.2 rule 5); the editor inserts one.
 ALLOWED_CONNECTIONS: frozenset[tuple[str, str]] = frozenset(
     {
         ("input", "processing_unit"),
@@ -87,7 +88,13 @@ def flow_endpoints(cfg: PlantConfig) -> Iterator[Issue]:
 def connection_types(cfg: PlantConfig) -> Iterator[Issue]:
     for f in _resolvable(cfg):
         pair = (cfg.block(f.source).kind, cfg.block(f.target).kind)
-        if pair not in ALLOWED_CONNECTIONS:
+        if pair == ("processing_unit", "processing_unit"):
+            yield Issue(
+                "connection_types",
+                "a direct unit → unit link needs a pass-through storage between the units",
+                f.id,
+            )
+        elif pair not in ALLOWED_CONNECTIONS:
             yield Issue("connection_types", f"a {pair[0]} cannot flow into a {pair[1]}", f.id)
 
 
@@ -168,20 +175,77 @@ def flow_series(cfg: PlantConfig) -> Iterator[Issue]:
 
 def storage_series(cfg: PlantConfig) -> Iterator[Issue]:
     for s in cfg.blocks_of(StorageUnit):
-        if not s.inventory_series:
+        if not s.inventory_series and not s.pass_through:
             yield Issue("storage_series", "storage unit has no inventory series", s.id)
 
 
 def unit_outputs(cfg: PlantConfig) -> Iterator[Issue]:
-    """Each unit sends its whole production to one storage (split outputs not supported)."""
+    """Each unit sends its production to at least one storage."""
     for u in cfg.blocks_of(ProcessingUnit):
-        n = len(cfg.flows_out_of(u.id))
-        if n != 1:
+        if not cfg.flows_out_of(u.id):
+            yield Issue("unit_outputs", "processing unit has no product output", u.id)
+
+
+def split_outputs_metered(cfg: PlantConfig) -> Iterator[Issue]:
+    """When a unit's output is split between several destinations, every output flow is
+    metered, so each destination's share of each batch is known (§10.2 rule 4)."""
+    for u in cfg.blocks_of(ProcessingUnit):
+        out = cfg.flows_out_of(u.id)
+        if len(out) > 1:
+            for f in out:
+                if not f.series:
+                    yield Issue(
+                        "split_outputs_metered",
+                        f"{u.id} splits its output, so this flow needs a metered series (kg)",
+                        f.id,
+                    )
+
+
+def pass_through_links(cfg: PlantConfig) -> Iterator[Issue]:
+    """A pass-through storage is a direct link: one unit in, one unit out (§10.2 rule 5)."""
+    for s in cfg.blocks_of(StorageUnit):
+        if not s.pass_through:
+            continue
+        into = [f for f in cfg.flows_into(s.id) if f.source in _ids(cfg)]
+        out = [f for f in cfg.flows_out_of(s.id) if f.target in _ids(cfg)]
+        if len(into) != 1 or not isinstance(cfg.block(into[0].source), ProcessingUnit):
             yield Issue(
-                "unit_outputs",
-                f"processing unit needs exactly one product output, has {n}",
+                "pass_through_links",
+                "a pass-through storage takes product from exactly one processing unit",
+                s.id,
+            )
+        if len(out) != 1 or not isinstance(cfg.block(out[0].target), ProcessingUnit):
+            yield Issue(
+                "pass_through_links",
+                "a pass-through storage feeds exactly one processing unit",
+                s.id,
+            )
+
+
+def unit_feed_products(cfg: PlantConfig) -> Iterator[Issue]:
+    """A unit's product feeds from storages are all one product (RFNBO share by energy is
+    over one product)."""
+    for u in cfg.blocks_of(ProcessingUnit):
+        products = {
+            f.material
+            for f in cfg.flows_into(u.id)
+            if isinstance(_block_or_none(cfg, f.source), StorageUnit)
+        }
+        if len(products) > 1:
+            yield Issue(
+                "unit_feed_products",
+                f"unit takes several products from storage: {sorted(products)}",
                 u.id,
             )
+
+
+def storages_produced(cfg: PlantConfig) -> Iterator[Issue]:
+    """Every storage, and so every final product, is fed by a processing unit."""
+    for s in cfg.blocks_of(StorageUnit):
+        if not any(
+            isinstance(_block_or_none(cfg, f.source), ProcessingUnit) for f in cfg.flows_into(s.id)
+        ):
+            yield Issue("storages_produced", "no processing unit feeds this storage", s.id)
 
 
 def unit_feeds(cfg: PlantConfig) -> Iterator[Issue]:
@@ -319,6 +383,10 @@ RULES: tuple[Rule, ...] = (
     flow_series,
     storage_series,
     unit_outputs,
+    split_outputs_metered,
+    pass_through_links,
+    unit_feed_products,
+    storages_produced,
     unit_feeds,
     electricity_inputs,
     emission_factor_coverage,

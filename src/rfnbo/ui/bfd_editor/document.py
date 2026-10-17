@@ -27,6 +27,10 @@ KIND_LABELS = {
     "distribution": "Distribution",
     "consignment_output": "Consignment output",
 }
+# Flow colours by material, so each product's path through the plant reads at a glance.
+# Electricity is grey; other materials take the palette in alphabetical order.
+ELECTRICITY_COLOUR = "#9e9e9e"
+PALETTE = ("#1565c0", "#2e7d32", "#ef6c00", "#6a1b9a", "#00838f", "#ad1457", "#5d4037", "#827717")
 # Key order used when saving, so files diff cleanly.
 _TOP_ORDER = (
     "schema_version",
@@ -131,6 +135,9 @@ class EditorDocument:
         data: dict[str, Any] = self.data
         if not self.issues():
             data = PlantConfig.model_validate(self.data).model_dump(mode="json", exclude_none=True)
+            for b in data["blocks"]:  # only pass-through storages say so, keeping files short
+                if b.get("pass_through") is False:
+                    del b["pass_through"]
         ordered = {k: data[k] for k in _TOP_ORDER if k in data}
         ordered.update({k: v for k, v in data.items() if k not in ordered})
         return json.dumps(ordered, indent=2, ensure_ascii=False) + "\n"
@@ -306,6 +313,63 @@ class EditorDocument:
             if not tgt.get("customer"):
                 tgt["customer"] = src.get("customer", "")
         return str(flow["id"])
+
+    def link_units(self, source: str, target: str) -> str:
+        """A direct unit → unit link: insert a pass-through storage between the two units
+        (build plan §10.2 rule 5) and connect through it. Returns the storage's id."""
+        src, tgt = self.block(source), self.block(target)
+        if (src["kind"], tgt["kind"]) != ("processing_unit", "processing_unit"):
+            raise EditorError("only two processing units are linked directly")
+        if any(
+            f.get("source") == source
+            and self.is_pass_through(str(f.get("target", "")))
+            and any(
+                g.get("source") == f.get("target") and g.get("target") == target for g in self.flows
+            )
+            for f in self.flows
+        ):
+            raise EditorError(f"{source} is already linked to {target}")
+        (sx, sy), (tx, ty) = self.position(source), self.position(target)
+        pt = self.add_block(
+            "storage_unit",
+            (sx + tx) / 2,
+            (sy + ty) / 2 + 70,
+            block_id=self._new_id(f"pt_{source}_{target}", self._ids(), bare=True),
+            name=f"Direct link {source} → {target}",
+        )
+        block = self.block(pt)
+        block.update(
+            product=src.get("product", ""),
+            pass_through=True,
+            inventory_series=None,
+            opening_inventory_kg=0.0,
+            opening_ledger=[],
+        )
+        self.connect(source, pt)
+        self.connect(pt, target)
+        return pt
+
+    def is_pass_through(self, block_id: str) -> bool:
+        return any(
+            b.get("id") == block_id and b.get("kind") == "storage_unit" and b.get("pass_through")
+            for b in self.blocks
+        )
+
+    def edge_styles(self) -> list[dict[str, Any]]:
+        """Colour of each flow (by material) and whether it is drawn dashed (pass-through)."""
+        materials = sorted({str(f.get("material", "")) for f in self.flows} - {"electricity", ""})
+        colour = {m: PALETTE[i % len(PALETTE)] for i, m in enumerate(materials)}
+        colour["electricity"] = ELECTRICITY_COLOUR
+        return [
+            {
+                "source": f.get("source"),
+                "target": f.get("target"),
+                "colour": colour.get(str(f.get("material", "")), "#555555"),
+                "dashed": self.is_pass_through(str(f.get("source", "")))
+                or self.is_pass_through(str(f.get("target", ""))),
+            }
+            for f in self.flows
+        ]
 
     def _provided(self, block: dict[str, Any]) -> str:
         if block["kind"] == "input":

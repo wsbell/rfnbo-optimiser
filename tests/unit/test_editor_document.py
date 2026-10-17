@@ -77,6 +77,54 @@ def test_test_plant_can_be_drawn_saved_and_reloaded(tmp_path: Path) -> None:
     assert out.read_text(encoding="utf-8") == EXAMPLE.read_text(encoding="utf-8")
 
 
+PLANT_3 = Path(__file__).resolve().parents[1] / "golden" / "tc3.plant.json"
+
+
+def test_multi_step_plant_can_be_drawn_saved_and_reloaded(tmp_path: Path) -> None:
+    """Phase 11: test plant 3 (split output, pass-through link, parallel units)."""
+    spec = load_config(PLANT_3)
+    doc = draw(spec)
+    assert doc.issues() == []
+    out = tmp_path / "drawn.json"
+    assert doc.save(out) == []
+    again = load_config(out)
+    assert again.model_dump(exclude={"layout"}) == spec.model_dump(exclude={"layout"})
+    assert EditorDocument.load(out).issues() == []
+
+
+def test_unit_to_unit_link_inserts_a_pass_through_storage() -> None:
+    doc = EditorDocument.new()
+    el = doc.add_block("processing_unit", block_id="electrolyser")
+    doc.update_block(el, product="H2")
+    comp = doc.add_block("processing_unit", block_id="compressor")
+    doc.update_block(comp, product="CH2")
+    pt = doc.link_units(el, comp)
+    assert pt == "pt_electrolyser_compressor" and doc.is_pass_through(pt)
+    b = doc.block(pt)
+    assert b["product"] == "H2" and b["inventory_series"] is None
+    assert b["opening_inventory_kg"] == 0 and b["opening_ledger"] == []
+    assert [(f["source"], f["target"], f["material"]) for f in doc.flows] == [
+        (el, pt, "H2"),
+        (pt, comp, "H2"),
+    ]
+    assert all(s["dashed"] for s in doc.edge_styles())
+    with pytest.raises(EditorError, match="already linked"):
+        doc.link_units(el, comp)
+    with pytest.raises(EditorError, match="only two processing units"):
+        doc.link_units(el, pt)
+
+
+def test_flows_are_coloured_by_product() -> None:
+    doc = EditorDocument.load(PLANT_3)
+    styles = {(s["source"], s["target"]): s for s in doc.edge_styles()}
+    assert styles["renewable_power", "electrolyser"]["colour"] == "#9e9e9e"
+    h2 = styles["electrolyser", "h2_buffer"]["colour"]
+    assert styles["h2_buffer", "liquefier"]["colour"] == h2
+    assert styles["liquefier", "lh2_storage"]["colour"] != h2
+    assert styles["electrolyser", "pt_compressor"]["dashed"]
+    assert not styles["electrolyser", "h2_buffer"]["dashed"]
+
+
 def test_connect_infers_material_and_fills_blanks() -> None:
     doc = EditorDocument.new()
     unit = doc.add_block("processing_unit")
