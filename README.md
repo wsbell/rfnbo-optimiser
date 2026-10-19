@@ -25,7 +25,7 @@ plant dispatch.
 | 13 | Optimiser stage A for several electricity users | done (shared renewable pool split per interval; test case 3 and its variants match the hand calculation) |
 | 14 | Optimiser stage B on networks | done (`rfnbo optimise` runs test plant 3 end to end and matches or beats test case 3; series plants supported) |
 | 15 | Stage C, reports and UI for several final products | done (product and split-output reports; drill-down through every step; test plant 3 in about 12 s) |
-| 16 | Purchased RFNBO with a proof of sustainability, allocated to unit inputs | planned; decisions settled (`docs/build-plan.md` §11.1) |
+| 16 | Purchased RFNBO with a proof of sustainability, allocated to unit inputs | done (supplier block, PoS register and checks; `rfnbo optimise --pos`; test case 4 matched) |
 | 17 | Plant data entry in the UI | planned (`docs/build-plan.md` §11.2) |
 
 The full build plan, including the multi-step extension and the decisions it needs, is in
@@ -43,6 +43,12 @@ multi-step plant for phases 11–15: electrolyser with a split, metered output �
 liquefier (boil-off) → LH₂, and a direct pass-through link → compressor → CH₂, sharing one
 renewable pool. `tests/golden/build_tc3_workbook.py` builds it, `tc3_reference.py` checks it
 independently and `export_tc3.py` writes the fixtures.
+
+Test case 4 (`tests/golden/workbooks/RFNBO_optimiser_test4_purchased_Q4_2026.xlsx`) adds
+purchased RFNBO (phase 16): test plant 3 with a supplier delivering H₂ into the compressor and
+the liquefier, and three proofs of sustainability (PoS) whose 23,000 kg exceed the 19,200 kg of
+metered delivery. `build_tc4_workbook.py`, `tc4_reference.py` and `export_tc4.py` play the same
+roles as for test case 3; the PoS records are also in `tests/golden/tc4.pos.csv`.
 
 Objectives (build plan §2.8, revised 2026-10-17): meet consignments; then maximise compliant
 RFNBO carried forward in MJ of final product, each storage weighted by its downstream energy
@@ -73,6 +79,13 @@ uv run rfnbo optimise --config examples/test_plant.json \
   --data tests/golden/workbooks/RFNBO_optimiser_test_Q4_2026_undersized.xlsx \
   --consignments examples/test_consignments_Q4_2026_undersized.json \
   --quarter 2026-Q4 --out runs/tc2-opt
+
+# purchased RFNBO: PoS records (CSV or JSON) allocated to a supplier's metered deliveries
+uv run rfnbo optimise --config tests/golden/tc4.plant.json \
+  --source tests/golden/tc4.source.json \
+  --data tests/golden/workbooks/RFNBO_optimiser_test4_purchased_Q4_2026.xlsx \
+  --consignments tests/golden/tc4.consignments.json --pos tests/golden/tc4.pos.csv \
+  --quarter 2026-Q4 --out runs/tc4-opt
 ```
 
 A sealed run directory holds `frame.csv` (the exact 15-minute data used), `batches.jsonl`

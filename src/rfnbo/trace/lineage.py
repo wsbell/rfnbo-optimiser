@@ -1,7 +1,10 @@
 """Batch lineage: where every kg of every ledger batch came from and went.
 
 Edges run downstream: batch → downstream batch (feed), batch → aggregated batch,
-aggregated batch → consignment, batch → quarter-end write-off or carry-forward.
+aggregated batch → consignment, batch → quarter-end write-off or carry-forward. A PoS is a node
+too (§11.1 rule 6): PoS → unit batch (feed, credentials allocated to a supplier's delivery),
+and PoS → write-off for credentials not allocated by quarter end. Credentials allocated into a
+storage sit in its ledger under the PoS's id, so their edges are those of any ledger batch.
 """
 
 from __future__ import annotations
@@ -32,8 +35,22 @@ def carried_node(storage: str, quarter: str) -> str:
     return f"carried:{storage}:{quarter}"
 
 
+def pos_write_off_node(quarter: str) -> str:
+    return f"write-off:pos:{quarter}"
+
+
 def edges(run: RunResult) -> list[Edge]:
     out = [Edge(a.source, a.target, "feed", a.kg) for a in run.decisions.feed]
+    for p in run.purchases:
+        to_unit: dict[str, float] = {}
+        for a in p.allocations:
+            if a.kind == "unit":
+                to_unit[a.target] = to_unit.get(a.target, 0.0) + a.kg
+        out += [Edge(p.id, b, "feed", kg) for b, kg in to_unit.items()]
+        if p.unallocated_kg > 0:
+            out.append(
+                Edge(p.id, pos_write_off_node(run.frame.quarter), "write_off", p.unallocated_kg)
+            )
     for c in run.consignments:
         for agg in c.aggregated:
             out += [Edge(p.batch, agg.id, "aggregation", p.kg) for p in agg.parts]
@@ -65,6 +82,18 @@ def graph(run: RunResult) -> dict[str, Any]:
                 nodes.append(
                     {"id": x.batch, "kind": "opening", "storage": led.storage, "month": x.month}
                 )
+    for p in run.purchases:
+        nodes.append(
+            {
+                "id": p.id,
+                "kind": "pos",
+                "supplier": p.supplier,
+                "product": p.product,
+                "dispatch_date": p.dispatch_date.isoformat(),
+                "ghg": p.ghg_gCO2e_per_MJ,
+                "quantity_kg": p.quantity_kg,
+            }
+        )
     for b in run.batches.values():
         nodes.append(
             {
@@ -85,6 +114,8 @@ def graph(run: RunResult) -> dict[str, Any]:
     for led in run.ledgers:
         nodes.append({"id": write_off_node(led.storage, led.quarter), "kind": "write_off"})
         nodes.append({"id": carried_node(led.storage, led.quarter), "kind": "carried"})
+    if run.purchases:
+        nodes.append({"id": pos_write_off_node(run.frame.quarter), "kind": "write_off"})
     return {
         "nodes": nodes,
         "edges": [

@@ -517,7 +517,7 @@ built on the network drill-down from phase 15.
 
 ## 11. Extension: purchased RFNBO and plant data entry (phases 16–17)
 
-Requested 2026-10-17. §11.1's questions are all answered (2026-10-17) and logged in the scope
+Requested 2026-10-17. Phase 16 done 2026-10-19. §11.1's questions are all answered (2026-10-17) and logged in the scope
 doc.
 
 ### 11.1 Purchased RFNBO with a proof of sustainability (phase 16)
@@ -569,6 +569,44 @@ Decisions (2026-10-17):
 | 6 | Allocation against metered flow | Per batch (into a unit) or per interval range (into a storage), allocated kg ≤ metered kg, within the quarter |
 | 7 | May credentials be allocated to flow metered before the PoS's dispatch date? | Yes, as long as both are in the same mass balance period (calendar quarter) |
 | 8 | How purchased RFNBO is aggregated | The PoS needs only its dispatch date; the supplier's production month plays no part. Processed further in the plant, it becomes part of that unit batch (e.g. LH₂, CH₂) and is aggregated as that batch. Passed through without processing (held in a storage that feeds distribution), it is aggregated only with other passed-through RFNBO dispatched in the same calendar month (plant time zone), and its dispatch month sets its place in the write-off order |
+
+*Done 2026-10-19.* Test case 4 (`tests/golden/workbooks/RFNBO_optimiser_test4_purchased_Q4_2026.xlsx`,
+built by `build_tc4_workbook.py`, checked by `tc4_reference.py`, fixtures from `export_tc4.py`):
+test plant 3 plus a supplier delivering 9,600 kg of H₂ into the compressor (1–10 November) and
+9,600 kg into the liquefier (11–20 December), no LH₂ spot sale; POS-A 8,000 kg at 3.0, POS-B
+9,000 kg at 12.0 (dispatched after some of the delivery it covers), POS-C 6,000 kg at 27.9 (only
+2,200 kg covered; 3,800 kg written off). The expected optimum covers every metered kg and keeps
+the H₂ buffer full: November's liquefier yield (0.97) is below the buffer's weight (0.9768), so
+that batch takes 2,000 kg less RFNBO (the optimiser found this before the hand calculation did).
+Variant V1 restores the spot sale: LH₂ storage is over its inventory, so no credentials go to
+the liquefier. What was built:
+
+- Schema: block kind `rfnbo_supply` (supplier, product, LHV); rule `supply_flows` (every supply
+  flow metered, never into an electrolytic unit); supply flows may go into units or storages;
+  storage balance and reconciliation count deliveries; storage weights and stage A's blend limit
+  count them as feed. The editor has the block and its form.
+- Decision sets: `pos` (records, inputs like consignments) and `pos_allocations` (PoS, flow, kg,
+  and a batch for a flow into a unit or a start and end for a flow into a storage).
+  `rfnbo optimise --pos file.csv|json` imports them (`rfnbo.model.pos`, rules `pos_compliant`,
+  `pos_in_quarter`, `pos_supplier`, `pos_unique` before the run).
+- Calculator: credentials into a unit are RFNBO feed lines (origin `pos`, via the supply flow);
+  into a storage they are a ledger line under the PoS id (origin `purchased`, dispatch month),
+  which can be fed on, consigned or carried. PoS register and supplier reconciliation in
+  `calc/purchase.py`. Named checks `pos_compliant`, `pos_in_quarter`, `pos_within_quantity`,
+  `pos_product`, `pos_within_delivery` (per flow and batch or range; ranges may not overlap) and
+  `aggregated_purchased_apart` (passed-through RFNBO is aggregated only with other passed-through
+  RFNBO, by dispatch month).
+- Lineage: each PoS is a node; PoS → batch (feed) and PoS → `write-off:pos:<quarter>` for what was
+  not allocated. Records show each feed line's origin; the results browser has a PoS register and
+  a PoS page, and a browser test follows CA through December's liquefier batch to POS-B.
+- Optimiser: stage B allocates credentials in the network LP with the feed (any stage with a
+  supply flow uses it). From the second round a credential is valued at its marginal kept share:
+  nothing into a batch whose storage is over its inventory. Ties: least purchased emissions
+  (lowest-GHG credentials), then credentials nearest their dispatch month; the objective key ends
+  with purchased emissions. Deliveries into storages get credentials after stage B, lowest GHG
+  first, up to the storage's room. Baseline: credentials in dispatch order, FIFO.
+- Reports: PoS register, PoS allocations, supply reconciliation; PoS rows in each feed table and
+  PoS sources in the lineage table.
 
 Phase 16 details. Before code, as for phase 10: build test case 4 as a workbook with live
 formulas, hand-calculated expected values and an independent Python check. Plant: test plant 3

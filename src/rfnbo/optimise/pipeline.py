@@ -16,9 +16,14 @@ from dataclasses import dataclass, field
 
 from rfnbo.calc import RunResult, calculate
 from rfnbo.calc.batch import unit_order
-from rfnbo.config.schema import PlantConfig, ProcessingUnit, StorageUnit
+from rfnbo.config.schema import PlantConfig, ProcessingUnit, RfnboSupply, StorageUnit
 from rfnbo.data.quality import Frame
-from rfnbo.model.entities import ConsignmentSpec, Decisions, FeedAllocation
+from rfnbo.model.entities import (
+    ConsignmentSpec,
+    Decisions,
+    FeedAllocation,
+    ProofOfSustainability,
+)
 from rfnbo.optimise import allocate
 from rfnbo.optimise.baseline import baseline_decisions
 from rfnbo.optimise.batching import MATERIALITY_MJ, BatchingResult, optimise_batching
@@ -33,7 +38,9 @@ class Objectives:
 
     In order: 1. every consignment met; 2. most compliant RFNBO carried forward, in MJ of
     final product (each storage's carried MJ times its storage weight); 3. least emissions
-    carried forward; 4. fewest batches (stage A splits a batch only for a material gain).
+    carried forward; 4. fewest batches (stage A splits a batch only for a material gain). Ties
+    after that: least purchased emissions allocated (PoS credentials are used only where they
+    add something, lowest GHG first).
     """
 
     consignments_met: bool
@@ -42,14 +49,18 @@ class Objectives:
     carried_ghg: dict[str, float | None]  # per storage, gCO2e/MJ
     batches: int
     final_rfnbo_kg: float  # reported: compliant RFNBO of the final product
+    purchased_emissions_g: float = 0.0  # tie-break: PoS credentials allocated, × GHG
+    pos_written_off_kg: float = 0.0  # reported: PoS quantity not allocated
 
-    def key(self) -> tuple[bool, float, float, int]:
-        """Larger is better: met, more carried value, less carried GHG, fewer batches."""
+    def key(self) -> tuple[bool, float, float, int, float]:
+        """Larger is better: met, more carried value, less carried GHG, fewer batches, less
+        purchased emissions allocated."""
         return (
             self.consignments_met,
             round(self.carried_value_MJ, 3),
             -round(self.carried_emissions_g, 0),
             -self.batches,
+            -round(self.purchased_emissions_g, 0),
         )
 
 
@@ -75,6 +86,19 @@ def objectives(run: RunResult) -> Objectives:
         carried_ghg={led.storage: led.carried_ghg_gCO2e_per_MJ for led in run.ledgers},
         batches=len(run.batches),
         final_rfnbo_kg=allocate.batch_rfnbo(run.batches, final),
+        purchased_emissions_g=sum(
+            f.emissions_g
+            for b in run.batches.values()
+            for f in b.feed
+            if f.origin == "pos" and f.flow is not None  # direct; held in storage: below
+        )
+        + sum(
+            x.in_kg * x.lhv_MJ_per_kg * x.ghg_gCO2e_per_MJ
+            for led in run.ledgers
+            for x in led.lines
+            if x.origin == "purchased"
+        ),
+        pos_written_off_kg=sum(p.unallocated_kg for p in run.purchases),
     )
 
 
@@ -145,8 +169,9 @@ def value_bound(run: RunResult) -> ValueBound:
     """Upper bound on objective 2 (carried value, final-product MJ) for this batching, and the
     value achieved. Each storage holds at most its measured inventory, and at most the RFNBO
     that could ever enter it (every downstream batch fully RFNBO-fed, every split flow full)
-    less what its consignments take. Loose where product is counted in a storage and again
-    downstream; exact on test case 3."""
+    less what its consignments take; a supplier's metered delivery into the storage all with
+    credentials. Loose where product is counted in a storage and again downstream; exact on
+    test case 3."""
     cfg = run.config
     by_storage: dict[str, float] = {}
     for led in run.ledgers:
@@ -155,6 +180,8 @@ def value_bound(run: RunResult) -> ValueBound:
         top = led.opening_kg
         for f in cfg.flows_into(s.id):
             unit = cfg.block(f.source)
+            if isinstance(unit, RfnboSupply):  # every metered kg could carry credentials
+                top += float(run.frame.series[f.series or ""].sum())
             if not isinstance(unit, ProcessingUnit):
                 continue
             several = len(cfg.flows_out_of(unit.id)) > 1
@@ -192,9 +219,14 @@ def _feed_all(
     floor: float | None,
     log: list[str],
     kept: dict[str, dict[str, float]] | None = None,
+    credit: dict[str, dict[str, float]] | None = None,
 ) -> Decisions:
     """Stage B for every downstream unit, upstream first. Parallel units on one producer (and
-    a producer's split output) are allocated in one LP; units in series stage by stage."""
+    a producer's split output, or a unit taking purchased RFNBO) are allocated in one LP; units
+    in series stage by stage. Credentials for deliveries into storages come last."""
+    decisions = decisions.model_copy(
+        update={"pos_allocations": [a for a in decisions.pos_allocations if a.batch is not None]}
+    )
     for stage in allocate.stages(cfg, unit_order(cfg)):
         current = calculate(cfg, frame, decisions)
         stage_ids = {u.id for u in stage}
@@ -218,7 +250,10 @@ def _feed_all(
             continue
         merged_w = {b: v for u in stage for b, v in weights.get(u.id, {}).items()}
         merged_k = None if kept is None else {b: v for u in stage for b, v in kept[u.id].items()}
-        net = allocate.stage_b_network(cfg, current, stage, merged_w, floor, merged_k)
+        merged_c = (
+            None if credit is None else {b: v for u in stage for b, v in credit[u.id].items()}
+        )
+        net = allocate.stage_b_network(cfg, current, stage, merged_w, floor, merged_k, merged_c)
         log.append(
             f"stage B {'+'.join(net.units)}: {net.status}, RFNBO output {net.rfnbo_kg:,.1f} kg "
             f"from {len(net.feed)} allocations, {len(net.outputs)} output splits"
@@ -229,8 +264,22 @@ def _feed_all(
             if b.unit in {p for u in stage for p in allocate.producers(cfg, u)}
         }
         kept_outputs = [o for o in decisions.output_allocations if o.batch not in split]
+        other_pos = [a for a in decisions.pos_allocations if a.batch not in targets]
         decisions = decisions.model_copy(
-            update={"feed": others + net.feed, "output_allocations": kept_outputs + net.outputs}
+            update={
+                "feed": others + net.feed,
+                "output_allocations": kept_outputs + net.outputs,
+                "pos_allocations": other_pos + net.pos,
+            }
+        )
+    if decisions.pos and any(
+        isinstance(cfg.block(f.source), RfnboSupply)
+        and isinstance(cfg.block(f.target), StorageUnit)
+        for f in cfg.flows
+    ):
+        extra = allocate.storage_credits(cfg, frame, calculate(cfg, frame, decisions))
+        decisions = decisions.model_copy(
+            update={"pos_allocations": decisions.pos_allocations + extra}
         )
     return decisions
 
@@ -241,6 +290,7 @@ def optimise(
     consignments: Sequence[ConsignmentSpec],
     batching: BatchingResult | None = None,
     batch_materiality_MJ: float = MATERIALITY_MJ,
+    pos: Sequence[ProofOfSustainability] = (),
 ) -> OptimisationResult:
     log: list[str] = []
     batching = batching or optimise_batching(cfg, frame, materiality_MJ=batch_materiality_MJ)
@@ -253,6 +303,7 @@ def optimise(
         batches=batching.batches,
         renewable_allocations=batching.renewable_allocations,
         consignments=list(consignments),
+        pos=list(pos),
     )
     log += batching.log
     final_units = allocate.final_units(cfg)
@@ -281,8 +332,9 @@ def optimise(
             log.append(f"relaxing RFNBO output to {relax:.1%} ({floor:,.1f} kg)")
         round_best: Outcome | None = None
         kept: dict[str, dict[str, float]] | None = None
+        credit: dict[str, dict[str, float]] | None = None
         for rnd in range(rounds):
-            fed = _feed_all(cfg, frame, base, weights, floor, log, kept)
+            fed = _feed_all(cfg, frame, base, weights, floor, log, kept, credit)
             plan = allocate.stage_c(cfg, calculate(cfg, frame, fed), consignments)
             if not plan.feasible:
                 if first_shortfalls is None:
@@ -303,6 +355,7 @@ def optimise(
                 break
             weights = {u.id: allocate.carried_weights(outcome.run, u.id) for u in downstream}
             kept = {u.id: allocate.kept_shares(outcome.run, u.id) for u in downstream}
+            credit = {u.id: allocate.credit_shares(outcome.run, u.id) for u in downstream}
         if round_best is not None:
             best, shortfalls = round_best, []
             break
@@ -313,7 +366,7 @@ def optimise(
         keep = [c for c in consignments if c.id not in unmet]
         log.append(f"consignments that cannot be met: {sorted(unmet)}; optimising the rest")
         if keep and len(keep) < len(consignments):
-            rest = optimise(cfg, frame, keep, batching, batch_materiality_MJ)
+            rest = optimise(cfg, frame, keep, batching, batch_materiality_MJ, pos)
             best = rest.optimised
             shortfalls = shortfalls + rest.shortfalls
             log += rest.log
@@ -321,7 +374,7 @@ def optimise(
             fed = _feed_all(cfg, frame, base.model_copy(update={"consignments": []}), {}, None, log)
             best = _assemble(cfg, frame, fed)
 
-    base_decisions = baseline_decisions(cfg, frame, consignments)
+    base_decisions = baseline_decisions(cfg, frame, consignments, pos)
     baseline = _assemble(cfg, frame, base_decisions)
     return OptimisationResult(best, baseline, batching, shortfalls, log)
 

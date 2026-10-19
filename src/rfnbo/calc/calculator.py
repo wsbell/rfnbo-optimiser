@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from rfnbo.calc.batch import BatchResult, compute_batches
+from rfnbo.calc.batch import BatchResult, FeedLine, compute_batches
 from rfnbo.calc.check import CheckResult, run_checks
 from rfnbo.calc.consign import ConsignmentResult, compute_consignments
 from rfnbo.calc.ledger import (
@@ -20,6 +20,7 @@ from rfnbo.calc.ledger import (
     compute_reconciliation,
     feed_storage_for,
 )
+from rfnbo.calc.purchase import PoSResult, SupplyReconciliation, compute_purchases
 from rfnbo.calc.weights import StorageWeight, storage_weights
 from rfnbo.config.schema import PlantConfig
 from rfnbo.data.quality import Frame
@@ -38,11 +39,21 @@ class RunResult:
     consignments: list[ConsignmentResult]
     storage_weights: dict[str, StorageWeight] = field(default_factory=dict)
     storages_of: dict[str, tuple[str, ...]] = field(default_factory=dict)  # every storage
+    purchases: list[PoSResult] = field(default_factory=list)  # the PoS register
+    supplies: list[SupplyReconciliation] = field(default_factory=list)
     checks: list[CheckResult] = field(default_factory=list)
 
     def feed_storage(self, source: str, target: str) -> str:
         """The storage a feed allocation from ``source`` into ``target`` draws on."""
         return feed_storage_for(self.config, self.storages_of, source, self.batches[target].unit)
+
+    def feed_via(self, line: FeedLine, target: str) -> str:
+        """Where a feed line came from: its storage, or the supply flow for PoS credentials
+        allocated to the batch directly."""
+        return line.flow if line.flow is not None else self.feed_storage(line.source_batch, target)
+
+    def pos(self, pos_id: str) -> PoSResult:
+        return next(p for p in self.purchases if p.id == pos_id)
 
     def line(self, storage: str, batch: str) -> LedgerLine | None:
         return next((x for x in self.ledger(storage).lines if x.batch == batch), None)
@@ -79,7 +90,8 @@ class RunResult:
 
 def calculate(cfg: PlantConfig, frame: Frame, decisions: Decisions) -> RunResult:
     batches = compute_batches(cfg, frame, decisions)
-    storages_of = batch_storages(cfg, batches)
+    storages_of = batch_storages(cfg, batches, decisions)
+    purchases, supplies = compute_purchases(cfg, frame, decisions, batches)
     ledgers = compute_ledgers(cfg, frame, batches, decisions)
     lines: dict[tuple[str, str], LedgerLine] = {
         (ledger.storage, x.batch): x for ledger in ledgers for x in ledger.lines
@@ -96,6 +108,8 @@ def calculate(cfg: PlantConfig, frame: Frame, decisions: Decisions) -> RunResult
         reconciliation=compute_reconciliation(cfg, frame),
         consignments=consignments,
         storage_weights=storage_weights(cfg, frame),
+        purchases=purchases,
+        supplies=supplies,
     )
     run.checks.extend(run_checks(run))
     return run

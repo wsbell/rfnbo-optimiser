@@ -42,8 +42,12 @@ uv run rfnbo validate examples/test_plant.json
   `ingest.py` (CSV/Excel → raw series), `quality.py` (grid alignment, quality flags, `Frame`).
 - `src/rfnbo/model/entities.py`: decision sets (batches, feed, renewable split, consignments,
   aggregated batches, write-offs) as JSON-serialisable pydantic models.
-- `src/rfnbo/calc/`: `batch.py`, `ledger.py`, `consign.py`, `check.py` (named rule checks),
-  `calculator.py` (`calculate(config, frame, decisions) -> RunResult`).
+- `src/rfnbo/calc/`: `batch.py`, `ledger.py`, `consign.py`, `purchase.py` (PoS register and
+  supplier reconciliation), `check.py` (named rule checks), `calculator.py`
+  (`calculate(config, frame, decisions) -> RunResult`).
+- `src/rfnbo/model/pos.py`: PoS records from CSV or JSON, and the rules a record must meet
+  before a run uses it (`rfnbo optimise --pos`). PoS records sit in the decision set like
+  consignments; their allocation to suppliers' metered deliveries is a decision.
 - `src/rfnbo/trace/`: `json_log.py` (per-batch records, `recompute_ghg`), `lineage.py`
   (edges and drill-down), `run.py` (seal, verify, open next quarter from a sealed run).
   Sealed outputs must stay byte-identical on re-run: no wall-clock, no unordered iteration.
@@ -63,7 +67,8 @@ uv run rfnbo validate examples/test_plant.json
 - `src/rfnbo/optimise/allocate.py`: stage B (feed LP per downstream unit; compliance is linear
   in the feed) and stage C (consignment LP, then write-offs by the §2.7 rule).
   On networks `stage_b_network` allocates a stage of parallel units in one LP, including
-  a split output's assignment; `stages` orders units in series.
+  a split output's assignment and PoS credentials for suppliers' deliveries into units
+  (`storage_credits` fills deliveries into storages afterwards); `stages` orders units in series.
   `pipeline.py` runs A → B → C with B↔C feedback and relaxation when a consignment cannot be
   met; `baseline.py` is one batch per month, FIFO; `lp.py` wraps HiGHS with fixed, recorded
   options (`solver_info()` goes into every sealed run).
@@ -78,5 +83,7 @@ uv run rfnbo validate examples/test_plant.json
   by hand (test case 2 uses `--rule-2-5`). Test case 3 (multi-step plant): `build_tc3_workbook.py`
   writes the workbook (recalculate it with LibreOffice before committing), `tc3_reference.py` is
   the independent check, `export_tc3.py` writes `tc3.*.json`; `tc3.plant.json` is test plant 3
-  (the calculator reproduces it in `test_tc3_calc.py`). `benchmark_networks.py` times the
+  (the calculator reproduces it in `test_tc3_calc.py`). Test case 4 (purchased RFNBO):
+  `build_tc4_workbook.py`, `tc4_reference.py`, `export_tc4.py` and `tc4.*` the same way, tested in
+  `test_tc4_workbook.py` and `test_tc4_calc.py`. `benchmark_networks.py` times the
   optimiser on test plant 3 and a five-unit plant (`--profile` for where the time goes).

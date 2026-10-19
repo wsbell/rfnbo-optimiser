@@ -70,8 +70,8 @@ def table(
     return out
 
 
-def export(path: Path) -> tuple[dict[str, Any], dict[str, Any]]:
-    wb = openpyxl.load_workbook(path, data_only=True, read_only=True)
+def decision_set(wb: Any) -> dict[str, Any]:
+    """The decision set on the workbook's green cells (test case 3's sheet layout)."""
     data = rows(wb, "Data_15min")
     head = list(data[0])
     body = [r for r in data[1:] if r[0] is not None]
@@ -135,7 +135,7 @@ def export(path: Path) -> tuple[dict[str, Any], dict[str, Any]]:
         for r in rows(wb, sheet)[1:4]:
             if r[6] and r[6] > 1e-9:
                 write_offs.append({"storage": storage, "batch": r[0], "kg": num(r[6])})
-    decisions = {
+    return {
         "batches": batches,
         "renewable_allocations": renewable,
         "output_allocations": outputs,
@@ -144,6 +144,12 @@ def export(path: Path) -> tuple[dict[str, Any], dict[str, Any]]:
         "aggregated_batches": aggregated,
         "write_offs": write_offs,
     }
+
+
+def export(path: Path) -> tuple[dict[str, Any], dict[str, Any]]:
+    wb = openpyxl.load_workbook(path, data_only=True, read_only=True)
+    decisions = decision_set(wb)
+    body = [r for r in rows(wb, "Data_15min")[1:] if r[0] is not None]
 
     e_keys = [
         "month",

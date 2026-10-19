@@ -25,7 +25,7 @@ from rfnbo.ui.bfd_editor.fields import (
 )
 
 STATIC = Path(__file__).parent / "static"
-PORTS = {"input": (0, 1), "consignment_output": (1, 0)}
+PORTS = {"input": (0, 1), "rfnbo_supply": (0, 1), "consignment_output": (1, 0)}
 CSS = """
 #bfd-canvas { height: calc(100vh - 140px); width: 100%; border: 1px solid #ccc;
               position: relative; background: #fafafa; }
@@ -34,6 +34,7 @@ CSS = """
 #bfd-canvas .drawflow-node.selected { border: 2px solid #1565c0; background: #e3f2fd; }
 #bfd-canvas .drawflow-node.bfd-bad { border: 2px solid #c62828; }
 #bfd-canvas .bfd-input { background: #fff8e1; }
+#bfd-canvas .bfd-rfnbo_supply { background: #fffde7; border-style: double; }
 #bfd-canvas .bfd-processing_unit { background: #e8f5e9; }
 #bfd-canvas .bfd-storage_unit { background: #e3f2fd; }
 #bfd-canvas .bfd-distribution { background: #f3e5f5; }

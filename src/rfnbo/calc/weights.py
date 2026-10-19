@@ -21,7 +21,13 @@ from dataclasses import dataclass
 from typing import Literal
 
 from rfnbo.calc.batch import output_flows, storage_lhv
-from rfnbo.config.schema import DistributionBlock, PlantConfig, ProcessingUnit, StorageUnit
+from rfnbo.config.schema import (
+    DistributionBlock,
+    PlantConfig,
+    ProcessingUnit,
+    RfnboSupply,
+    StorageUnit,
+)
 from rfnbo.data.quality import Frame
 
 
@@ -38,12 +44,15 @@ def _kg(frame: Frame, series: str | None) -> float:
 
 
 def unit_energy_yield(cfg: PlantConfig, frame: Frame, unit: ProcessingUnit) -> float | None:
-    """Product MJ ÷ product feed MJ over the quarter; None when the unit took no feed."""
-    feed_mj = sum(
-        _kg(frame, f.series) * storage_lhv(cfg, f.source)
-        for f in cfg.flows_into(unit.id)
-        if isinstance(cfg.block(f.source), StorageUnit)
-    )
+    """Product MJ ÷ product feed MJ over the quarter (feed from storage and from suppliers);
+    None when the unit took no feed."""
+    feed_mj = 0.0
+    for f in cfg.flows_into(unit.id):
+        src = cfg.block(f.source)
+        if isinstance(src, StorageUnit):
+            feed_mj += _kg(frame, f.series) * storage_lhv(cfg, f.source)
+        elif isinstance(src, RfnboSupply):
+            feed_mj += _kg(frame, f.series) * src.lhv_MJ_per_kg
     if feed_mj <= 0:
         return None
     return _kg(frame, unit.production_series) * unit.lhv_MJ_per_kg / feed_mj

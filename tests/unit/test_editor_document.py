@@ -17,6 +17,7 @@ from rfnbo.config.schema import (
     OpeningLedgerEntry,
     PlantConfig,
     ProcessingUnit,
+    RfnboSupply,
     Settings,
     StorageUnit,
 )
@@ -90,6 +91,25 @@ def test_multi_step_plant_can_be_drawn_saved_and_reloaded(tmp_path: Path) -> Non
     again = load_config(out)
     assert again.model_dump(exclude={"layout"}) == spec.model_dump(exclude={"layout"})
     assert EditorDocument.load(out).issues() == []
+
+
+def test_plant_with_a_supplier_can_be_drawn_saved_and_reloaded(tmp_path: Path) -> None:
+    """Phase 16: test plant 4 (an RFNBO supplier delivering into two units)."""
+    spec = load_config(PLANT_3.with_name("tc4.plant.json"))
+    doc = draw(spec)
+    assert doc.issues() == []
+    out = tmp_path / "drawn.json"
+    assert doc.save(out) == []
+    assert load_config(out).model_dump(exclude={"layout"}) == spec.model_dump(exclude={"layout"})
+    sup = doc.add_block("rfnbo_supply", block_id="h2_supplier_2")
+    doc.update_block(sup, supplier="Other", product="H2", lhv_MJ_per_kg=120.0)
+    flow = doc.connect(sup, "h2_buffer")
+    assert doc.flow(flow)["material"] == "H2"
+    assert {i.rule for i in doc.issues()} == {"supply_flows"}  # the delivery needs a meter
+    doc.update_flow(flow, series="supplier_2_to_buffer_kg")
+    assert doc.issues() == []
+    with pytest.raises(EditorError, match="cannot flow into"):
+        doc.connect(sup, "dist_customer_a")
 
 
 def test_unit_to_unit_link_inserts_a_pass_through_storage() -> None:
@@ -244,6 +264,7 @@ MODELS: dict[str, Any] = {
     "input": InputBlock,
     "processing_unit": ProcessingUnit,
     "storage_unit": StorageUnit,
+    "rfnbo_supply": RfnboSupply,
     "distribution": DistributionBlock,
     "consignment_output": ConsignmentOutput,
 }

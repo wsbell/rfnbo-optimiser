@@ -32,7 +32,14 @@ import numpy.typing as npt
 
 from rfnbo.calc.batch import output_storages, unit_order
 from rfnbo.calc.weights import unit_output_weight
-from rfnbo.config.schema import ELECTRICITY, InputBlock, PlantConfig, ProcessingUnit, StorageUnit
+from rfnbo.config.schema import (
+    ELECTRICITY,
+    InputBlock,
+    PlantConfig,
+    ProcessingUnit,
+    RfnboSupply,
+    StorageUnit,
+)
 from rfnbo.data import calendar as cal
 from rfnbo.data.ingest import FloatArray
 from rfnbo.data.quality import Frame
@@ -179,6 +186,12 @@ def downstream_of(
         raise BatchingError(f"{down.id}: stage A supports one product feed")
     s = frame.series
     feed_mj = float(s[feed_flows[0].series or ""].sum()) * unit.lhv_MJ_per_kg
+    # A supplier's delivery is feed too (§11.1): the blend limit is over all of it.
+    all_feed_mj = feed_mj + sum(
+        float(s[f.series or ""].sum()) * sup.lhv_MJ_per_kg
+        for f in cfg.flows_into(down.id)
+        if isinstance(sup := cfg.block(f.source), RfnboSupply)
+    )
     out_mj = float(s[down.production_series or ""].sum()) * down.lhv_MJ_per_kg
     on = cal.local_date(frame.index[0], frame.timezone)
     own = 0.0
@@ -202,7 +215,7 @@ def downstream_of(
     if feed_mj <= 0 or out_mj <= 0:
         return Downstream(down.id, -math.inf, 0.0)
     threshold = cfg.settings.rfnbo_threshold_gCO2e_per_MJ
-    limit = (threshold - down.fixed_adder_gCO2e_per_MJ - own / out_mj) * out_mj / feed_mj
+    limit = (threshold - down.fixed_adder_gCO2e_per_MJ - own / out_mj) * out_mj / all_feed_mj
     return Downstream(down.id, limit, feed_mj)
 
 

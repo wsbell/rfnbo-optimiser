@@ -16,6 +16,7 @@ from tests.conftest import EXAMPLE
 
 Raw = dict[str, Any]
 PLANT_3 = Path(__file__).resolve().parents[1] / "golden" / "tc3.plant.json"
+PLANT_4 = PLANT_3.with_name("tc4.plant.json")
 
 
 def _block(raw: Raw, block_id: str) -> dict[str, Any]:
@@ -45,6 +46,24 @@ def test_multi_step_plant_is_valid() -> None:
     assert validate(cfg) == []
     pt = cfg.block("pt_compressor")
     assert isinstance(pt, StorageUnit) and pt.pass_through
+
+
+def test_plant_with_purchased_rfnbo_is_valid() -> None:
+    """Test plant 4: a supplier delivering H₂ into the liquefier and the compressor; a supplier
+    may also deliver into a storage, which then needs no producing unit."""
+    cfg = load_config(PLANT_4)
+    assert validate(cfg) == []
+    raw = json.loads(PLANT_4.read_text(encoding="utf-8"))
+    raw["flows"].append(
+        {
+            "id": "f_sup_buf",
+            "source": "h2_supplier",
+            "target": "h2_buffer",
+            "material": "H2",
+            "series": "supplier_to_buffer_kg",
+        }
+    )
+    assert validate(PlantConfig.model_validate(raw)) == []
 
 
 def _plant_3(r: Raw) -> None:
@@ -239,6 +258,32 @@ def _storage_not_produced(r: Raw) -> None:
     _drop_flow(r, "f_el_h2s")
 
 
+def _plant_4(r: Raw) -> None:
+    """Test plant 4: test plant 3 with a supplier of purchased RFNBO H₂."""
+    r.clear()
+    r.update(json.loads(PLANT_4.read_text(encoding="utf-8")))
+
+
+def _supply_flow_unmetered(r: Raw) -> None:
+    _plant_4(r)
+    del _flow(r, "f_sup_liq")["series"]
+
+
+def _supply_into_electrolyser(r: Raw) -> None:
+    _plant_4(r)
+    _flow(r, "f_sup_liq")["target"] = "electrolyser"
+
+
+def _supply_to_distribution(r: Raw) -> None:
+    _plant_4(r)
+    _flow(r, "f_sup_liq")["target"] = "dist_customer_a"
+
+
+def _supply_wrong_product(r: Raw) -> None:
+    _plant_4(r)
+    _block(r, "h2_supplier")["product"] = "NH3"
+
+
 def _layout_for_missing_block(r: Raw) -> None:
     r["layout"] = {"electrolyser": {"x": 0, "y": 0}, "ghost": {"x": 10, "y": 10}}
 
@@ -246,9 +291,13 @@ def _layout_for_missing_block(r: Raw) -> None:
 CASES: dict[str, list[Callable[[Raw], None]]] = {
     "unique_ids": [_dup_block],
     "flow_endpoints": [_unknown_endpoint, _self_loop],
-    "connection_types": [_input_to_storage, _unit_to_unit],
+    "connection_types": [_input_to_storage, _unit_to_unit, _supply_to_distribution],
     "no_orphans": [_orphan],
-    "flow_materials": [_wrong_material_from_input, _wrong_material_into_storage],
+    "flow_materials": [
+        _wrong_material_from_input,
+        _wrong_material_into_storage,
+        _supply_wrong_product,
+    ],
     "distribution_single_product": [_two_products_into_distribution],
     "unit_series": [_no_production_series, _no_electricity_series],
     "flow_series": [_no_input_series, _no_transfer_series, _series_on_electricity_flow],
@@ -259,6 +308,7 @@ CASES: dict[str, list[Callable[[Raw], None]]] = {
     "unit_feed_products": [_unit_takes_two_products],
     "storages_produced": [_storage_not_produced],
     "unit_feeds": [_electrolyser_without_renewable, _downstream_without_feed],
+    "supply_flows": [_supply_flow_unmetered, _supply_into_electrolyser],
     "electricity_inputs": [_second_grid_input, _grid_ef_varies, _renewable_without_grid],
     "emission_factor_coverage": [_ef_starts_late],
     "consignment_links": [

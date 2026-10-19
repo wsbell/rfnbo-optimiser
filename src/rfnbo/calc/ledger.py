@@ -6,6 +6,10 @@ compliant RFNBO (§2.5) cannot be carried into the next quarter, so it is writte
 the excess is written off from the highest-GHG batches first (equal GHG: newest production
 month first). Non-compliant batches come first in that order. Carried batches keep their ID,
 GHG, RFNBO share and production month.
+
+Purchased RFNBO allocated to a supplier's delivery into a storage enters its ledger under the
+PoS's id, with the PoS's GHG and its dispatch month in place of a production month
+(§11.1 decision 8); it then follows §2.7 like any other batch.
 """
 
 from __future__ import annotations
@@ -15,9 +19,15 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Literal
 
-from rfnbo.calc.batch import BatchResult, CalculationError, output_storages, storage_lhv
+from rfnbo.calc.batch import (
+    BatchResult,
+    CalculationError,
+    output_storages,
+    storage_lhv,
+    supply_flow,
+)
 from rfnbo.calc.tolerance import RANK_DECIMALS, meets_threshold
-from rfnbo.config.schema import PlantConfig, ProcessingUnit, StorageUnit
+from rfnbo.config.schema import PlantConfig, ProcessingUnit, RfnboSupply, StorageUnit
 from rfnbo.data.quality import Frame
 from rfnbo.model.entities import Decisions
 
@@ -25,7 +35,7 @@ from rfnbo.model.entities import Decisions
 @dataclass(frozen=True)
 class LedgerLine:
     batch: str
-    origin: Literal["opening", "produced"]
+    origin: Literal["opening", "produced", "purchased"]
     month: str
     ghg_gCO2e_per_MJ: float
     rfnbo_share: float | None
@@ -59,6 +69,10 @@ class LedgerResult:
     @property
     def produced_kg(self) -> float:
         return sum(x.in_kg for x in self.lines if x.origin == "produced")
+
+    @property
+    def purchased_kg(self) -> float:
+        return sum(x.in_kg for x in self.lines if x.origin == "purchased")
 
     @property
     def out_feed_kg(self) -> float:
@@ -113,10 +127,16 @@ class Reconciliation:
     produced_kg: float
     outflows_kg: tuple[tuple[str, float], ...]  # (flow id, kg)
     measured_kg: float
+    delivered_kg: float = 0.0  # from RFNBO suppliers, metered
 
     @property
     def expected_kg(self) -> float:
-        return self.opening_physical_kg + self.produced_kg - sum(kg for _, kg in self.outflows_kg)
+        return (
+            self.opening_physical_kg
+            + self.produced_kg
+            + self.delivered_kg
+            - sum(kg for _, kg in self.outflows_kg)
+        )
 
     @property
     def implied_loss_kg(self) -> float:
@@ -156,10 +176,11 @@ def rule_write_offs(
 
 
 def batch_storages(
-    cfg: PlantConfig, batches: Mapping[str, BatchResult]
+    cfg: PlantConfig, batches: Mapping[str, BatchResult], decisions: Decisions | None = None
 ) -> dict[str, tuple[str, ...]]:
-    """Which storage ledger(s) each batch (produced or opening) belongs to. A batch of a unit
-    that splits its output is in every storage its unit outputs to (§10.2 rule 4)."""
+    """Which storage ledger(s) each batch (produced, opening or a PoS) belongs to. A batch of a
+    unit that splits its output is in every storage its unit outputs to (§10.2 rule 4); a PoS
+    is in every storage its credentials were allocated into."""
     where = {b.id: tuple(s.id for s in output_storages(cfg, b.unit)) for b in batches.values()}
     for s in cfg.blocks_of(StorageUnit):
         for entry in s.opening_ledger:
@@ -168,6 +189,15 @@ def batch_storages(
                     f"opening ledger batch {entry.batch_id} clashes with a batch"
                 )
             where[entry.batch_id] = (s.id,)
+    bought: dict[str, list[str]] = defaultdict(list)
+    for a in decisions.pos_allocations if decisions else ():
+        f, _ = supply_flow(cfg, a.flow)
+        if isinstance(cfg.block(f.target), StorageUnit) and f.target not in bought[a.pos]:
+            bought[a.pos].append(f.target)
+    for pos_id, stores in bought.items():
+        if pos_id in where:
+            raise CalculationError(f"PoS {pos_id} clashes with a batch or opening entry")
+        where[pos_id] = tuple(sorted(stores))
     return where
 
 
@@ -193,7 +223,7 @@ def compute_ledgers(
     batches: Mapping[str, BatchResult],
     decisions: Decisions,
 ) -> list[LedgerResult]:
-    homes = batch_storages(cfg, batches)
+    homes = batch_storages(cfg, batches, decisions)
     threshold = cfg.settings.rfnbo_threshold_gCO2e_per_MJ
 
     def held(batch: str, context: str) -> tuple[str, ...]:
@@ -239,6 +269,13 @@ def compute_ledgers(
                 f"output allocation of {o.batch}: {o.flow!r} is not a split output of its unit"
             )
         assigned[f.target, o.batch] += o.kg
+
+    bought: dict[Key, float] = defaultdict(float)
+    for pa in decisions.pos_allocations:
+        f, _ = supply_flow(cfg, pa.flow)
+        if isinstance(cfg.block(f.target), StorageUnit):
+            bought[f.target, pa.pos] += pa.kg
+    pos = {p.id: p for p in decisions.pos}
 
     def entering(s: StorageUnit, b: BatchResult) -> float:
         return b.rfnbo_kg if len(homes[b.id]) == 1 else assigned[s.id, b.id]
@@ -287,6 +324,26 @@ def compute_ledgers(
                     write_off_kg=written[k],
                 )
             )
+        for (sid, pos_id), kg in sorted(bought.items()):
+            if sid != s.id:
+                continue
+            bp = pos[pos_id]
+            k = (s.id, pos_id)
+            lines.append(
+                LedgerLine(
+                    batch=pos_id,
+                    origin="purchased",
+                    month=f"{bp.dispatch_date.year:04d}-{bp.dispatch_date.month:02d}",
+                    ghg_gCO2e_per_MJ=bp.ghg_gCO2e_per_MJ,
+                    rfnbo_share=1.0,
+                    compliant=meets_threshold(bp.ghg_gCO2e_per_MJ, threshold),
+                    lhv_MJ_per_kg=lhv,
+                    in_kg=kg,
+                    out_feed_kg=feed_out[k],
+                    out_consignment_kg=cons_out[k],
+                    write_off_kg=written[k],
+                )
+            )
         lines.sort(
             key=lambda x: (*priority_key(x.ghg_gCO2e_per_MJ, x.month, x.compliant), x.batch),
             reverse=True,
@@ -299,12 +356,14 @@ def compute_ledgers(
 def compute_reconciliation(cfg: PlantConfig, frame: Frame) -> list[Reconciliation]:
     out: list[Reconciliation] = []
     for s in cfg.blocks_of(StorageUnit):
-        produced = 0.0
+        produced = delivered = 0.0
         for f in cfg.flows_into(s.id):
             unit = cfg.block(f.source)
             if isinstance(unit, ProcessingUnit):
                 # A split output is counted by its metered flow (§10.2 rule 4).
                 produced += float(frame.series[f.series or unit.production_series or ""].sum())
+            elif isinstance(unit, RfnboSupply):
+                delivered += float(frame.series[f.series or ""].sum())
         outflows = tuple(
             (f.id, float(frame.series[f.series or ""].sum())) for f in cfg.flows_out_of(s.id)
         )
@@ -318,6 +377,7 @@ def compute_reconciliation(cfg: PlantConfig, frame: Frame) -> list[Reconciliatio
                 measured_kg=0.0
                 if s.pass_through
                 else float(frame.series[s.inventory_series or ""][-1]),
+                delivered_kg=delivered,
             )
         )
     return out

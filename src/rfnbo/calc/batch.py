@@ -5,7 +5,9 @@
 Electrolytic units (electricity adds to product LHV): RFNBO share = matched renewable kWh ÷
 electricity kWh, matching within the batch's own intervals. Downstream units: RFNBO share =
 RFNBO feed ÷ total feed (by energy); when short, the unit's own emissions are pro-rated to
-the RFNBO portion by energy.
+the RFNBO portion by energy. Purchased RFNBO (§11.1 rule 4) is RFNBO feed like any other:
+credentials allocated to a supplier's metered delivery, at the PoS's GHG intensity; the whole
+metered delivery counts in the feed consumed.
 """
 
 from __future__ import annotations
@@ -24,12 +26,13 @@ from rfnbo.config.schema import (
     InputBlock,
     PlantConfig,
     ProcessingUnit,
+    RfnboSupply,
     StorageUnit,
 )
 from rfnbo.data import calendar as cal
 from rfnbo.data.ingest import FloatArray
 from rfnbo.data.quality import Frame
-from rfnbo.model.entities import BatchSpec, Decisions
+from rfnbo.model.entities import BatchSpec, Decisions, ProofOfSustainability
 
 
 class CalculationError(ValueError):
@@ -56,6 +59,8 @@ class FeedLine:
     ghg_gCO2e_per_MJ: float
     emissions_g: float
     compliant: bool
+    origin: Literal["batch", "pos"] = "batch"  # a produced or opening batch, or a PoS
+    flow: str | None = None  # supply flow, for PoS credentials allocated to the batch directly
 
 
 @dataclass(frozen=True)
@@ -154,15 +159,52 @@ def output_storage(cfg: PlantConfig, unit_id: str) -> StorageUnit:
 
 
 def storage_lhv(cfg: PlantConfig, storage_id: str) -> float:
-    """LHV of a storage's product, taken from the unit(s) producing it."""
+    """LHV of a storage's product, taken from the unit(s) or supplier(s) feeding it."""
     lhvs = {
         b.lhv_MJ_per_kg
         for f in cfg.flows_into(storage_id)
-        if isinstance(b := cfg.block(f.source), ProcessingUnit)
+        if isinstance(b := cfg.block(f.source), (ProcessingUnit, RfnboSupply))
     }
     if len(lhvs) != 1:
         raise CalculationError(f"storage {storage_id}: cannot determine one product LHV")
     return lhvs.pop()
+
+
+def supply_flow(cfg: PlantConfig, flow_id: str) -> tuple[Flow, RfnboSupply]:
+    """A flow from an RFNBO supplier, and the supplier."""
+    f = next((x for x in cfg.flows if x.id == flow_id), None)
+    if f is None:
+        raise CalculationError(f"unknown flow {flow_id!r}")
+    src = cfg.block(f.source)
+    if not isinstance(src, RfnboSupply):
+        raise CalculationError(f"flow {flow_id} is not from an RFNBO supplier")
+    return f, src
+
+
+@dataclass(frozen=True)
+class Credit:
+    """A PoS as RFNBO feed: its GHG and the LHV of the product it was delivered as."""
+
+    pos: ProofOfSustainability
+    lhv_MJ_per_kg: float
+    compliant: bool
+
+
+def credits(cfg: PlantConfig, decisions: Decisions) -> dict[str, Credit]:
+    """Each PoS that has an allocation, with the LHV of the supplier it was allocated to."""
+    threshold = cfg.settings.rfnbo_threshold_gCO2e_per_MJ
+    known = {p.id: p for p in decisions.pos}
+    out: dict[str, Credit] = {}
+    for a in decisions.pos_allocations:
+        if a.pos not in known:
+            raise CalculationError(f"PoS allocation to {a.flow}: unknown PoS {a.pos!r}")
+        _, sup = supply_flow(cfg, a.flow)
+        if a.pos not in out:
+            p = known[a.pos]
+            out[a.pos] = Credit(
+                p, sup.lhv_MJ_per_kg, meets_threshold(p.ghg_gCO2e_per_MJ, threshold)
+            )
+    return out
 
 
 def renewable_series(cfg: PlantConfig, frame: Frame, decisions: Decisions) -> dict[str, FloatArray]:
@@ -213,13 +255,37 @@ def compute_batches(cfg: PlantConfig, frame: Frame, decisions: Decisions) -> dic
     feed_into: dict[str, list[tuple[str, float]]] = defaultdict(list)
     for a in decisions.feed:
         feed_into[a.target].append((a.source, a.kg))
+    bought = credits(cfg, decisions)
+    direct: dict[str, list[tuple[str, str, float]]] = defaultdict(list)  # batch -> PoS, flow, kg
+    for pa in decisions.pos_allocations:
+        f, _ = supply_flow(cfg, pa.flow)
+        target = cfg.block(f.target)
+        if isinstance(target, ProcessingUnit):
+            spec_unit = next((s.unit for s in decisions.batches if s.id == pa.batch), None)
+            if pa.batch is None or spec_unit != target.id:
+                raise CalculationError(
+                    f"PoS allocation of {pa.pos} to {pa.flow} must name a batch of {target.id}"
+                )
+            direct[pa.batch].append((pa.pos, pa.flow, pa.kg))
+        elif pa.batch is not None:
+            raise CalculationError(
+                f"PoS allocation of {pa.pos} to {pa.flow} (into a storage) takes a start and end"
+            )
 
     renewable = renewable_series(cfg, frame, decisions)
     results: dict[str, BatchResult] = {}
     for unit in unit_order(cfg):
         for spec in sorted(by_unit.get(unit.id, []), key=lambda s: s.start):
             results[spec.id] = _batch(
-                cfg, frame, unit, spec, renewable.get(unit.id), feed_into[spec.id], results
+                cfg,
+                frame,
+                unit,
+                spec,
+                renewable.get(unit.id),
+                feed_into[spec.id],
+                results,
+                direct[spec.id],
+                bought,
             )
     unknown = {a.target for a in decisions.feed} - results.keys()
     if unknown:
@@ -235,6 +301,8 @@ def _batch(
     renewable: FloatArray | None,
     feed_alloc: list[tuple[str, float]],
     done: dict[str, BatchResult],
+    direct: list[tuple[str, str, float]],
+    bought: dict[str, Credit],
 ) -> BatchResult:
     try:
         s, e = frame.position(spec.start), frame.position(spec.end)
@@ -277,15 +345,30 @@ def _batch(
             lines.append(_line(src.name, src, total(f.series), on))
     own = sum(line.emissions_g for line in lines)
 
-    # Product feed from storage.
+    # Product feed from storage and from suppliers (all of the metered delivery, RFNBO or not).
     feed_flows = [f for f in into if isinstance(cfg.block(f.source), StorageUnit)]
-    if unit.electricity_adds_to_lhv and feed_flows:
+    supplies = [(f, b) for f in into if isinstance(b := cfg.block(f.source), RfnboSupply)]
+    if unit.electricity_adds_to_lhv and (feed_flows or supplies):
         raise CalculationError(f"unit {unit.id}: product feed into an electrolytic unit")
-    feed_consumed_kg = sum(total(f.series) for f in feed_flows)
-    feed_consumed_MJ = sum(total(f.series) * storage_lhv(cfg, f.source) for f in feed_flows)
+    feed_consumed_kg = sum(total(f.series) for f in feed_flows) + sum(
+        total(f.series) for f, _ in supplies
+    )
+    feed_consumed_MJ = sum(total(f.series) * storage_lhv(cfg, f.source) for f in feed_flows) + sum(
+        total(f.series) * b.lhv_MJ_per_kg for f, b in supplies
+    )
     feed: list[FeedLine] = []
+
+    def credit_line(pos_id: str, kg: float, flow: str | None) -> FeedLine:
+        c = bought[pos_id]
+        mj = kg * c.lhv_MJ_per_kg
+        g = c.pos.ghg_gCO2e_per_MJ
+        return FeedLine(pos_id, kg, mj, g, mj * g, c.compliant, "pos", flow)
+
     for source_id, kg in feed_alloc:
         src_batch = done.get(source_id)
+        if src_batch is None and source_id in bought:
+            feed.append(credit_line(source_id, kg, None))  # a PoS held in the feed storage
+            continue
         if src_batch is None:
             raise CalculationError(f"feed into {spec.id}: unknown or downstream batch {source_id}")
         if src_batch.ghg_gCO2e_per_MJ is None:
@@ -301,6 +384,8 @@ def _batch(
                 src_batch.compliant,
             )
         )
+    for pos_id, flow, kg in direct:
+        feed.append(credit_line(pos_id, kg, flow))
     rfnbo_feed_kg = sum(x.kg for x in feed)
     rfnbo_feed_MJ = sum(x.energy_MJ for x in feed)
     feed_emissions = sum(x.emissions_g for x in feed)

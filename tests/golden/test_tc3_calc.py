@@ -187,7 +187,7 @@ def test_records_recompute_and_lineage_crosses_every_step(tmp_path: Path) -> Non
         )
     rec = json_log.batch_record(run, run.batches["C-2026-12"], "tc3", [])
     assert rec["lineage"]["upstream"] == [
-        {"batch": "E-2026-12", "via": "pt_compressor", "kg": 59520.0}
+        {"batch": "E-2026-12", "origin": "batch", "via": "pt_compressor", "kg": 59520.0}
     ]
     e12 = json_log.batch_record(run, run.batches["E-2026-12"], "tc3", [])
     assert e12["output"]["to"] == [

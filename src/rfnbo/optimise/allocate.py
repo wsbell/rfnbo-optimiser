@@ -23,10 +23,20 @@ then follow the §2.7 rule exactly (highest GHG first, newest month on ties).
 
 Non-compliant RFNBO (§2.5) is a valid feed source in stage B and never a consignment source;
 it cannot be carried forward either, so what is not fed is written off.
+
+Purchased RFNBO (§11.1 rule 5) is chosen with the feed: variables p[pos, flow, m] are the
+credentials of a PoS allocated to a supplier's metered delivery into downstream batch m, within
+the metered kg and the PoS's quantity; they enter every row exactly like feed from storage. A
+credential is worth only what it adds: into a batch whose storage was already over its
+physical inventory, nothing. Where the objectives tie, the lowest-GHG credentials are used
+(least purchased emissions), then those dispatched nearest the batch's month. Credentials for
+a supplier's delivery into a storage are allocated after stage B, lowest GHG first, up to the
+storage's room (:func:`storage_credits`).
 """
 
 from __future__ import annotations
 
+import datetime as dt
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -35,7 +45,9 @@ from rfnbo.calc.batch import BatchResult, output_storage, output_storages, stora
 from rfnbo.calc.calculator import RunResult
 from rfnbo.calc.consign import consignment_route
 from rfnbo.calc.ledger import LedgerLine, LedgerResult, rule_write_offs
-from rfnbo.config.schema import PlantConfig, ProcessingUnit, StorageUnit
+from rfnbo.calc.purchase import quarter_of
+from rfnbo.calc.tolerance import meets_threshold
+from rfnbo.config.schema import Flow, PlantConfig, ProcessingUnit, RfnboSupply, StorageUnit
 from rfnbo.data.quality import Frame
 from rfnbo.model.entities import (
     AggregatedBatchSpec,
@@ -43,6 +55,8 @@ from rfnbo.model.entities import (
     FeedAllocation,
     OutputAllocation,
     Part,
+    PoSAllocation,
+    ProofOfSustainability,
     WriteOff,
 )
 from rfnbo.optimise.batching import downstream_of
@@ -232,6 +246,39 @@ class NetworkPlan:
     outputs: list[OutputAllocation]
     rfnbo_kg: float  # RFNBO output of the stage's units
     status: str
+    pos: list[PoSAllocation] = field(default_factory=list)
+
+
+def supply_flows_into(cfg: PlantConfig, unit_id: str) -> list[tuple[Flow, RfnboSupply]]:
+    return [
+        (f, b) for f in cfg.flows_into(unit_id) if isinstance(b := cfg.block(f.source), RfnboSupply)
+    ]
+
+
+def usable_pos(run: RunResult, sup: RfnboSupply) -> list[ProofOfSustainability]:
+    """PoS whose credentials may go to this supplier's deliveries: same supplier and product,
+    compliant, dispatched in the quarter (§11.1 decisions 1, 4, 7)."""
+    threshold = run.config.settings.rfnbo_threshold_gCO2e_per_MJ
+    return [
+        p
+        for p in run.decisions.pos
+        if (p.supplier, p.product) == (sup.supplier, sup.product)
+        and quarter_of(p.dispatch_date) == run.frame.quarter
+        and meets_threshold(p.ghg_gCO2e_per_MJ, threshold)
+    ]
+
+
+def pos_left(run: RunResult, exclude_targets: set[str]) -> dict[str, float]:
+    """Each PoS's quantity not allocated to batches outside ``exclude_targets`` (or storages)."""
+    left = {p.id: p.quantity_kg for p in run.decisions.pos}
+    for a in run.decisions.pos_allocations:
+        if a.batch not in exclude_targets:
+            left[a.pos] -= a.kg
+    return left
+
+
+def _month_of(date: dt.date) -> str:
+    return f"{date.year:04d}-{date.month:02d}"
 
 
 def feed_storages(cfg: PlantConfig, unit: ProcessingUnit) -> list[StorageUnit]:
@@ -262,6 +309,8 @@ def needs_network(cfg: PlantConfig, stage: Sequence[ProcessingUnit]) -> bool:
     producer that splits its output."""
     if len(stage) > 1 or any(len(feed_storages(cfg, u)) > 1 for u in stage):
         return True
+    if any(supply_flows_into(cfg, u.id) for u in stage):
+        return True  # purchased RFNBO is allocated in the network LP
     return any(len(cfg.flows_out_of(p)) > 1 for u in stage for p in producers(cfg, u))
 
 
@@ -285,6 +334,7 @@ def stage_b_network(
     carried_weight: Mapping[str, float] | None = None,
     min_rfnbo_kg: float | None = None,
     kept_share: Mapping[str, float] | None = None,
+    credit_share: Mapping[str, float] | None = None,
 ) -> NetworkPlan:
     """Feed allocation for a stage of parallel units in one LP (build plan §10.4 phase 14).
 
@@ -295,7 +345,8 @@ def stage_b_network(
     linear and exact. Each downstream batch is held to its unit's GHG limit (threshold, or the
     back-propagated limit for an intermediate product). Objectives as in :func:`stage_b`:
     output (round 1) or value (later rounds), then carried value, then carried emissions, then
-    same-month feed.
+    same-month feed. PoS credentials (§11.1) are variables like feed; ``credit_share`` (batch →
+    share of an extra kg of its RFNBO that would be kept) values them in later rounds.
     """
     ids = [u.id for u in units]
     lp = LinearProgram()
@@ -372,31 +423,59 @@ def stage_b_network(
         if ks:
             lp.row(ks, [1.0] * len(ks), upper=run.ledger(sid).physical_kg)
 
+    # Purchased RFNBO: credentials into the stage's batches through suppliers' deliveries,
+    # within each batch's metered delivery and each PoS's quantity left.
+    pv: dict[tuple[str, str, str], int] = {}  # (PoS, flow, batch) -> var
+    pv_lhv: dict[int, float] = {}
+    pos_ghg: dict[str, float] = {}
+    pos_month: dict[str, str] = {}
+    left = pos_left(run, {t.id for t in targets})
+    by_pos: dict[str, list[int]] = defaultdict(list)
+    for t in targets:
+        for f, sup in supply_flows_into(cfg, t.unit):
+            metered = float(frame.series[f.series or ""][t.start_index : t.end_index].sum())
+            cols_f = []
+            for pp in usable_pos(run, sup):
+                if metered <= 0 or left.get(pp.id, 0.0) <= DROP_KG:
+                    continue
+                j = lp.var()
+                pv[pp.id, f.id, t.id] = j
+                pv_lhv[j] = sup.lhv_MJ_per_kg
+                by_pos[pp.id].append(j)
+                cols_f.append(j)
+                pos_ghg[pp.id] = pp.ghg_gCO2e_per_MJ
+                pos_month[pp.id] = _month_of(pp.dispatch_date)
+            if cols_f:
+                lp.row(cols_f, [1.0] * len(cols_f), upper=metered)
+    for pid, cols_p in by_pos.items():
+        lp.row(cols_p, [1.0] * len(cols_p), upper=max(0.0, left[pid]))
+
     limits = {u.id: ghg_limit(cfg, frame, u) for u in units}
     rfnbo_coef: dict[int, float] = {}
     emissions_coef: dict[int, float] = {}
     unit_of: dict[int, str] = {}
     for t in targets:
-        cols = [(key, j) for (key, tb), j in x.items() if tb == t.id]
+        # (energy per kg, GHG of the source, var) for storage feed and credentials alike
+        cols = [(lhv[key[0]], ghg(key), j) for (key, tb), j in x.items() if tb == t.id]
+        cols += [(pv_lhv[j], pos_ghg[k[0]], j) for k, j in pv.items() if k[2] == t.id]
         if not cols:
             continue
-        lp.row([j for _, j in cols], [lhv[key[0]] for key, _ in cols], upper=t.feed_consumed_MJ)
+        lp.row([j for _, _, j in cols], [lv for lv, _, _ in cols], upper=t.feed_consumed_MJ)
         own_per_mj = t.own_emissions_g / t.feed_consumed_MJ
         out_per_mj = t.energy_MJ / t.feed_consumed_MJ
         limit = (limits[t.unit] - t.adder_gCO2e_per_MJ - MARGIN) * out_per_mj
         lp.row(
-            [j for _, j in cols],
-            [lhv[key[0]] * (ghg(key) + own_per_mj - limit) for key, _ in cols],
+            [j for _, _, j in cols],
+            [lv * (g + own_per_mj - limit) for lv, g, _ in cols],
             upper=0.0,
         )
-        for key, j in cols:
-            rfnbo_coef[j] = lhv[key[0]] * t.product_kg / t.feed_consumed_MJ
-            emissions_coef[j] = lhv[key[0]] * (
-                ghg(key) + own_per_mj + t.adder_gCO2e_per_MJ * out_per_mj
-            )
+        for lv, g, j in cols:
+            rfnbo_coef[j] = lv * t.product_kg / t.feed_consumed_MJ
+            emissions_coef[j] = lv * (g + own_per_mj + t.adder_gCO2e_per_MJ * out_per_mj)
             unit_of[j] = t.id
-    if not x:
+    if not x and not pv:
         return NetworkPlan(ids, [], [], 0.0, "no feed")
+    credit_vars = set(pv.values())
 
     weight = {sid: run.storage_weights[sid].weight for sid in stores}
     carry_value = {kj: lhv[key[0]] * (weight[key[0]] or 0.0) for key, kj in k.items()}
@@ -405,10 +484,12 @@ def stage_b_network(
         cost1 = dict(rfnbo_coef)
     else:
         cost1 = {}
+        shares = credit_share or {}
         for j, c in rfnbo_coef.items():
             tgt = run.batches[unit_of[j]]
             w_down = run.storage_weights[output_storage(cfg, tgt.unit).id].weight or 0.0
-            cost1[j] = c * tgt.lhv_MJ_per_kg * w_down * kept_share.get(tgt.id, 1.0)
+            kept = shares.get(tgt.id, 1.0) if j in credit_vars else kept_share.get(tgt.id, 1.0)
+            cost1[j] = c * tgt.lhv_MJ_per_kg * w_down * kept
         cost1.update(carry_value)
     lp.set_cost(cost1)
     best = lp.solve(maximise=True)
@@ -444,14 +525,32 @@ def stage_b_network(
             list(cost3.values()),
             upper=third.objective + abs(third.objective) * KEEP + 1e-3,
         )
-        # 4. Same-month feed where it makes no difference.
+        # 4. Least purchased emissions: the lowest-GHG credentials where they tie.
+        if pv:
+            cost_p = {j: pv_lhv[j] * pos_ghg[k[0]] for k, j in pv.items()}
+            lp.set_cost(cost_p)
+            purchased = lp.solve()
+            if purchased.optimal:
+                final = purchased
+                lp.row(
+                    list(cost_p),
+                    list(cost_p.values()),
+                    upper=purchased.objective + abs(purchased.objective) * KEEP + 1e-3,
+                )
+        # 5. Same-month feed, and credentials nearest their dispatch month, where it makes no
+        # difference.
         months = {t.id: t.month for t in targets}
-        lp.set_cost(
+        cost_m: dict[int, float] = {
+            j: abs(_month_number(month(key)) - _month_number(months[tb]))
+            for (key, tb), j in x.items()
+        }
+        cost_m.update(
             {
-                j: abs(_month_number(month(key)) - _month_number(months[tb]))
-                for (key, tb), j in x.items()
+                j: abs(_month_number(pos_month[k[0]]) - _month_number(months[k[2]]))
+                for k, j in pv.items()
             }
         )
+        lp.set_cost(cost_m)
         fourth = lp.solve()
         if fourth.optimal:
             final = fourth
@@ -467,8 +566,13 @@ def stage_b_network(
         for (bid, fid), j in sorted(o.items())
         if final.x[j] > DROP_KG
     ]
+    credits = [
+        PoSAllocation(pos=pid, flow=fid, batch=tb, kg=float(final.x[j]))
+        for (pid, fid, tb), j in sorted(pv.items())
+        if final.x[j] > DROP_KG
+    ]
     rfnbo = sum(rfnbo_coef[j] * final.x[j] for j in rfnbo_coef if final.x[j] > DROP_KG)
-    return NetworkPlan(ids, feed, outputs, rfnbo, final.status)
+    return NetworkPlan(ids, feed, outputs, rfnbo, final.status, credits)
 
 
 @dataclass(frozen=True)
@@ -665,6 +769,46 @@ def kept_shares(run: RunResult, unit: str) -> dict[str, float]:
         if b.unit == unit and b.id in lines and lines[b.id].in_kg > 0:
             x = lines[b.id]
             out[b.id] = max(0.0, x.out_consignment_kg + x.carried_kg) / x.in_kg
+    return out
+
+
+def credit_shares(run: RunResult, unit: str) -> dict[str, float]:
+    """Share of one more kg of each of ``unit``'s batches' RFNBO that would be kept: none if
+    the batch's storage already holds more RFNBO than physical inventory (the extra would be
+    written off), else all of it. Values PoS credentials in stage B, so that credentials are
+    not pushed into product that would be written off (§11.1 rule 5)."""
+    full = {led.storage for led in run.ledgers if led.excess_kg > DROP_KG}
+    return {
+        b.id: 0.0 if set(run.storages_of.get(b.id, ())) & full else 1.0
+        for b in run.batches.values()
+        if b.unit == unit
+    }
+
+
+def storage_credits(cfg: PlantConfig, frame: Frame, run: RunResult) -> list[PoSAllocation]:
+    """Credentials for suppliers' deliveries into storages: lowest GHG first (oldest dispatch
+    on ties), over the whole quarter, up to the metered delivery and the storage's room for
+    more RFNBO (measured inventory less its compliant closing ledger)."""
+    left = pos_left(run, set())
+    out: list[PoSAllocation] = []
+    for f in cfg.flows:
+        sup, store = cfg.block(f.source), cfg.block(f.target)
+        if not isinstance(sup, RfnboSupply) or not isinstance(store, StorageUnit):
+            continue
+        led = run.ledger(store.id)
+        room = led.physical_kg - sum(
+            max(0.0, x.closing_before_kg) for x in led.lines if x.compliant
+        )
+        room = min(room, float(frame.series[f.series or ""].sum()))
+        for p in sorted(usable_pos(run, sup), key=lambda p: (p.ghg_gCO2e_per_MJ, p.dispatch_date)):
+            take = min(room, left[p.id])
+            if take <= DROP_KG:
+                continue
+            out.append(
+                PoSAllocation(pos=p.id, flow=f.id, kg=take, start=frame.index[0], end=frame.end)
+            )
+            left[p.id] -= take
+            room -= take
     return out
 
 

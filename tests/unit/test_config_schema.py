@@ -137,3 +137,19 @@ def test_select_version(raw: dict[str, Any]) -> None:
     clash = PlantConfig.model_validate(raw | {"version": "1b"})
     with pytest.raises(ValueError, match="share effective_from"):
         select_version([v1, clash], dt.date(2026, 6, 1))
+
+
+def test_pos_allocation_names_a_batch_or_a_range() -> None:
+    from rfnbo.model.entities import PoSAllocation
+
+    t0 = dt.datetime(2026, 10, 1, tzinfo=dt.UTC)
+    PoSAllocation(pos="P", flow="f", batch="B", kg=1.0)
+    PoSAllocation(pos="P", flow="f", start=t0, end=t0 + dt.timedelta(hours=1), kg=1.0)
+    for bad in (
+        {},
+        {"batch": "B", "start": t0, "end": t0 + dt.timedelta(hours=1)},
+        {"start": t0},
+        {"start": t0, "end": t0},
+    ):
+        with pytest.raises(ValueError):
+            PoSAllocation(pos="P", flow="f", kg=1.0, **bad)

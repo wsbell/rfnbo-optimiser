@@ -1,0 +1,4 @@
+id,supplier,product,dispatch_date,quantity_kg,ghg_gCO2e_per_MJ
+POS-A,H2 Trailers BV,H2,2026-10-20,8000,3.0
+POS-B,H2 Trailers BV,H2,2026-12-20,9000,12.0
+POS-C,H2 Trailers BV,H2,2026-11-25,6000,27.9

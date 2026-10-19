@@ -140,6 +140,20 @@ class StorageUnit(_Block):
         return self
 
 
+class RfnboSupply(_Block):
+    """RFNBO bought from a third-party supplier (build plan §11.1 rule 1).
+
+    Each flow out of it carries the metered kg delivered per interval into a unit or a
+    storage. Delivered product is RFNBO only where a proof of sustainability from this
+    supplier is allocated to it; the rest is non-RFNBO.
+    """
+
+    kind: Literal["rfnbo_supply"] = "rfnbo_supply"
+    supplier: str = Field(min_length=1)
+    product: str = Field(min_length=1)
+    lhv_MJ_per_kg: float = Field(gt=0)
+
+
 class DistributionBlock(_Block):
     """Fixed transport and conversion emissions to one customer, applied after shipping."""
 
@@ -157,7 +171,7 @@ class ConsignmentOutput(_Block):
 
 
 Block = Annotated[
-    InputBlock | ProcessingUnit | StorageUnit | DistributionBlock | ConsignmentOutput,
+    InputBlock | ProcessingUnit | StorageUnit | RfnboSupply | DistributionBlock | ConsignmentOutput,
     Field(discriminator="kind"),
 ]
 

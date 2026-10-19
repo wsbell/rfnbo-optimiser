@@ -228,6 +228,24 @@ def run_page(run_id: str) -> None:
         testid="products",
     )
 
+    if view["pos"]:
+        ui.label("Purchased RFNBO: PoS register").classes("text-base font-medium mt-4")
+        _table(
+            [
+                ("pos", "PoS", ""),
+                ("supplier", "Supplier", ""),
+                ("dispatch_date", "Dispatched", ""),
+                ("quantity_kg", "Received", "kg"),
+                ("ghg", "GHG", "gCO2e/MJ"),
+                ("allocated_kg", "Allocated", "kg"),
+                ("written_off_kg", "Written off", "kg"),
+                ("to", "Where it went", ""),
+            ],
+            [dict(r, href=f"/run/{run_id}/batch/{r['pos']}") for r in view["pos"]],
+            links={"pos": "href"},
+            testid="pos",
+        )
+
     ui.label("Storage ledgers").classes("text-base font-medium mt-4")
     _table(
         [
@@ -336,7 +354,42 @@ def batch_page(run_id: str, batch_id: str) -> None:
         return
     _crumbs(("Sealed runs", "/"), (run_id, f"/run/{run_id}"), (batch_id, None))
     down = [dict(d, href=_href(run_id, d)) for d in view["downstream"]]
-    if view["kind"] == "opening":
+    if view["kind"] == "pos":
+        ui.label(
+            f"{batch_id}: proof of sustainability from {view['supplier']} · {view['product']} · "
+            f"dispatched {view['dispatch_date']} ({view['quarter']})"
+        ).classes("text-lg font-medium")
+        with ui.row().classes("gap-4"):
+            for label, value in (
+                ("Received (kg)", fmt(view["quantity_kg"])),
+                ("GHG incl. distribution", fmt(view["ghg"], "gCO2e/MJ")),
+                ("Allocated (kg)", fmt(view["allocated_kg"])),
+                ("Written off, not allocated (kg)", fmt(view["written_off_kg"])),
+            ):
+                with ui.card().classes("p-3"):
+                    ui.label(label).classes("text-xs text-grey")
+                    ui.label(value).classes("text-base font-medium")
+        ui.label("Credentials allocated to the supplier's metered deliveries").classes(
+            "text-base font-medium mt-4"
+        )
+        rows = [
+            dict(a, href=f"/run/{run_id}/batch/{a['to']}" if a["drillable"] else None)
+            for a in view["allocations"]
+        ]
+        _table(
+            [
+                ("flow", "Supply flow", ""),
+                ("to", "Batch or storage", ""),
+                ("start", "From (local)", ""),
+                ("intervals", "Intervals", ""),
+                ("kg", "Credentials", "kg"),
+                ("metered_kg", "Metered delivery", "kg"),
+            ],
+            rows,
+            links={"to": "href"},
+            testid="pos-allocations",
+        )
+    elif view["kind"] == "opening":
         ui.label(f"{batch_id}: opening ledger entry in {view['storage']}").classes(
             "text-lg font-medium"
         )
@@ -387,12 +440,12 @@ def batch_page(run_id: str, batch_id: str) -> None:
                 testid="outputs",
             )
         if view["upstream"]:
-            ui.label("Upstream batches (RFNBO feed)").classes("text-base font-medium mt-4")
+            ui.label("Upstream batches and PoS (RFNBO feed)").classes("text-base font-medium mt-4")
             rows = [dict(u, href=f"/run/{run_id}/batch/{u['batch']}") for u in view["upstream"]]
             _table(
                 [
-                    ("batch", "Batch", ""),
-                    ("via", "Via storage", ""),
+                    ("batch", "Batch or PoS", ""),
+                    ("via", "Via storage or supply flow", ""),
                     ("kg", "Feed", "kg"),
                     ("MJ", "Energy", "MJ"),
                     ("ghg", "GHG", "gCO2e/MJ"),

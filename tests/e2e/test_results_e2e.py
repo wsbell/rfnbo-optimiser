@@ -22,6 +22,7 @@ from tests.e2e.conftest import free_port  # noqa: E402
 from tests.golden.test_golden import _run  # noqa: E402
 from tests.golden.test_pipeline_network_golden import _optimised  # noqa: E402
 from tests.golden.test_tc3_calc import _inputs  # noqa: E402
+from tests.golden.test_tc4_calc import _run as _tc4_run  # noqa: E402
 
 pytestmark = pytest.mark.e2e
 ROOT = Path(__file__).resolve().parents[2]
@@ -29,15 +30,17 @@ expect = playwright.expect
 
 
 @pytest.fixture(scope="module")
-def results(tmp_path_factory: pytest.TempPathFactory) -> Iterator[tuple[str, str, str]]:
-    """Seal test case 1 and an optimised test case 3 and serve ``rfnbo results`` on them;
-    yield (url, test case 1 run id, test case 3 run id)."""
+def results(tmp_path_factory: pytest.TempPathFactory) -> Iterator[tuple[str, str, str, str]]:
+    """Seal test case 1, an optimised test case 3 and test case 4 (purchased RFNBO) and serve
+    ``rfnbo results`` on them; yield (url, test case 1, 3 and 4 run ids)."""
     root = tmp_path_factory.mktemp("runs")
     run, _, flags = _run("tc1")
     run_id = sealed.load_record(sealed.seal(run, root / "tc1", flags))["run_id"]
     # Test plant 3 as the optimiser makes it: two products, split output, pass-through.
     tc3 = _optimised("base").optimised.run
     tc3_id = sealed.load_record(sealed.seal(tc3, root / "tc3", _inputs()[2]))["run_id"]
+    tc4 = _tc4_run()
+    tc4_id = sealed.load_record(sealed.seal(tc4, root / "tc4"))["run_id"]
     port = free_port()
     proc = subprocess.Popen(
         [
@@ -67,7 +70,7 @@ def results(tmp_path_factory: pytest.TempPathFactory) -> Iterator[tuple[str, str
                     proc.kill()
                     raise RuntimeError(proc.communicate()[0].decode(errors="replace")) from None
                 time.sleep(0.2)
-        yield url, run_id, tc3_id
+        yield url, run_id, tc3_id, tc4_id
     finally:
         proc.terminate()
         proc.wait(timeout=10)
@@ -77,8 +80,10 @@ def _link(page: Any, name: str) -> Any:
     return page.locator(f'[data-testid="link-{name}"]').first
 
 
-def test_trace_a_consignment_to_15_minute_data(browser: Any, results: tuple[str, str, str]) -> None:
-    url, run_id, _ = results
+def test_trace_a_consignment_to_15_minute_data(
+    browser: Any, results: tuple[str, str, str, str]
+) -> None:
+    url, run_id, _, _ = results
     page = browser.new_page(viewport={"width": 1500, "height": 1000})
     page.goto(url)
     _link(page, run_id).click()
@@ -112,9 +117,9 @@ def test_trace_a_consignment_to_15_minute_data(browser: Any, results: tuple[str,
 
 
 def test_download_the_excel_report(
-    browser: Any, results: tuple[str, str, str], tmp_path: Path
+    browser: Any, results: tuple[str, str, str, str], tmp_path: Path
 ) -> None:
-    url, run_id, _ = results
+    url, run_id, _, _ = results
     page = browser.new_page()
     page.goto(f"{url}run/{run_id}")
     expect(page.get_by_test_id("reproduce")).to_be_visible(timeout=30000)
@@ -127,10 +132,10 @@ def test_download_the_excel_report(
 
 
 def test_trace_a_multi_step_consignment_to_15_minute_data(
-    browser: Any, results: tuple[str, str, str]
+    browser: Any, results: tuple[str, str, str, str]
 ) -> None:
     """Test plant 3: CA (LH₂) → liquefier batch → electrolyser batch (split output) → data."""
-    url, _, tc3_id = results
+    url, _, tc3_id, _ = results
     page = browser.new_page(viewport={"width": 1500, "height": 1000})
     page.goto(f"{url}run/{tc3_id}")
     expect(page.get_by_test_id("reproduce")).to_have_text("reproduces byte for byte", timeout=30000)
@@ -151,4 +156,27 @@ def test_trace_a_multi_step_consignment_to_15_minute_data(
     expect(page.get_by_test_id("totals-check")).to_have_text(
         "✓ Interval totals equal the batch record"
     )
+    page.close()
+
+
+def test_trace_a_consignment_to_the_pos_that_fed_it(
+    browser: Any, results: tuple[str, str, str, str]
+) -> None:
+    """Phase 16: the PoS register on the run page, and a consignment drilled down through the
+    liquefier batch to the proof of sustainability whose credentials it holds."""
+    url, _, _, tc4_id = results
+    page = browser.new_page()
+    page.goto(f"{url}run/{tc4_id}")
+    expect(page.get_by_test_id("reproduce")).to_have_text("reproduces byte for byte", timeout=30000)
+    register = page.get_by_test_id("pos")
+    expect(register).to_contain_text("POS-C")
+    expect(register).to_contain_text("3,800")
+    _link(page, "CA").click()
+    _link(page, "L-2026-12").click()
+    expect(page.get_by_test_id("upstream")).to_contain_text("f_sup_liq")
+    _link(page, "POS-B").click()
+    expect(page.get_by_text("POS-B: proof of sustainability from H2 Trailers BV")).to_be_visible()
+    expect(page.get_by_test_id("pos-allocations")).to_contain_text("L-2026-12")
+    _link(page, "L-2026-12").click()
+    expect(page.get_by_text("L-2026-12 · Liquefier")).to_be_visible()
     page.close()

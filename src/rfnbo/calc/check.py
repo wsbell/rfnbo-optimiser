@@ -14,7 +14,7 @@ import numpy as np
 
 from rfnbo.calc.ledger import priority_key
 from rfnbo.calc.tolerance import ABS_KG, at_most, close, meets_threshold
-from rfnbo.config.schema import InputBlock, ProcessingUnit, StorageUnit
+from rfnbo.config.schema import InputBlock, ProcessingUnit, RfnboSupply, StorageUnit
 from rfnbo.data import calendar as cal
 
 if TYPE_CHECKING:
@@ -36,6 +36,7 @@ SCOPE_CARRY = (
 SCOPE_SPLIT = "Build plan §10.2 rule 4: split outputs (decided 2026-10-17)"
 SCOPE_PASS = "Build plan §10.2 rule 5: pass-through storage closes at zero (decided 2026-10-17)"
 SCOPE_AGGREGATION = "Scope document: consignment aggregation (one production month)"
+SCOPE_POS = "Build plan §11.1: purchased RFNBO with a proof of sustainability (decided 2026-10-17)"
 SCOPE_CONSIGNMENT = "Scope document: consignment requirements"
 
 
@@ -148,18 +149,116 @@ def renewable_pool(run: RunResult) -> Iterator[CheckResult]:
 
 @check
 def feed_source_rfnbo(run: RunResult) -> Iterator[CheckResult]:
-    """Feed comes from an RFNBO batch held in a storage that feeds the target unit."""
+    """Feed comes from an RFNBO batch (or a PoS) held in a storage that feeds the target unit."""
     for a in run.decisions.feed:
-        src, tgt = run.batches[a.source], run.batches[a.target]
+        tgt = run.batches[a.target]
         store = run.feed_storage(a.source, a.target)
         feeds = {f.target for f in run.config.flows_out_of(store)}
-        ok = src.is_rfnbo and tgt.unit in feeds
+        src = run.batches.get(a.source)
+        rfnbo = src.rfnbo_kg if src is not None else (run.line(store, a.source) or _NONE).in_kg
         yield _r(
             "feed_source_rfnbo",
             MASS_BALANCE,
             f"{a.source}->{a.target}",
-            ok,
-            f"{a.kg} kg; source RFNBO {src.rfnbo_kg:.6g} kg in {store}",
+            rfnbo > 0 and tgt.unit in feeds,
+            f"{a.kg} kg; source RFNBO {rfnbo:.6g} kg in {store}",
+        )
+
+
+class _NoLine:
+    in_kg = 0.0
+
+
+_NONE = _NoLine()
+
+
+@check
+def pos_compliant(run: RunResult) -> Iterator[CheckResult]:
+    """A PoS must be for compliant RFNBO (decision 4)."""
+    for p in run.purchases:
+        yield _r(
+            "pos_compliant",
+            THRESHOLD,
+            p.id,
+            p.compliant,
+            f"{p.ghg_gCO2e_per_MJ} vs {p.threshold_gCO2e_per_MJ:.6g} gCO2e/MJ",
+        )
+
+
+@check
+def pos_in_quarter(run: RunResult) -> Iterator[CheckResult]:
+    """A PoS belongs to the quarter of its dispatch date (decision 1)."""
+    for p in run.purchases:
+        yield _r(
+            "pos_in_quarter",
+            SCOPE_POS,
+            p.id,
+            p.quarter == run.frame.quarter,
+            f"dispatched {p.dispatch_date} ({p.quarter}); ledger {run.frame.quarter}",
+        )
+
+
+@check
+def pos_within_quantity(run: RunResult) -> Iterator[CheckResult]:
+    for p in run.purchases:
+        yield _r(
+            "pos_within_quantity",
+            MASS_BALANCE,
+            p.id,
+            at_most(p.allocated_kg, p.quantity_kg),
+            f"allocated {p.allocated_kg:.6f} kg of {p.quantity_kg:.6f} kg; "
+            f"{p.unallocated_kg:.6f} kg written off",
+        )
+
+
+@check
+def pos_product(run: RunResult) -> Iterator[CheckResult]:
+    """Credentials go only to deliveries from the PoS's supplier, of the PoS's product."""
+    for p in run.purchases:
+        wrong = []
+        for a in p.allocations:
+            sup = run.config.block(a.supply)
+            assert isinstance(sup, RfnboSupply)
+            if (sup.supplier, sup.product) != (p.supplier, p.product):
+                wrong.append(f"{a.flow} ({sup.supplier}, {sup.product})")
+        yield _r(
+            "pos_product",
+            SCOPE_POS,
+            p.id,
+            not wrong,
+            f"not {p.supplier}'s {p.product}: {wrong}" if wrong else f"{p.supplier}, {p.product}",
+        )
+
+
+@check
+def pos_within_delivery(run: RunResult) -> Iterator[CheckResult]:
+    """Per supply flow and batch (into a unit) or interval range (into a storage), credentials
+    allocated are at most the metered delivery (decision 6). Ranges on one flow into a storage
+    do not overlap unless they are the same range."""
+    groups: dict[tuple[str, int, int], list[float]] = defaultdict(lambda: [0.0, 0.0])
+    for p in run.purchases:
+        for a in p.allocations:
+            g = groups[a.flow, a.start_index, a.end_index]
+            g[0] += a.kg
+            g[1] = a.metered_kg
+    by_flow: dict[str, list[tuple[int, int]]] = defaultdict(list)
+    for flow, s, e in groups:
+        by_flow[flow].append((s, e))
+    for (flow, s, e), (kg, metered) in sorted(groups.items()):
+        overlap = [r for r in by_flow[flow] if r != (s, e) and r[0] < e and s < r[1]]
+        start = run.frame.index[s].isoformat()
+        problems = []
+        if not at_most(kg, metered):
+            problems.append(f"{kg:.6f} kg allocated > {metered:.6f} kg metered")
+        if overlap:
+            problems.append(f"overlaps {len(overlap)} other range(s) on the flow")
+        yield _r(
+            "pos_within_delivery",
+            SCOPE_POS,
+            f"{flow} {start}",
+            not problems,
+            "; ".join(problems)
+            or f"{kg:.6f} kg of {metered:.6f} kg metered over {e - s} intervals",
         )
 
 
@@ -332,6 +431,24 @@ def aggregated_single_month(run: RunResult) -> Iterator[CheckResult]:
                 a.id,
                 len(a.months) == 1,
                 f"production month(s) {', '.join(a.months)}",
+            )
+
+
+@check
+def aggregated_purchased_apart(run: RunResult) -> Iterator[CheckResult]:
+    """RFNBO bought and passed through storage unprocessed is aggregated only with other such
+    RFNBO dispatched in the same month, never with RFNBO the plant processed (decision 8)."""
+    for c in run.consignments:
+        for a in c.aggregated:
+            kinds = {p.origin == "purchased" for p in a.parts}
+            yield _r(
+                "aggregated_purchased_apart",
+                SCOPE_POS,
+                a.id,
+                len(kinds) == 1,
+                "mixes purchased and processed RFNBO"
+                if len(kinds) > 1
+                else ("purchased RFNBO only" if True in kinds else "processed RFNBO only"),
             )
 
 

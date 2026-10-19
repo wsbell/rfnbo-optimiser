@@ -19,9 +19,17 @@ from pydantic import ValidationError
 from rfnbo.config.schema import PlantConfig
 from rfnbo.config.validate import ALLOWED_CONNECTIONS, Issue, validate
 
-KINDS = ("input", "processing_unit", "storage_unit", "distribution", "consignment_output")
+KINDS = (
+    "input",
+    "rfnbo_supply",
+    "processing_unit",
+    "storage_unit",
+    "distribution",
+    "consignment_output",
+)
 KIND_LABELS = {
     "input": "Input",
+    "rfnbo_supply": "RFNBO supplier",
     "processing_unit": "Processing unit",
     "storage_unit": "Storage unit",
     "distribution": "Distribution",
@@ -82,6 +90,8 @@ def _defaults(kind: str, effective_from: str) -> dict[str, Any]:
             "opening_inventory_kg": 0.0,
             "opening_ledger": [],
         }
+    if kind == "rfnbo_supply":
+        return {"supplier": "", "product": "", "lhv_MJ_per_kg": 0.0}
     if kind == "distribution":
         return {"customer": "", "fixed_adder_gCO2e_per_MJ": 0.0}
     if kind == "consignment_output":

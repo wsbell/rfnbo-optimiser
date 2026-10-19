@@ -78,7 +78,8 @@ def batch_record(
         rec["feed"] = [
             {
                 "batch": f.source_batch,
-                "via": run.feed_storage(f.source_batch, b.id),
+                "origin": f.origin,
+                "via": run.feed_via(f, b.id),
                 "qty": f.kg,
                 "uom": "kg",
                 "energy_MJ": f.energy_MJ,
@@ -132,7 +133,8 @@ def batch_record(
                 "upstream": [
                     {
                         "batch": f.source_batch,
-                        "via": run.feed_storage(f.source_batch, b.id),
+                        "origin": f.origin,
+                        "via": run.feed_via(f, b.id),
                         "kg": f.kg,
                     }
                     for f in b.feed

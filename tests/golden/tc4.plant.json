@@ -1,0 +1,321 @@
+{
+  "schema_version": 1,
+  "plant": "Test plant 4 (test plant 3 with purchased RFNBO H2)",
+  "version": "1",
+  "effective_from": "2026-01-01",
+  "timezone": "Europe/Amsterdam",
+  "settings": {
+    "fossil_comparator_gCO2e_per_MJ": 94.0,
+    "required_saving": 0.7,
+    "hourly_correlation_from": "2030-01-01",
+    "balance_tolerance_kg_per_interval": 1.0
+  },
+  "blocks": [
+    {
+      "id": "renewable_power",
+      "name": "Renewable electricity",
+      "kind": "input",
+      "material": "electricity",
+      "quantity_unit": "kWh",
+      "renewable": true,
+      "emission_factors": [
+        {
+          "value": 0.0,
+          "unit": "gCO2e/kWh",
+          "valid_from": "2026-01-01",
+          "source": "EU 2023/1185: matched renewable electricity counts as zero"
+        }
+      ],
+      "series": "renewable_available_kWh"
+    },
+    {
+      "id": "grid_power",
+      "name": "Non-renewable electricity",
+      "kind": "input",
+      "material": "electricity",
+      "quantity_unit": "kWh",
+      "renewable": false,
+      "emission_factors": [
+        {
+          "value": 400.0,
+          "unit": "gCO2e/kWh",
+          "valid_from": "2026-01-01",
+          "source": "Test workbook 3, Parameters sheet (constant input)"
+        }
+      ]
+    },
+    {
+      "id": "water",
+      "name": "Water",
+      "kind": "input",
+      "material": "water",
+      "quantity_unit": "kg",
+      "renewable": false,
+      "emission_factors": [
+        {
+          "value": 2.0,
+          "unit": "gCO2e/kg",
+          "valid_from": "2026-01-01",
+          "source": "Test workbook 3, Parameters sheet (synthetic value)"
+        }
+      ]
+    },
+    {
+      "id": "electrolyser",
+      "name": "Electrolyser",
+      "kind": "processing_unit",
+      "product": "H2",
+      "lhv_MJ_per_kg": 120.0,
+      "electricity_adds_to_lhv": true,
+      "fixed_adder_gCO2e_per_MJ": 1.0,
+      "production_series": "electrolyser_H2_kg",
+      "electricity_series": "electrolyser_electricity_kWh"
+    },
+    {
+      "id": "h2_supplier",
+      "name": "Purchased H2 (tube trailers)",
+      "kind": "rfnbo_supply",
+      "supplier": "H2 Trailers BV",
+      "product": "H2",
+      "lhv_MJ_per_kg": 120.0
+    },
+    {
+      "id": "h2_buffer",
+      "name": "H2 buffer storage",
+      "kind": "storage_unit",
+      "product": "H2",
+      "inventory_series": "h2_buffer_inventory_kg",
+      "opening_inventory_kg": 2000.0,
+      "opening_ledger": []
+    },
+    {
+      "id": "liquefier",
+      "name": "Liquefier",
+      "kind": "processing_unit",
+      "product": "LH2",
+      "lhv_MJ_per_kg": 120.0,
+      "electricity_adds_to_lhv": false,
+      "fixed_adder_gCO2e_per_MJ": 0.5,
+      "production_series": "liquefier_LH2_kg",
+      "electricity_series": "liquefier_electricity_kWh"
+    },
+    {
+      "id": "lh2_storage",
+      "name": "LH2 storage",
+      "kind": "storage_unit",
+      "product": "LH2",
+      "inventory_series": "lh2_storage_inventory_kg",
+      "opening_inventory_kg": 1000.0,
+      "opening_ledger": []
+    },
+    {
+      "id": "pt_compressor",
+      "name": "Direct link electrolyser to compressor",
+      "kind": "storage_unit",
+      "product": "H2",
+      "pass_through": true,
+      "opening_inventory_kg": 0.0,
+      "opening_ledger": []
+    },
+    {
+      "id": "compressor",
+      "name": "Compressor",
+      "kind": "processing_unit",
+      "product": "CH2",
+      "lhv_MJ_per_kg": 120.0,
+      "electricity_adds_to_lhv": false,
+      "fixed_adder_gCO2e_per_MJ": 0.5,
+      "production_series": "compressor_CH2_kg",
+      "electricity_series": "compressor_electricity_kWh"
+    },
+    {
+      "id": "ch2_storage",
+      "name": "CH2 storage",
+      "kind": "storage_unit",
+      "product": "CH2",
+      "inventory_series": "ch2_storage_inventory_kg",
+      "opening_inventory_kg": 500.0,
+      "opening_ledger": []
+    },
+    {
+      "id": "dist_customer_a",
+      "name": "Distribution to Customer A (LH2 trucks)",
+      "kind": "distribution",
+      "customer": "Customer A",
+      "fixed_adder_gCO2e_per_MJ": 2.0
+    },
+    {
+      "id": "dist_customer_b",
+      "name": "Distribution to Customer B (CH2 tube trailers)",
+      "kind": "distribution",
+      "customer": "Customer B",
+      "fixed_adder_gCO2e_per_MJ": 1.0
+    },
+    {
+      "id": "dist_spot",
+      "name": "LH2 spot sales (no RFNBO claim)",
+      "kind": "distribution",
+      "customer": "Spot market",
+      "fixed_adder_gCO2e_per_MJ": 0.0
+    },
+    {
+      "id": "consignment_a",
+      "name": "Consignments to Customer A",
+      "kind": "consignment_output",
+      "customer": "Customer A",
+      "distribution_block": "dist_customer_a"
+    },
+    {
+      "id": "consignment_b",
+      "name": "Consignments to Customer B",
+      "kind": "consignment_output",
+      "customer": "Customer B",
+      "distribution_block": "dist_customer_b"
+    },
+    {
+      "id": "spot",
+      "name": "Spot sales",
+      "kind": "consignment_output",
+      "customer": "Spot market",
+      "distribution_block": "dist_spot"
+    }
+  ],
+  "flows": [
+    {
+      "id": "f_re_el",
+      "source": "renewable_power",
+      "target": "electrolyser",
+      "material": "electricity"
+    },
+    {
+      "id": "f_re_liq",
+      "source": "renewable_power",
+      "target": "liquefier",
+      "material": "electricity"
+    },
+    {
+      "id": "f_re_comp",
+      "source": "renewable_power",
+      "target": "compressor",
+      "material": "electricity"
+    },
+    {
+      "id": "f_grid_el",
+      "source": "grid_power",
+      "target": "electrolyser",
+      "material": "electricity"
+    },
+    {
+      "id": "f_grid_liq",
+      "source": "grid_power",
+      "target": "liquefier",
+      "material": "electricity"
+    },
+    {
+      "id": "f_grid_comp",
+      "source": "grid_power",
+      "target": "compressor",
+      "material": "electricity"
+    },
+    {
+      "id": "f_water_el",
+      "source": "water",
+      "target": "electrolyser",
+      "material": "water",
+      "series": "electrolyser_water_kg"
+    },
+    {
+      "id": "f_el_buf",
+      "source": "electrolyser",
+      "target": "h2_buffer",
+      "material": "H2",
+      "series": "electrolyser_to_buffer_kg"
+    },
+    {
+      "id": "f_el_pt",
+      "source": "electrolyser",
+      "target": "pt_compressor",
+      "material": "H2",
+      "series": "electrolyser_to_compressor_kg"
+    },
+    {
+      "id": "f_buf_liq",
+      "source": "h2_buffer",
+      "target": "liquefier",
+      "material": "H2",
+      "series": "liquefier_H2_kg"
+    },
+    {
+      "id": "f_liq_lh2s",
+      "source": "liquefier",
+      "target": "lh2_storage",
+      "material": "LH2"
+    },
+    {
+      "id": "f_pt_comp",
+      "source": "pt_compressor",
+      "target": "compressor",
+      "material": "H2",
+      "series": "compressor_H2_kg"
+    },
+    {
+      "id": "f_comp_ch2s",
+      "source": "compressor",
+      "target": "ch2_storage",
+      "material": "CH2"
+    },
+    {
+      "id": "f_lh2s_a",
+      "source": "lh2_storage",
+      "target": "dist_customer_a",
+      "material": "LH2",
+      "series": "lh2_shipped_ca_kg"
+    },
+    {
+      "id": "f_lh2s_spot",
+      "source": "lh2_storage",
+      "target": "dist_spot",
+      "material": "LH2",
+      "series": "lh2_shipped_spot_kg"
+    },
+    {
+      "id": "f_ch2s_b",
+      "source": "ch2_storage",
+      "target": "dist_customer_b",
+      "material": "CH2",
+      "series": "ch2_shipped_cb_kg"
+    },
+    {
+      "id": "f_a_cons",
+      "source": "dist_customer_a",
+      "target": "consignment_a",
+      "material": "LH2"
+    },
+    {
+      "id": "f_b_cons",
+      "source": "dist_customer_b",
+      "target": "consignment_b",
+      "material": "CH2"
+    },
+    {
+      "id": "f_spot_cons",
+      "source": "dist_spot",
+      "target": "spot",
+      "material": "LH2"
+    },
+    {
+      "id": "f_sup_liq",
+      "source": "h2_supplier",
+      "target": "liquefier",
+      "material": "H2",
+      "series": "supplier_to_liquefier_kg"
+    },
+    {
+      "id": "f_sup_comp",
+      "source": "h2_supplier",
+      "target": "compressor",
+      "material": "H2",
+      "series": "supplier_to_compressor_kg"
+    }
+  ]
+}

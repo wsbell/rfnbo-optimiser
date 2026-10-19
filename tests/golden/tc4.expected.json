@@ -1,0 +1,332 @@
+{
+ "source": "RFNBO_optimiser_test4_purchased_Q4_2026.xlsx",
+ "liquefier_batches": {
+  "L-2026-10": {
+   "month": "2026-10",
+   "feed_consumed_kg": 89400,
+   "rfnbo_feed_kg": 89400,
+   "feed_ghg": 1.16666666666667,
+   "rfnbo_share": 1,
+   "product_kg": 87612,
+   "loss_kg": 1788,
+   "loss_fraction": 0.02,
+   "renewable_allocated_kWh": 1192000,
+   "electricity_kWh": 894000,
+   "renewable_matched_kWh": 894000,
+   "own_emissions_g": 0,
+   "feed_emissions_g": 12516000,
+   "rfnbo_kg": 87612,
+   "rfnbo_MJ": 10513440,
+   "ghg": 1.69047619047619,
+   "compliant": true,
+   "intervals": 2980,
+   "storage_feed_kg": 89400,
+   "supply_kg": 0,
+   "storage_rfnbo_feed_kg": 89400,
+   "pos_feed_kg": 0,
+   "storage_feed_emissions_g": 12516000,
+   "pos_emissions_g": 0
+  },
+  "L-2026-11": {
+   "month": "2026-11",
+   "feed_consumed_kg": 86400,
+   "rfnbo_feed_kg": 84400,
+   "feed_ghg": 1.16666666666667,
+   "rfnbo_share": 0.976851851851852,
+   "product_kg": 83808,
+   "loss_kg": 2592,
+   "loss_fraction": 0.03,
+   "renewable_allocated_kWh": 1132800,
+   "electricity_kWh": 864000,
+   "renewable_matched_kWh": 864000,
+   "own_emissions_g": 0,
+   "feed_emissions_g": 11816000,
+   "rfnbo_kg": 81868,
+   "rfnbo_MJ": 9824160,
+   "ghg": 1.70274914089347,
+   "compliant": true,
+   "intervals": 2880,
+   "storage_feed_kg": 86400,
+   "supply_kg": 0,
+   "storage_rfnbo_feed_kg": 84400,
+   "pos_feed_kg": 0,
+   "storage_feed_emissions_g": 11816000,
+   "pos_emissions_g": 0
+  },
+  "L-2026-12": {
+   "month": "2026-12",
+   "feed_consumed_kg": 96000,
+   "rfnbo_feed_kg": 96000,
+   "feed_ghg": 2.349375,
+   "rfnbo_share": 1,
+   "product_kg": 94080,
+   "loss_kg": 1920,
+   "loss_fraction": 0.02,
+   "renewable_allocated_kWh": 1190400,
+   "electricity_kWh": 864000,
+   "renewable_matched_kWh": 864000,
+   "own_emissions_g": 0,
+   "feed_emissions_g": 27064800,
+   "rfnbo_kg": 94080,
+   "rfnbo_MJ": 11289600,
+   "ghg": 2.89732142857143,
+   "compliant": true,
+   "intervals": 2976,
+   "storage_feed_kg": 86400,
+   "supply_kg": 9600,
+   "storage_rfnbo_feed_kg": 86400,
+   "pos_feed_kg": 9600,
+   "storage_feed_emissions_g": 12096000,
+   "pos_emissions_g": 14968800
+  }
+ },
+ "compressor_batches": {
+  "C-2026-10": {
+   "month": "2026-10",
+   "feed_consumed_kg": 59600,
+   "rfnbo_feed_kg": 59600,
+   "feed_ghg": 1.16666666666667,
+   "rfnbo_share": 1,
+   "product_kg": 59600,
+   "loss_kg": 0,
+   "loss_fraction": 0,
+   "renewable_allocated_kWh": 149000,
+   "electricity_kWh": 119200,
+   "renewable_matched_kWh": 119200,
+   "own_emissions_g": 0,
+   "feed_emissions_g": 8344000,
+   "rfnbo_kg": 59600,
+   "rfnbo_MJ": 7152000,
+   "ghg": 1.66666666666667,
+   "compliant": true,
+   "intervals": 2980,
+   "storage_feed_kg": 59600,
+   "supply_kg": 0,
+   "storage_rfnbo_feed_kg": 59600,
+   "pos_feed_kg": 0,
+   "storage_feed_emissions_g": 8344000,
+   "pos_emissions_g": 0
+  },
+  "C-2026-11": {
+   "month": "2026-11",
+   "feed_consumed_kg": 67200,
+   "rfnbo_feed_kg": 67200,
+   "feed_ghg": 2.02142857142857,
+   "rfnbo_share": 1,
+   "product_kg": 67200,
+   "loss_kg": 0,
+   "loss_fraction": 0,
+   "renewable_allocated_kWh": 141600,
+   "electricity_kWh": 115200,
+   "renewable_matched_kWh": 115200,
+   "own_emissions_g": 0,
+   "feed_emissions_g": 16300800,
+   "rfnbo_kg": 67200,
+   "rfnbo_MJ": 8064000,
+   "ghg": 2.52142857142857,
+   "compliant": true,
+   "intervals": 2880,
+   "storage_feed_kg": 57600,
+   "supply_kg": 9600,
+   "storage_rfnbo_feed_kg": 57600,
+   "pos_feed_kg": 9600,
+   "storage_feed_emissions_g": 8064000,
+   "pos_emissions_g": 8236800
+  },
+  "C-2026-12": {
+   "month": "2026-12",
+   "feed_consumed_kg": 59520,
+   "rfnbo_feed_kg": 59520,
+   "feed_ghg": 1.16666666666667,
+   "rfnbo_share": 1,
+   "product_kg": 59520,
+   "loss_kg": 0,
+   "loss_fraction": 0,
+   "renewable_allocated_kWh": 148800,
+   "electricity_kWh": 119040,
+   "renewable_matched_kWh": 119040,
+   "own_emissions_g": 0,
+   "feed_emissions_g": 8332800,
+   "rfnbo_kg": 59520,
+   "rfnbo_MJ": 7142400,
+   "ghg": 1.66666666666667,
+   "compliant": true,
+   "intervals": 2976,
+   "storage_feed_kg": 59520,
+   "supply_kg": 0,
+   "storage_rfnbo_feed_kg": 59520,
+   "pos_feed_kg": 0,
+   "storage_feed_emissions_g": 8332800,
+   "pos_emissions_g": 0
+  }
+ },
+ "ledgers": {
+  "h2_buffer": {
+   "in_kg": 265080,
+   "out_feed_kg": 260200,
+   "physical_kg": 4880,
+   "write_off_kg": 0,
+   "carried_kg": 4880
+  },
+  "pt_compressor": {
+   "in_kg": 176720,
+   "out_feed_kg": 176720,
+   "physical_kg": 0,
+   "write_off_kg": 0,
+   "carried_kg": 0
+  },
+  "lh2_storage": {
+   "lines": {
+    "L-2026-12": {
+     "month": "2026-12",
+     "ghg": 2.89732142857143,
+     "in_kg": 94080,
+     "out_consignment_kg": 94080,
+     "closing_before_kg": 0,
+     "write_off_kg": 0,
+     "carried_kg": 0
+    },
+    "L-2026-11": {
+     "month": "2026-11",
+     "ghg": 1.70274914089347,
+     "in_kg": 81868,
+     "out_consignment_kg": 55920,
+     "closing_before_kg": 25948,
+     "write_off_kg": 0,
+     "carried_kg": 25948
+    },
+    "L-2026-10": {
+     "month": "2026-10",
+     "ghg": 1.69047619047619,
+     "in_kg": 87612,
+     "out_consignment_kg": 0,
+     "closing_before_kg": 87612,
+     "write_off_kg": 0,
+     "carried_kg": 87612
+    }
+   },
+   "measured_kg": 116500
+  },
+  "ch2_storage": {
+   "lines": {
+    "C-2026-11": {
+     "month": "2026-11",
+     "ghg": 2.52142857142857,
+     "in_kg": 67200,
+     "out_consignment_kg": 67200,
+     "closing_before_kg": 0,
+     "write_off_kg": 0,
+     "carried_kg": 0
+    },
+    "C-2026-12": {
+     "month": "2026-12",
+     "ghg": 1.66666666666667,
+     "in_kg": 59520,
+     "out_consignment_kg": 0,
+     "closing_before_kg": 59520,
+     "write_off_kg": 0,
+     "carried_kg": 59520
+    },
+    "C-2026-10": {
+     "month": "2026-10",
+     "ghg": 1.66666666666667,
+     "in_kg": 59600,
+     "out_consignment_kg": 52800,
+     "closing_before_kg": 6800,
+     "write_off_kg": 0,
+     "carried_kg": 6800
+    }
+   },
+   "measured_kg": 66820
+  }
+ },
+ "pos": {
+  "POS-A": {
+   "supplier": "H2 Trailers BV",
+   "product": "H2",
+   "quantity_kg": 8000,
+   "ghg": 3,
+   "quarter": "2026-Q4",
+   "in_quarter": true,
+   "compliant": true,
+   "allocated_kg": 8000,
+   "written_off_kg": 0,
+   "within_quantity": true,
+   "dispatch_month": "2026-10"
+  },
+  "POS-B": {
+   "supplier": "H2 Trailers BV",
+   "product": "H2",
+   "quantity_kg": 9000,
+   "ghg": 12,
+   "quarter": "2026-Q4",
+   "in_quarter": true,
+   "compliant": true,
+   "allocated_kg": 9000,
+   "written_off_kg": 0,
+   "within_quantity": true,
+   "dispatch_month": "2026-12"
+  },
+  "POS-C": {
+   "supplier": "H2 Trailers BV",
+   "product": "H2",
+   "quantity_kg": 6000,
+   "ghg": 27.9,
+   "quarter": "2026-Q4",
+   "in_quarter": true,
+   "compliant": true,
+   "allocated_kg": 2200,
+   "written_off_kg": 3800,
+   "within_quantity": true,
+   "dispatch_month": "2026-11"
+  }
+ },
+ "supplier": {
+  "metered_kg": 19200,
+  "pos_kg": 23000,
+  "allocated_kg": 19200,
+  "non_rfnbo_kg": 0,
+  "written_off_kg": 3800
+ },
+ "consignments": {
+  "CA": {
+   "weighted_ghg": 2.45198487972509,
+   "shipped_ghg": 4.45198487972509
+  },
+  "CB": {
+   "weighted_ghg": 2.14533333333333,
+   "shipped_ghg": 3.14533333333333
+  }
+ },
+ "objectives": {
+  "consignments_met": 2,
+  "weights": {
+   "h2_buffer": 0.97682119205298,
+   "pt_compressor": 1,
+   "lh2_storage": 1,
+   "ch2_storage": 1
+  },
+  "carried_value_MJ": 22157626.4900662,
+  "carried_emissions_g": 37021872.1649485,
+  "batches": 9,
+  "purchased_emissions_g": 23205600,
+  "pos_written_off_kg": 3800,
+  "at_upper_bound": true
+ },
+ "variants": {
+  "v1_spot": {
+   "note": "Test case 3's 60,000 kg LH2 spot sale is back: LH2 storage is over its inventory, so no credentials go to the liquefier.",
+   "lh2_measured_kg": 56500,
+   "december_lh2_rfnbo_kg": 82712,
+   "lh2_write_off_kg": 47632,
+   "lh2_carried_kg": 56500,
+   "liquefier_credentials_kg": 0,
+   "compressor_credentials_kg": 9600,
+   "pos_written_off_kg": 13400,
+   "h2_buffer_carried_kg": 4880,
+   "ch2_carried_kg": 66320,
+   "carried_value_MJ": 15310426.4900662
+  }
+ },
+ "workbook_checks_pass": true
+}

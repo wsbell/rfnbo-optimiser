@@ -19,7 +19,7 @@ import numpy as np
 from rfnbo.calc.batch import BatchResult
 from rfnbo.calc.calculator import RunResult
 from rfnbo.calc.tolerance import close
-from rfnbo.config.schema import ELECTRICITY, InputBlock, ProcessingUnit, StorageUnit
+from rfnbo.config.schema import ELECTRICITY, InputBlock, ProcessingUnit, RfnboSupply, StorageUnit
 from rfnbo.report import tables as T
 from rfnbo.trace import json_log, lineage
 from rfnbo.trace import run as sealed
@@ -117,6 +117,7 @@ def overview(run: RunResult) -> dict[str, Any]:
         "units": units,
         "consignments": T.consignment_summary(run).rows,
         "products": T.product_summary(run).rows,
+        "pos": T.pos_register(run).rows,
         "ledgers": T.ledger_summary(run).rows,
         "failures": [
             {"check": c.name, "subject": c.subject, "detail": c.detail, "reference": c.reference}
@@ -168,7 +169,9 @@ def consignment_view(run: RunResult, consignment_id: str) -> dict[str, Any]:
 
 
 def batch_view(run: RunResult, batch_id: str) -> dict[str, Any]:
-    """A produced batch (traceability record) or an opening-ledger entry."""
+    """A produced batch (traceability record), an opening-ledger entry, or a PoS."""
+    if batch_id not in run.batches and any(p.id == batch_id for p in run.purchases):
+        return pos_view(run, batch_id)
     all_edges = lineage.edges(run)
     owner = {a.id: c.id for c in run.consignments for a in c.aggregated}
     downstream = [
@@ -202,7 +205,8 @@ def batch_view(run: RunResult, batch_id: str) -> dict[str, Any]:
         "upstream": [
             {
                 "batch": f.source_batch,
-                "via": run.feed_storage(f.source_batch, b.id),
+                "origin": f.origin,  # "pos": credentials from a proof of sustainability
+                "via": run.feed_via(f, b.id),
                 "kg": f.kg,
                 "MJ": f.energy_MJ,
                 "ghg": f.ghg_gCO2e_per_MJ,
@@ -218,6 +222,52 @@ def batch_view(run: RunResult, batch_id: str) -> dict[str, Any]:
             and b.ghg_gCO2e_per_MJ is not None
             and close(again, b.ghg_gCO2e_per_MJ, rel=1e-9)
         ),
+    }
+
+
+# ---- proof of sustainability -----------------------------------------------------------------
+
+
+def pos_view(run: RunResult, pos_id: str) -> dict[str, Any]:
+    """A PoS: where its credentials went, and what was written off unallocated (§11.1)."""
+    p = next((x for x in run.purchases if x.id == pos_id), None)
+    if p is None:
+        raise NotFound(f"no PoS {pos_id!r}")
+    return {
+        "kind": "pos",
+        "id": p.id,
+        "supplier": p.supplier,
+        "product": p.product,
+        "dispatch_date": p.dispatch_date.isoformat(),
+        "quarter": p.quarter,
+        "quantity_kg": p.quantity_kg,
+        "ghg": p.ghg_gCO2e_per_MJ,
+        "compliant": p.compliant,
+        "allocated_kg": p.allocated_kg,
+        "written_off_kg": p.unallocated_kg,
+        "allocations": [
+            {
+                "flow": a.flow,
+                "to": a.target,
+                "kind": a.kind,
+                "start": json_log.local_iso(run.frame.index[a.start_index], run.frame.timezone),
+                "intervals": a.end_index - a.start_index,
+                "kg": a.kg,
+                "metered_kg": a.metered_kg,
+                "drillable": a.target in run.batches,
+            }
+            for a in p.allocations
+        ],
+        "downstream": [
+            {"to": e.target, "kind": e.kind, "kg": e.kg}
+            for e in lineage.edges(run)
+            if e.source == p.id
+        ],
+        "checks": [
+            {"check": c.name, "passed": c.passed, "detail": c.detail, "reference": c.reference}
+            for c in run.checks
+            if c.subject == p.id
+        ],
     }
 
 
@@ -305,6 +355,11 @@ def interval_view(run: RunResult, batch_id: str) -> IntervalView:
             key = f"feed:{f.id}"
             series[key] = frame.series[f.series][s:e]
             cols.append(T.Column(key, f"{f.material} feed from {f.source}", "kg"))
+            feed_total += float(series[key].sum())
+        elif isinstance(sup := cfg.block(f.source), RfnboSupply) and f.series:
+            key = f"supply:{f.id}"
+            series[key] = frame.series[f.series][s:e]
+            cols.append(T.Column(key, f"{f.material} delivered by {sup.supplier}", "kg"))
             feed_total += float(series[key].sum())
     if b.kind == "downstream":
         checks.append(TotalCheck("Feed consumed", "kg", feed_total, b.feed_consumed_kg))

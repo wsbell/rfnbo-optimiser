@@ -21,6 +21,7 @@ from rfnbo.config.schema import (
     InputBlock,
     PlantConfig,
     ProcessingUnit,
+    RfnboSupply,
     StorageUnit,
 )
 
@@ -52,6 +53,8 @@ ALLOWED_CONNECTIONS: frozenset[tuple[str, str]] = frozenset(
         ("storage_unit", "processing_unit"),
         ("storage_unit", "distribution"),
         ("distribution", "consignment_output"),
+        ("rfnbo_supply", "processing_unit"),
+        ("rfnbo_supply", "storage_unit"),
     }
 )
 
@@ -223,29 +226,33 @@ def pass_through_links(cfg: PlantConfig) -> Iterator[Issue]:
 
 
 def unit_feed_products(cfg: PlantConfig) -> Iterator[Issue]:
-    """A unit's product feeds from storages are all one product (RFNBO share by energy is
-    over one product)."""
+    """A unit's product feeds from storages and suppliers are all one product (RFNBO share by
+    energy is over one product)."""
     for u in cfg.blocks_of(ProcessingUnit):
         products = {
             f.material
             for f in cfg.flows_into(u.id)
-            if isinstance(_block_or_none(cfg, f.source), StorageUnit)
+            if isinstance(_block_or_none(cfg, f.source), (StorageUnit, RfnboSupply))
         }
         if len(products) > 1:
             yield Issue(
                 "unit_feed_products",
-                f"unit takes several products from storage: {sorted(products)}",
+                f"unit takes several products as feed: {sorted(products)}",
                 u.id,
             )
 
 
 def storages_produced(cfg: PlantConfig) -> Iterator[Issue]:
-    """Every storage, and so every final product, is fed by a processing unit."""
+    """Every storage, and so every final product, is fed by a processing unit or an RFNBO
+    supplier."""
     for s in cfg.blocks_of(StorageUnit):
         if not any(
-            isinstance(_block_or_none(cfg, f.source), ProcessingUnit) for f in cfg.flows_into(s.id)
+            isinstance(_block_or_none(cfg, f.source), (ProcessingUnit, RfnboSupply))
+            for f in cfg.flows_into(s.id)
         ):
-            yield Issue("storages_produced", "no processing unit feeds this storage", s.id)
+            yield Issue(
+                "storages_produced", "no processing unit or supplier feeds this storage", s.id
+            )
 
 
 def unit_feeds(cfg: PlantConfig) -> Iterator[Issue]:
@@ -264,12 +271,33 @@ def unit_feeds(cfg: PlantConfig) -> Iterator[Issue]:
                     "unit where electricity adds to LHV needs a renewable power input",
                     u.id,
                 )
-        elif not any(isinstance(_block_or_none(cfg, f.source), StorageUnit) for f in into):
+        elif not any(
+            isinstance(_block_or_none(cfg, f.source), (StorageUnit, RfnboSupply)) for f in into
+        ):
             yield Issue(
                 "unit_feeds",
-                "downstream unit needs a product feed from storage",
+                "downstream unit needs a product feed from storage or a supplier",
                 u.id,
             )
+
+
+def supply_flows(cfg: PlantConfig) -> Iterator[Issue]:
+    """Purchased RFNBO (build plan §11.1 rule 1): every flow from a supplier is metered (kg per
+    interval), and goes to a storage or a unit whose RFNBO share comes from its feed, never to
+    an electrolytic unit."""
+    for s in cfg.blocks_of(RfnboSupply):
+        for f in cfg.flows_out_of(s.id):
+            if not f.series:
+                yield Issue(
+                    "supply_flows", "a supply flow needs a metered series (kg delivered)", f.id
+                )
+            tgt = _block_or_none(cfg, f.target)
+            if isinstance(tgt, ProcessingUnit) and tgt.electricity_adds_to_lhv:
+                yield Issue(
+                    "supply_flows",
+                    "purchased RFNBO cannot feed a unit whose electricity adds to product LHV",
+                    f.id,
+                )
 
 
 def _block_or_none(cfg: PlantConfig, block_id: str) -> object | None:
@@ -388,6 +416,7 @@ RULES: tuple[Rule, ...] = (
     unit_feed_products,
     storages_produced,
     unit_feeds,
+    supply_flows,
     electricity_inputs,
     emission_factor_coverage,
     consignment_links,

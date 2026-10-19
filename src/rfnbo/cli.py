@@ -7,7 +7,7 @@ rfnbo run --config C --source S --data D --decisions X --quarter 2026-Q4 --out D
 rfnbo verify <run-dir>
 rfnbo batch --config C --source S --data D --quarter 2026-Q4 --out decisions.json
 rfnbo optimise --config C --source S --data D --quarter 2026-Q4
-               --consignments requirements.json --out DIR
+               --consignments requirements.json --out DIR [--pos pos.csv]
 rfnbo report <run-dir> --out DIR [--baseline <run-dir>] [--csv]
 rfnbo results <dir> [--port 8081] [--no-browser]
 """
@@ -153,7 +153,24 @@ def _optimise(args: argparse.Namespace) -> int:
     consignments = TypeAdapter(list[ConsignmentSpec]).validate_json(
         Path(args.consignments).read_text(encoding="utf-8")
     )
-    result = optimise(cfg, frame, consignments, batch_materiality_MJ=args.batch_materiality_MJ)
+    records = []
+    if args.pos:
+        from rfnbo.model.pos import PoSError, load_pos, pos_rules
+
+        try:
+            records = load_pos(args.pos)
+        except PoSError as exc:
+            print(f"{args.pos}: invalid PoS records\n{exc}", file=sys.stderr)
+            return 1
+        issues = list(pos_rules(cfg, records, args.quarter))
+        if issues:
+            print(f"{args.pos}: {len(issues)} issue(s)", file=sys.stderr)
+            for issue in issues:
+                print(f"  {issue}", file=sys.stderr)
+            return 1
+    result = optimise(
+        cfg, frame, consignments, batch_materiality_MJ=args.batch_materiality_MJ, pos=records
+    )
 
     out = Path(args.out)
     ids = {}
@@ -177,6 +194,7 @@ def _optimise(args: argparse.Namespace) -> int:
                 "carried_emissions_g": o.objectives.carried_emissions_g,
                 "carried_ghg": o.objectives.carried_ghg,
                 "batches": o.objectives.batches,
+                "pos_written_off_kg": o.objectives.pos_written_off_kg,
                 "failed_checks": len(o.run.failures),
             }
             for name, o in (("optimised", result.optimised), ("baseline", result.baseline))
@@ -202,6 +220,11 @@ def _optimise(args: argparse.Namespace) -> int:
         f"{'carried GHG (g)':>24} {o.carried_emissions_g:>18,.0f} {b.carried_emissions_g:>18,.0f}"
     )
     print(f"{'batches':>24} {o.batches:>18,} {b.batches:>18,}")
+    if records:
+        print(
+            f"{'PoS written off (kg)':>24} {o.pos_written_off_kg:>18,.1f} "
+            f"{b.pos_written_off_kg:>18,.1f}"
+        )
     if bound is not None:
         print(f"upper bound for this batching {bound.upper_kg:,.1f} kg (gap {bound.gap:.4%})")
     print(f"carried value bound {vb.upper_MJ:,.1f} MJ (gap {vb.gap:.4%})")
@@ -303,6 +326,10 @@ def main(argv: list[str] | None = None) -> int:
         help="JSON list of consignments (target null = minimise mode)",
     )
     o.add_argument("--out", required=True)
+    o.add_argument(
+        "--pos",
+        help="proofs of sustainability for purchased RFNBO (CSV or JSON list); see rfnbo.model.pos",
+    )
     o.add_argument(
         "--batch-materiality-MJ",
         type=float,

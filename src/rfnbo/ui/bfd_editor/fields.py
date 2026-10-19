@@ -86,6 +86,11 @@ BLOCK_FIELDS: dict[str, tuple[FieldSpec | TableSpec, ...]] = {
             ),
         ),
     ),
+    "rfnbo_supply": (
+        FieldSpec("supplier", "Supplier (as named on its PoS)", "text"),
+        FieldSpec("product", "Product", "text"),
+        FieldSpec("lhv_MJ_per_kg", "LHV (MJ/kg)", "number"),
+    ),
     "distribution": (
         FieldSpec("customer", "Customer", "text"),
         FieldSpec("fixed_adder_gCO2e_per_MJ", "Fixed GHG adder (gCO2e/MJ)", "number"),
@@ -102,7 +107,7 @@ FLOW_FIELDS: tuple[FieldSpec, ...] = (
         "series",
         "Metered series (kg)",
         "optional_text",
-        hint="inputs other than electricity, and transfers out of storage",
+        hint="inputs other than electricity, transfers out of storage, supplier deliveries",
     ),
 )
 

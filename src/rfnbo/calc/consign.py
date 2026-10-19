@@ -25,6 +25,7 @@ class AggregatedPart:
     energy_MJ: float
     ghg_gCO2e_per_MJ: float
     compliant: bool
+    origin: str = "produced"  # or "opening", or "purchased" (a PoS passed through storage)
 
 
 @dataclass(frozen=True)
@@ -151,6 +152,7 @@ def _consignment(
                     energy_MJ=p.kg * line.lhv_MJ_per_kg,
                     ghg_gCO2e_per_MJ=line.ghg_gCO2e_per_MJ,
                     compliant=line.compliant,
+                    origin=line.origin,
                 )
             )
         results.append(AggregatedBatchResult(agg.id, spec.id, tuple(parts)))

@@ -33,7 +33,7 @@ from rfnbo.model.entities import Decisions
 from rfnbo.optimise.lp import solver_info
 from rfnbo.trace import json_log, lineage
 
-RECORD_VERSION = 2  # 2: storage weights and the non-compliant write-off
+RECORD_VERSION = 3  # 2: storage weights, non-compliant write-off; 3: purchased RFNBO (PoS)
 FRAME_FILE, BATCHES_FILE, RUN_FILE = "frame.csv", "batches.jsonl", "run.json"
 _PACKAGES = ("rfnbo", "numpy", "pydantic", "openpyxl", "tzdata", "highspy")
 
@@ -120,6 +120,7 @@ def _ledgers(run: RunResult) -> list[dict[str, Any]]:
                 "quarter": led.quarter,
                 "opening_kg": led.opening_kg,
                 "produced_kg": led.produced_kg,
+                "purchased_kg": led.purchased_kg,
                 "out_feed_kg": led.out_feed_kg,
                 "out_consignment_kg": led.out_consignment_kg,
                 "closing_before_kg": led.closing_before_kg,
@@ -159,6 +160,7 @@ def _reconciliation(run: RunResult) -> list[dict[str, Any]]:
             "quarter": r.quarter,
             "opening_physical_kg": r.opening_physical_kg,
             "produced_kg": r.produced_kg,
+            "delivered_kg": r.delivered_kg,
             "outflows_kg": dict(r.outflows_kg),
             "expected_kg": r.expected_kg,
             "measured_kg": r.measured_kg,
@@ -220,6 +222,50 @@ def _consignments(run: RunResult) -> list[dict[str, Any]]:
             }
         )
     return out
+
+
+def _purchases(run: RunResult) -> dict[str, Any]:
+    return {
+        "register": [
+            {
+                "pos": p.id,
+                "supplier": p.supplier,
+                "product": p.product,
+                "dispatch_date": p.dispatch_date.isoformat(),
+                "quarter": p.quarter,
+                "quantity_kg": p.quantity_kg,
+                "ghg": p.ghg_gCO2e_per_MJ,
+                "compliant": p.compliant,
+                "allocated_kg": p.allocated_kg,
+                "written_off_kg": p.unallocated_kg,
+                "allocations": [
+                    {
+                        "flow": a.flow,
+                        "target": a.target,
+                        "kind": a.kind,
+                        "start_utc": run.frame.index[a.start_index].isoformat(),
+                        "intervals": a.end_index - a.start_index,
+                        "kg": a.kg,
+                        "metered_kg": a.metered_kg,
+                    }
+                    for a in p.allocations
+                ],
+            }
+            for p in run.purchases
+        ],
+        "supplies": [
+            {
+                "supply": s.supply,
+                "supplier": s.supplier,
+                "product": s.product,
+                "metered_kg": s.metered_kg,
+                "pos_kg": s.pos_kg,
+                "allocated_kg": s.allocated_kg,
+                "non_rfnbo_kg": s.non_rfnbo_kg,
+            }
+            for s in run.supplies
+        ],
+    }
 
 
 def _summary(run: RunResult) -> dict[str, Any]:
@@ -302,6 +348,7 @@ def build(
                 for k, w in run.storage_weights.items()
             },
             "consignments": _consignments(run),
+            "purchases": _purchases(run),
             "lineage": lineage.graph(run),
             "checks": [
                 {

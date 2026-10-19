@@ -1,8 +1,10 @@
 """The baseline method: one batch per unit per month, first-in-first-out allocation.
 
 A renewable pool shared by several units goes to the electrolyser first and the surplus to the
-others. Feed: RFNBO batches in production order fill downstream batches in time order, up to what
-each consumes, with no regard to GHG. Consignments: compliant stock, oldest first, in ship
+others. Purchased RFNBO: PoS credentials in dispatch order fill each supplier's metered
+deliveries into units, batch by batch in time order, then into storages. Feed: RFNBO batches in
+production order fill downstream batches in time order, up to what each consumes less the
+credentials it took, with no regard to GHG. Consignments: compliant stock, oldest first, in ship
 date order. Write-offs: the §2.7 rule. Reported next to every optimised result.
 """
 
@@ -13,7 +15,7 @@ from collections.abc import Sequence
 from rfnbo.calc import calculate
 from rfnbo.calc.batch import unit_order
 from rfnbo.calc.consign import consignment_route
-from rfnbo.config.schema import PlantConfig
+from rfnbo.config.schema import Flow, PlantConfig, RfnboSupply, StorageUnit
 from rfnbo.data import calendar as cal
 from rfnbo.data.ingest import FloatArray
 from rfnbo.data.quality import Frame
@@ -25,6 +27,8 @@ from rfnbo.model.entities import (
     FeedAllocation,
     OutputAllocation,
     Part,
+    PoSAllocation,
+    ProofOfSustainability,
     RenewableAllocation,
 )
 from rfnbo.optimise import allocate, pool
@@ -84,17 +88,63 @@ def pro_rata_outputs(
     return out
 
 
+def fifo_credits(cfg: PlantConfig, frame: Frame, decisions: Decisions) -> list[PoSAllocation]:
+    """PoS credentials in dispatch order into suppliers' metered deliveries: into units batch
+    by batch in time order, then into storages over the whole quarter."""
+    run = calculate(cfg, frame, decisions)
+    left = {p.id: p.quantity_kg for p in decisions.pos}
+    targets: list[tuple[Flow, RfnboSupply, str | None, float]] = []  # flow, supplier, batch, kg
+    for unit in unit_order(cfg):
+        for f, sup in allocate.supply_flows_into(cfg, unit.id):
+            for b in sorted(
+                (b for b in run.batches.values() if b.unit == unit.id), key=lambda b: b.start
+            ):
+                kg = float(frame.series[f.series or ""][b.start_index : b.end_index].sum())
+                targets.append((f, sup, b.id, kg))
+    for f in cfg.flows:
+        src = cfg.block(f.source)
+        if isinstance(src, RfnboSupply) and isinstance(cfg.block(f.target), StorageUnit):
+            targets.append((f, src, None, float(frame.series[f.series or ""].sum())))
+    out: list[PoSAllocation] = []
+    for f, sup, batch, metered in targets:
+        for p in sorted(allocate.usable_pos(run, sup), key=lambda p: (p.dispatch_date, p.id)):
+            take = min(metered, left[p.id])
+            if take <= 1e-9:
+                continue
+            if batch is None:
+                out.append(
+                    PoSAllocation(pos=p.id, flow=f.id, kg=take, start=frame.index[0], end=frame.end)
+                )
+            else:
+                out.append(PoSAllocation(pos=p.id, flow=f.id, kg=take, batch=batch))
+            left[p.id] -= take
+            metered -= take
+    return out
+
+
 def baseline_decisions(
-    cfg: PlantConfig, frame: Frame, consignments: Sequence[ConsignmentSpec]
+    cfg: PlantConfig,
+    frame: Frame,
+    consignments: Sequence[ConsignmentSpec],
+    pos: Sequence[ProofOfSustainability] = (),
 ) -> Decisions:
     decisions = Decisions(
         batches=monthly_batches(cfg, frame),
         renewable_allocations=monthly_split(cfg, frame),
         consignments=list(consignments),
+        pos=list(pos),
     )
     decisions = decisions.model_copy(
         update={"output_allocations": pro_rata_outputs(cfg, frame, decisions)}
     )
+    if pos:
+        decisions = decisions.model_copy(
+            update={"pos_allocations": fifo_credits(cfg, frame, decisions)}
+        )
+    credited: dict[str, float] = {}
+    for a in decisions.pos_allocations:
+        if a.batch:
+            credited[a.batch] = credited.get(a.batch, 0.0) + a.kg
     for unit in allocate.downstream_units(cfg, unit_order(cfg)):
         store = allocate.feed_storage(cfg, unit)
         if store is None:
@@ -108,7 +158,7 @@ def baseline_decisions(
         for t in sorted(
             (b for b in run.batches.values() if b.unit == unit.id), key=lambda b: b.start
         ):
-            need = t.feed_consumed_kg
+            need = t.feed_consumed_kg - credited.get(t.id, 0.0)
             for s in sources:
                 if need <= 1e-9:
                     break

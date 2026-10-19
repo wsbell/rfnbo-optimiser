@@ -13,7 +13,7 @@ from typing import Literal
 
 import numpy as np
 
-from rfnbo.config.schema import InputBlock, PlantConfig, ProcessingUnit, StorageUnit
+from rfnbo.config.schema import InputBlock, PlantConfig, ProcessingUnit, RfnboSupply, StorageUnit
 from rfnbo.data import calendar as cal
 from rfnbo.data.ingest import FloatArray, RawData
 
@@ -169,7 +169,7 @@ def _storage_balance(cfg: PlantConfig, frame: Frame) -> list[QualityFlag]:
     Losses (boil-off, venting) show up here; they are not modelled, only reported. A
     pass-through storage has inventory zero, so what flows in must flow out each interval.
     Product from a unit that splits its output is counted by the metered flow, otherwise by
-    the unit's production series.
+    the unit's production series; deliveries from an RFNBO supplier by their metered flow.
     """
     flags: list[QualityFlag] = []
     tol = cfg.settings.balance_tolerance_kg_per_interval
@@ -186,6 +186,8 @@ def _storage_balance(cfg: PlantConfig, frame: Frame) -> list[QualityFlag]:
             unit = cfg.block(f.source)
             if isinstance(unit, ProcessingUnit):
                 parts.append(frame.series.get(f.series or unit.production_series or ""))
+            elif isinstance(unit, RfnboSupply):
+                parts.append(frame.series.get(f.series or ""))
         for f in cfg.flows_out_of(s.id):
             out = frame.series.get(f.series or "")
             parts.append(None if out is None else -out)

@@ -166,9 +166,10 @@ def feed_matrix(run: RunResult, unit: ProcessingUnit) -> Table:
     store_ids = {
         run.feed_storage(a.source, a.target) for a in run.decisions.feed if a.target in target_ids
     }
-    lines = [x for led in run.ledgers if led.storage in store_ids for x in led.lines]
+    lines = [(led.storage, x) for led in run.ledgers if led.storage in store_ids for x in led.lines]
     cols = [
-        _c("batch", "Upstream batch", kind="text"),
+        _c("batch", "Upstream batch or PoS", kind="text"),
+        _c("source", "From", kind="text"),
         _c("month", "Month", kind="text"),
         _c("ghg", "GHG", "gCO2e/MJ"),
         _c("compliant", "≤ threshold", kind="bool"),
@@ -177,9 +178,10 @@ def feed_matrix(run: RunResult, unit: ProcessingUnit) -> Table:
     cols += [_c(f"to:{t.id}", f"→ {t.id}", "kg") for t in targets]
     cols += [_c("left_kg", "Left in ledger", "kg")]
     rows = []
-    for x in sorted(lines, key=lambda x: (x.month, x.batch)):
+    for storage, x in sorted(lines, key=lambda sx: (sx[1].month, sx[1].batch)):
         row: dict[str, Any] = {
             "batch": x.batch,
+            "source": storage,
             "month": x.month,
             "ghg": x.ghg_gCO2e_per_MJ,
             "compliant": x.compliant,
@@ -189,19 +191,41 @@ def feed_matrix(run: RunResult, unit: ProcessingUnit) -> Table:
             row[f"to:{t.id}"] = feed.get((x.batch, t.id), 0.0)
         row["left_kg"] = x.closing_before_kg
         rows.append(row)
+    # PoS credentials allocated to suppliers' deliveries into these batches (§11.1).
+    for p in run.purchases:
+        by_flow: dict[str, dict[str, float]] = defaultdict(dict)
+        for pa in p.allocations:
+            if pa.target in target_ids:
+                by_flow[pa.flow][pa.target] = by_flow[pa.flow].get(pa.target, 0.0) + pa.kg
+        for flow, to in sorted(by_flow.items()):
+            prow: dict[str, Any] = {
+                "batch": p.id,
+                "source": f"PoS via {flow}",
+                "month": p.month,
+                "ghg": p.ghg_gCO2e_per_MJ,
+                "compliant": p.compliant,
+                "available_kg": p.quantity_kg,
+            }
+            for t in targets:
+                prow[f"to:{t.id}"] = to.get(t.id, 0.0)
+            prow["left_kg"] = None
+            rows.append(prow)
     return Table(f"Feed {unit.name}"[:31], f"Feed allocation to {unit.name}", tuple(cols), rows)
 
 
 def lineage_table(run: RunResult) -> Table:
     """Every lineage edge: where each batch's RFNBO kg went."""
     batches = run.batches
+    pos = {p.id: p for p in run.purchases}
     rows = []
     for e in lineage.edges(run):
         src = batches.get(e.source)
         rows.append(
             {
                 "from": e.source,
-                "from_unit": src.unit if src else "",
+                "from_unit": src.unit
+                if src
+                else (f"PoS ({pos[e.source].supplier})" if e.source in pos else ""),
                 "to": e.target,
                 "kind": e.kind,
                 "kg": e.kg,
@@ -219,8 +243,9 @@ def lineage_table(run: RunResult) -> Table:
         "Batch lineage",
         cols,
         rows,
-        "Kinds: feed (to a downstream batch), aggregation (into an aggregated batch), "
-        "consignment, write_off, carried (to the next quarter).",
+        "Kinds: feed (to a downstream batch; from a PoS, its credentials), aggregation (into an "
+        "aggregated batch), consignment, write_off (a PoS's: not allocated by quarter end), "
+        "carried (to the next quarter).",
     )
 
 
@@ -310,6 +335,116 @@ def consignment_parts(run: RunResult) -> Table:
         for p in a.parts
     ]
     return Table("Consignment batches", "Batches allocated to consignments", cols, rows)
+
+
+# ---- purchased RFNBO -------------------------------------------------------------------------
+
+
+def pos_register(run: RunResult) -> Table:
+    """Every PoS: received, allocated, written off, and where its credentials went (§11.1)."""
+    cols = (
+        _c("pos", "PoS", kind="text"),
+        _c("supplier", "Supplier", kind="text"),
+        _c("product", "Product", kind="text"),
+        _c("dispatch_date", "Dispatch date", kind="text"),
+        _c("quarter", "Mass balance period", kind="text"),
+        _c("quantity_kg", "Received", "kg"),
+        _c("ghg", "GHG incl. distribution", "gCO2e/MJ"),
+        _c("compliant", "≤ threshold", kind="bool"),
+        _c("allocated_kg", "Allocated", "kg"),
+        _c("written_off_kg", "Written off (not allocated)", "kg"),
+        _c("to", "Where it went", kind="text"),
+    )
+    rows = []
+    for p in run.purchases:
+        to: dict[str, float] = defaultdict(float)
+        for a in p.allocations:
+            to[a.target] += a.kg
+        rows.append(
+            {
+                "pos": p.id,
+                "supplier": p.supplier,
+                "product": p.product,
+                "dispatch_date": p.dispatch_date.isoformat(),
+                "quarter": p.quarter,
+                "quantity_kg": p.quantity_kg,
+                "ghg": p.ghg_gCO2e_per_MJ,
+                "compliant": p.compliant,
+                "allocated_kg": p.allocated_kg,
+                "written_off_kg": p.unallocated_kg,
+                "to": "; ".join(f"{k} {v:,.1f} kg" for k, v in sorted(to.items())),
+            }
+        )
+    return Table(
+        "PoS register",
+        "Purchased RFNBO: proof of sustainability register",
+        cols,
+        rows,
+        "Credentials not allocated to a supplier's metered delivery by quarter end are written "
+        "off. Credentials into a unit become part of its batch; into a storage they sit in its "
+        "ledger under the PoS id.",
+    )
+
+
+def pos_allocations(run: RunResult) -> Table:
+    tz = run.frame.timezone
+    cols = (
+        _c("pos", "PoS", kind="text"),
+        _c("flow", "Supply flow", kind="text"),
+        _c("to", "Batch or storage", kind="text"),
+        _c("start", "From (local)", kind="datetime"),
+        _c("intervals", "Intervals", kind="integer"),
+        _c("kg", "Credentials", "kg"),
+        _c("metered_kg", "Metered delivery", "kg"),
+    )
+    rows = [
+        {
+            "pos": p.id,
+            "flow": a.flow,
+            "to": a.target,
+            "start": _local(run.frame.index[a.start_index], tz),
+            "intervals": a.end_index - a.start_index,
+            "kg": a.kg,
+            "metered_kg": a.metered_kg,
+        }
+        for p in run.purchases
+        for a in p.allocations
+    ]
+    return Table(
+        "PoS allocations",
+        "PoS credentials allocated to suppliers' metered deliveries",
+        cols,
+        rows,
+        "Metered delivery is the flow's total over the batch or range; credentials from every "
+        "PoS on one flow and batch together stay within it.",
+    )
+
+
+def supply_reconciliation(run: RunResult) -> Table:
+    cols = (
+        _c("supply", "Supplier block", kind="text"),
+        _c("supplier", "Supplier", kind="text"),
+        _c("product", "Product", kind="text"),
+        _c("metered_kg", "Metered delivery", "kg"),
+        _c("pos_kg", "PoS in the quarter", "kg"),
+        _c("allocated_kg", "Credentials allocated", "kg"),
+        _c("non_rfnbo_kg", "Delivered without credentials (non-RFNBO)", "kg"),
+        _c("unallocated_kg", "PoS not allocated (written off)", "kg"),
+    )
+    rows = [
+        {
+            "supply": s.supply,
+            "supplier": s.supplier,
+            "product": s.product,
+            "metered_kg": s.metered_kg,
+            "pos_kg": s.pos_kg,
+            "allocated_kg": s.allocated_kg,
+            "non_rfnbo_kg": s.non_rfnbo_kg,
+            "unallocated_kg": s.unallocated_pos_kg,
+        }
+        for s in run.supplies
+    ]
+    return Table("Supply reconciliation", "Metered supply against PoS totals", cols, rows)
 
 
 # ---- products and split outputs -------------------------------------------------------------
@@ -627,6 +762,8 @@ def reconciliation(run: RunResult) -> Table:
 
         add("Opening physical inventory", r.opening_physical_kg)
         add("Produced into storage", r.produced_kg)
+        if r.delivered_kg:
+            add("Delivered by RFNBO suppliers", r.delivered_kg)
         for flow_id, kg in r.outflows_kg:
             flow = next(f for f in run.config.flows if f.id == flow_id)
             add(f"Out to {names.get(flow.target, flow.target)} ({flow_id})", kg)
@@ -797,6 +934,11 @@ def all_tables(
         tables.append(output_splits(run))
     tables += [
         product_summary(run),
+        *(
+            [pos_register(run), pos_allocations(run), supply_reconciliation(run)]
+            if run.purchases or run.supplies
+            else []
+        ),
         lineage_table(run),
         consignment_summary(run),
         consignment_parts(run),
