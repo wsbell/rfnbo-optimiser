@@ -20,6 +20,7 @@ import numpy as np
 from rfnbo.calc.tolerance import meets_threshold, snap_unit_share
 from rfnbo.config.schema import (
     ELECTRICITY,
+    Flow,
     InputBlock,
     PlantConfig,
     ProcessingUnit,
@@ -124,12 +125,32 @@ def unit_order(cfg: PlantConfig) -> list[ProcessingUnit]:
     return order
 
 
+def output_flows(cfg: PlantConfig, unit_id: str) -> list[Flow]:
+    """The unit's product flows, each into a storage (several when the output is split)."""
+    flows = cfg.flows_out_of(unit_id)
+    for f in flows:
+        if not isinstance(cfg.block(f.target), StorageUnit):
+            raise CalculationError(f"unit {unit_id} does not output to a storage unit")
+    if not flows:
+        raise CalculationError(f"unit {unit_id} has no product output")
+    return flows
+
+
+def output_storages(cfg: PlantConfig, unit_id: str) -> list[StorageUnit]:
+    out = []
+    for f in output_flows(cfg, unit_id):
+        s = cfg.block(f.target)
+        assert isinstance(s, StorageUnit)
+        out.append(s)
+    return out
+
+
 def output_storage(cfg: PlantConfig, unit_id: str) -> StorageUnit:
-    (flow,) = cfg.flows_out_of(unit_id)
-    target = cfg.block(flow.target)
-    if not isinstance(target, StorageUnit):
-        raise CalculationError(f"unit {unit_id} does not output to a storage unit")
-    return target
+    """The unit's one output storage (single-chain code; a split output raises)."""
+    stores = output_storages(cfg, unit_id)
+    if len(stores) != 1:
+        raise CalculationError(f"unit {unit_id} splits its output between {len(stores)} storages")
+    return stores[0]
 
 
 def storage_lhv(cfg: PlantConfig, storage_id: str) -> float:

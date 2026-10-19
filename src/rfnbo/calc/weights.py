@@ -20,7 +20,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-from rfnbo.calc.batch import output_storage, storage_lhv
+from rfnbo.calc.batch import output_flows, storage_lhv
 from rfnbo.config.schema import DistributionBlock, PlantConfig, ProcessingUnit, StorageUnit
 from rfnbo.data.quality import Frame
 
@@ -86,16 +86,37 @@ def storage_weights(cfg: PlantConfig, frame: Frame) -> dict[str, StorageWeight]:
             if not isinstance(target, ProcessingUnit):
                 continue
             y = unit_energy_yield(cfg, frame, target)
-            down = weigh(output_storage(cfg, target.id))
-            if y is None or down.weight is None:
+            down = output_weight(target)
+            if y is None or down is None:
                 result = fallback(s, f"no yield for {target.id} this quarter")
                 out[s.id] = result
                 return result
-            value += share * y * down.weight
-            parts.append(f"{share:.4f} × {target.id} yield {y:.6f} × {down.weight:.6f}")
+            value += share * y * down
+            parts.append(f"{share:.4f} × {target.id} yield {y:.6f} × {down:.6f}")
         result = StorageWeight(s.id, value, "data", " + ".join(parts))
         out[s.id] = result
         return result
+
+    def output_weight(unit: ProcessingUnit) -> float | None:
+        """Weight of a unit's output: one storage's weight, or the average over a split
+        output weighted by the metered flows."""
+        flows = output_flows(cfg, unit.id)
+        if len(flows) == 1:
+            store = cfg.block(flows[0].target)
+            assert isinstance(store, StorageUnit)
+            return weigh(store).weight
+        total = sum(_kg(frame, f.series) for f in flows)
+        if total <= 0:
+            return None
+        acc = 0.0
+        for f in flows:
+            store = cfg.block(f.target)
+            assert isinstance(store, StorageUnit)
+            w = weigh(store).weight
+            if w is None:
+                return None
+            acc += _kg(frame, f.series) / total * w
+        return acc
 
     for s in cfg.blocks_of(StorageUnit):
         weigh(s)

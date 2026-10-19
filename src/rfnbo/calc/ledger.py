@@ -15,7 +15,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Literal
 
-from rfnbo.calc.batch import BatchResult, CalculationError, output_storage, storage_lhv
+from rfnbo.calc.batch import BatchResult, CalculationError, output_storages, storage_lhv
 from rfnbo.calc.tolerance import RANK_DECIMALS, meets_threshold
 from rfnbo.config.schema import PlantConfig, ProcessingUnit, StorageUnit
 from rfnbo.data.quality import Frame
@@ -155,17 +155,36 @@ def rule_write_offs(
     return out
 
 
-def batch_storage(cfg: PlantConfig, batches: Mapping[str, BatchResult]) -> dict[str, str]:
-    """Which storage ledger each batch (produced or opening) belongs to."""
-    where = {b.id: output_storage(cfg, b.unit).id for b in batches.values()}
+def batch_storages(
+    cfg: PlantConfig, batches: Mapping[str, BatchResult]
+) -> dict[str, tuple[str, ...]]:
+    """Which storage ledger(s) each batch (produced or opening) belongs to. A batch of a unit
+    that splits its output is in every storage its unit outputs to (§10.2 rule 4)."""
+    where = {b.id: tuple(s.id for s in output_storages(cfg, b.unit)) for b in batches.values()}
     for s in cfg.blocks_of(StorageUnit):
         for entry in s.opening_ledger:
             if entry.batch_id in where:
                 raise CalculationError(
                     f"opening ledger batch {entry.batch_id} clashes with a batch"
                 )
-            where[entry.batch_id] = s.id
+            where[entry.batch_id] = (s.id,)
     return where
+
+
+def feed_storage_for(
+    cfg: PlantConfig, homes: Mapping[str, tuple[str, ...]], source: str, target_unit: str
+) -> str:
+    """The storage a feed allocation draws on: the one holding ``source`` that feeds
+    ``target_unit``. If none does, the batch's first storage (the feed check then fails)."""
+    feeding = {f.source for f in cfg.flows_into(target_unit)}
+    held = homes[source]
+    return next((s for s in held if s in feeding), held[0])
+
+
+def consignment_storage(cfg: PlantConfig, output_id: str) -> str:
+    from rfnbo.calc.consign import consignment_route  # consign imports this module
+
+    return consignment_route(cfg, output_id)[2].id
 
 
 def compute_ledgers(
@@ -174,37 +193,62 @@ def compute_ledgers(
     batches: Mapping[str, BatchResult],
     decisions: Decisions,
 ) -> list[LedgerResult]:
-    where = batch_storage(cfg, batches)
+    homes = batch_storages(cfg, batches)
     threshold = cfg.settings.rfnbo_threshold_gCO2e_per_MJ
 
-    def home(batch: str, context: str) -> str:
-        if batch not in where:
+    def held(batch: str, context: str) -> tuple[str, ...]:
+        if batch not in homes:
             raise CalculationError(f"{context}: unknown batch {batch!r}")
-        return where[batch]
+        return homes[batch]
 
-    feed_out: dict[str, float] = defaultdict(float)
+    Key = tuple[str, str]  # (storage, batch)
+    feed_out: dict[Key, float] = defaultdict(float)
     for a in decisions.feed:
-        home(a.source, f"feed into {a.target}")
-        feed_out[a.source] += a.kg
-    cons_out: dict[str, float] = defaultdict(float)
+        held(a.source, f"feed into {a.target}")
+        if a.target not in batches:
+            raise CalculationError(f"feed allocated to unknown batch {a.target!r}")
+        store = feed_storage_for(cfg, homes, a.source, batches[a.target].unit)
+        feed_out[store, a.source] += a.kg
+    cons_store = {c.id: c.output for c in decisions.consignments}
+    cons_out: dict[Key, float] = defaultdict(float)
     for agg in decisions.aggregated_batches:
+        output = cons_store.get(agg.consignment)
         for p in agg.parts:
-            home(p.batch, f"aggregated batch {agg.id}")
-            cons_out[p.batch] += p.kg
-    written: dict[str, float] = defaultdict(float)
+            stores = held(p.batch, f"aggregated batch {agg.id}")
+            store = consignment_storage(cfg, output) if output else stores[0]
+            cons_out[store if store in stores else stores[0], p.batch] += p.kg
+    written: dict[Key, float] = defaultdict(float)
     for w in decisions.write_offs:
-        if home(w.batch, "write-off") != w.storage:
+        if w.storage not in held(w.batch, "write-off"):
             raise CalculationError(
                 f"write-off of {w.batch} names storage {w.storage}, "
-                f"but the batch is in {where[w.batch]}"
+                f"but the batch is in {', '.join(homes[w.batch])}"
             )
-        written[w.batch] += w.kg
+        written[w.storage, w.batch] += w.kg
+
+    # RFNBO entering each storage from each batch: all of it for a single output; the
+    # optimiser's assignment for a split output.
+    assigned: dict[Key, float] = defaultdict(float)
+    flows = {f.id: f for f in cfg.flows}
+    for o in decisions.output_allocations:
+        f = flows.get(o.flow)
+        if o.batch not in batches:
+            raise CalculationError(f"output allocation: unknown batch {o.batch!r}")
+        if f is None or f.source != batches[o.batch].unit or len(homes[o.batch]) < 2:
+            raise CalculationError(
+                f"output allocation of {o.batch}: {o.flow!r} is not a split output of its unit"
+            )
+        assigned[f.target, o.batch] += o.kg
+
+    def entering(s: StorageUnit, b: BatchResult) -> float:
+        return b.rfnbo_kg if len(homes[b.id]) == 1 else assigned[s.id, b.id]
 
     results: list[LedgerResult] = []
     for s in cfg.blocks_of(StorageUnit):
         lhv = storage_lhv(cfg, s.id)
         lines: list[LedgerLine] = []
         for e in s.opening_ledger:
+            k = (s.id, e.batch_id)
             lines.append(
                 LedgerLine(
                     batch=e.batch_id,
@@ -215,16 +259,18 @@ def compute_ledgers(
                     compliant=meets_threshold(e.ghg_gCO2e_per_MJ, threshold),
                     lhv_MJ_per_kg=lhv,
                     in_kg=e.rfnbo_kg,
-                    out_feed_kg=feed_out[e.batch_id],
-                    out_consignment_kg=cons_out[e.batch_id],
-                    write_off_kg=written[e.batch_id],
+                    out_feed_kg=feed_out[k],
+                    out_consignment_kg=cons_out[k],
+                    write_off_kg=written[k],
                 )
             )
         for b in batches.values():
-            if where[b.id] != s.id:
+            if s.id not in homes[b.id]:
                 continue
-            touched = b.id in feed_out or b.id in cons_out or b.id in written
-            if not b.is_rfnbo and not touched:
+            k = (s.id, b.id)
+            in_kg = entering(s, b)
+            touched = k in feed_out or k in cons_out or k in written
+            if in_kg <= 0 and not touched:
                 continue
             lines.append(
                 LedgerLine(
@@ -235,10 +281,10 @@ def compute_ledgers(
                     rfnbo_share=b.rfnbo_share,
                     compliant=b.compliant,
                     lhv_MJ_per_kg=lhv,
-                    in_kg=b.rfnbo_kg,
-                    out_feed_kg=feed_out[b.id],
-                    out_consignment_kg=cons_out[b.id],
-                    write_off_kg=written[b.id],
+                    in_kg=in_kg,
+                    out_feed_kg=feed_out[k],
+                    out_consignment_kg=cons_out[k],
+                    write_off_kg=written[k],
                 )
             )
         lines.sort(

@@ -14,7 +14,7 @@ import numpy as np
 
 from rfnbo.calc.ledger import priority_key
 from rfnbo.calc.tolerance import ABS_KG, at_most, close, meets_threshold
-from rfnbo.config.schema import InputBlock, ProcessingUnit
+from rfnbo.config.schema import InputBlock, ProcessingUnit, StorageUnit
 from rfnbo.data import calendar as cal
 
 if TYPE_CHECKING:
@@ -33,6 +33,8 @@ SCOPE_CARRY = (
     "Scope document decisions log: non-compliant RFNBO cannot be carried between quarters "
     "(2026-10-17)"
 )
+SCOPE_SPLIT = "Build plan §10.2 rule 4: split outputs (decided 2026-10-17)"
+SCOPE_PASS = "Build plan §10.2 rule 5: pass-through storage closes at zero (decided 2026-10-17)"
 SCOPE_AGGREGATION = "Scope document: consignment aggregation (one production month)"
 SCOPE_CONSIGNMENT = "Scope document: consignment requirements"
 
@@ -149,7 +151,7 @@ def feed_source_rfnbo(run: RunResult) -> Iterator[CheckResult]:
     """Feed comes from an RFNBO batch held in a storage that feeds the target unit."""
     for a in run.decisions.feed:
         src, tgt = run.batches[a.source], run.batches[a.target]
-        store = run.storage_of[a.source]
+        store = run.feed_storage(a.source, a.target)
         feeds = {f.target for f in run.config.flows_out_of(store)}
         ok = src.is_rfnbo and tgt.unit in feeds
         yield _r(
@@ -158,6 +160,52 @@ def feed_source_rfnbo(run: RunResult) -> Iterator[CheckResult]:
             f"{a.source}->{a.target}",
             ok,
             f"{a.kg} kg; source RFNBO {src.rfnbo_kg:.6g} kg in {store}",
+        )
+
+
+@check
+def output_split(run: RunResult) -> Iterator[CheckResult]:
+    """A split output's parts add up to the batch's RFNBO, each within its metered flow."""
+    cfg = run.config
+    given: dict[tuple[str, str], float] = defaultdict(float)
+    for o in run.decisions.output_allocations:
+        given[o.batch, o.flow] += o.kg
+    for b in run.batches.values():
+        flows = cfg.flows_out_of(b.unit)
+        if len(flows) < 2:
+            continue
+        problems = []
+        total = 0.0
+        for f in flows:
+            kg = given[b.id, f.id]
+            total += kg
+            metered = float(run.frame.series[f.series or ""][b.start_index : b.end_index].sum())
+            if not at_most(kg, metered):
+                problems.append(f"{f.id} {kg:.6f} kg > metered {metered:.6f} kg")
+        if not close(total, b.rfnbo_kg):
+            problems.append(f"parts {total:.6f} kg ≠ RFNBO {b.rfnbo_kg:.6f} kg")
+        yield _r(
+            "output_split",
+            SCOPE_SPLIT,
+            b.id,
+            not problems,
+            "; ".join(problems) or f"{total:.6f} kg over {len(flows)} flows",
+        )
+
+
+@check
+def pass_through_closes(run: RunResult) -> Iterator[CheckResult]:
+    """A pass-through storage carries nothing into the next quarter."""
+    for s in run.config.blocks_of(StorageUnit):
+        if not s.pass_through:
+            continue
+        led = run.ledger(s.id)
+        yield _r(
+            "pass_through_closes",
+            SCOPE_PASS,
+            f"{s.id} {led.quarter}",
+            abs(led.carried_kg) <= ABS_KG,
+            f"carried {led.carried_kg:.6f} kg; written off {led.write_off_kg:.6f} kg",
         )
 
 

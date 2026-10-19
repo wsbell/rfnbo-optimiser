@@ -350,8 +350,8 @@ decisions, the lineage graph) already works on networks.
 | --- | --- |
 | ~~`config/validate.py` `unit_outputs`~~ | ~~A unit sends its whole output to exactly one flow~~ (removed in phase 11) |
 | ~~`config/validate.py` `ALLOWED_CONNECTIONS`~~ | ~~No unit → unit link~~ (phase 11: a pass-through storage) |
-| `calc/batch.py` `output_storage` | One output storage per unit |
-| `calc/consign.py` `consignment_route` | One storage feeds each distribution block |
+| ~~`calc/batch.py` `output_storage`~~ | ~~One output storage per unit~~ (phase 12: `output_storages`; the single-chain optimiser still uses `output_storage`) |
+| `calc/consign.py` `consignment_route` | One storage feeds each distribution block (kept: validated by `distribution_single_product`) |
 | `optimise/batching.py` | One unit per renewable pool; the product feeds one downstream unit with one feed |
 | `optimise/allocate.py` `feed_storage` | One product feed per downstream unit; one downstream stage |
 | `optimise/pipeline.py` `bound` | Bound reported only for a single downstream stage |
@@ -444,7 +444,12 @@ no cycles (existing); every final product reachable from a unit; a distribution 
 storages of one product. Editor: ports accept several connections; pass-through links drawn
 as dashed lines; per-product colouring. Test plants 1 and 2 load unchanged.
 
-**Phase 12 — Calculator and traceability.** Remove the single-output and single-storage
+**Phase 12 — Calculator and traceability.** *Done 2026-10-19:* decision sets carry
+`output_allocations`; ledgers are keyed by storage and batch, so a split batch sits in every
+storage it went to; feed draws on the storage that feeds the target unit; new checks
+`output_split` and `pass_through_closes`; records show where each batch's RFNBO went and
+which storage each feed came through. Test case 3 and the reference's hourly and shortfall
+cases reproduce to 1e-6. Plan: Remove the single-output and single-storage
 assumptions listed in §10.1. Split outputs create one ledger entry per destination. Pass-through
 ledgers close at zero. New checks: split output adds up to production; pass-through ledger
 closes at zero; renewable pool across all units (existing check, now exercised). Traceability

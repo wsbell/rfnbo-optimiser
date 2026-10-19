@@ -106,7 +106,7 @@ def consignment_route(
 def compute_consignments(
     cfg: PlantConfig,
     decisions: Decisions,
-    ledger_lines: Mapping[str, tuple[str, LedgerLine]],  # batch -> (storage, line)
+    ledger_lines: Mapping[tuple[str, str], LedgerLine],  # (storage, batch) -> line
 ) -> list[ConsignmentResult]:
     threshold = cfg.settings.rfnbo_threshold_gCO2e_per_MJ
     by_cons: dict[str, list[AggregatedBatchSpec]] = {c.id: [] for c in decisions.consignments}
@@ -126,7 +126,7 @@ def _consignment(
     cfg: PlantConfig,
     spec: ConsignmentSpec,
     aggs: list[AggregatedBatchSpec],
-    ledger_lines: Mapping[str, tuple[str, LedgerLine]],
+    ledger_lines: Mapping[tuple[str, str], LedgerLine],
     threshold: float,
 ) -> ConsignmentResult:
     out, dist, store = consignment_route(cfg, spec.output)
@@ -134,9 +134,13 @@ def _consignment(
     for agg in aggs:
         parts: list[AggregatedPart] = []
         for p in agg.parts:
-            if p.batch not in ledger_lines:
+            # The consignment's own storage first; another ledger holding the batch is
+            # reported by the consignment_source check.
+            held = [k for k in ledger_lines if k[1] == p.batch]
+            if not held:
                 raise CalculationError(f"aggregated batch {agg.id}: {p.batch} is not in a ledger")
-            storage, line = ledger_lines[p.batch]
+            storage = store.id if (store.id, p.batch) in ledger_lines else held[0][0]
+            line = ledger_lines[storage, p.batch]
             parts.append(
                 AggregatedPart(
                     batch=p.batch,

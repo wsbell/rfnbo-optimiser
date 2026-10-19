@@ -219,7 +219,7 @@ def test_minimise_mode_variant(case: str) -> None:
             if kg
         ],
     )
-    lines = {x.batch: (led.storage, x) for led in run.ledgers for x in led.lines}
+    lines = {(led.storage, x.batch): x for led in run.ledgers for x in led.lines}
     (c,) = compute_consignments(run.config, decisions, lines)
     approx(c.allocated_kg, v["volume_kg"], "V1 volume")
     approx(c.shipped_ghg_gCO2e_per_MJ, v["shipped_ghg"], "V1 shipped GHG")

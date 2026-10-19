@@ -15,9 +15,10 @@ from rfnbo.calc.ledger import (
     LedgerLine,
     LedgerResult,
     Reconciliation,
-    batch_storage,
+    batch_storages,
     compute_ledgers,
     compute_reconciliation,
+    feed_storage_for,
 )
 from rfnbo.calc.weights import StorageWeight, storage_weights
 from rfnbo.config.schema import PlantConfig
@@ -31,12 +32,20 @@ class RunResult:
     frame: Frame
     decisions: Decisions
     batches: dict[str, BatchResult]
-    storage_of: dict[str, str]
+    storage_of: dict[str, str]  # a batch's (first) storage
     ledgers: list[LedgerResult]
     reconciliation: list[Reconciliation]
     consignments: list[ConsignmentResult]
     storage_weights: dict[str, StorageWeight] = field(default_factory=dict)
+    storages_of: dict[str, tuple[str, ...]] = field(default_factory=dict)  # every storage
     checks: list[CheckResult] = field(default_factory=list)
+
+    def feed_storage(self, source: str, target: str) -> str:
+        """The storage a feed allocation from ``source`` into ``target`` draws on."""
+        return feed_storage_for(self.config, self.storages_of, source, self.batches[target].unit)
+
+    def line(self, storage: str, batch: str) -> LedgerLine | None:
+        return next((x for x in self.ledger(storage).lines if x.batch == batch), None)
 
     @property
     def passed(self) -> bool:
@@ -70,10 +79,10 @@ class RunResult:
 
 def calculate(cfg: PlantConfig, frame: Frame, decisions: Decisions) -> RunResult:
     batches = compute_batches(cfg, frame, decisions)
-    storage_of = batch_storage(cfg, batches)
+    storages_of = batch_storages(cfg, batches)
     ledgers = compute_ledgers(cfg, frame, batches, decisions)
-    lines: dict[str, tuple[str, LedgerLine]] = {
-        x.batch: (ledger.storage, x) for ledger in ledgers for x in ledger.lines
+    lines: dict[tuple[str, str], LedgerLine] = {
+        (ledger.storage, x.batch): x for ledger in ledgers for x in ledger.lines
     }
     consignments = compute_consignments(cfg, decisions, lines)
     run = RunResult(
@@ -81,7 +90,8 @@ def calculate(cfg: PlantConfig, frame: Frame, decisions: Decisions) -> RunResult
         frame=frame,
         decisions=decisions,
         batches=batches,
-        storage_of=storage_of,
+        storage_of={b: s[0] for b, s in storages_of.items()},
+        storages_of=storages_of,
         ledgers=ledgers,
         reconciliation=compute_reconciliation(cfg, frame),
         consignments=consignments,

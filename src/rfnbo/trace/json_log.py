@@ -78,6 +78,7 @@ def batch_record(
         rec["feed"] = [
             {
                 "batch": f.source_batch,
+                "via": run.feed_storage(f.source_batch, b.id),
                 "qty": f.kg,
                 "uom": "kg",
                 "energy_MJ": f.energy_MJ,
@@ -108,6 +109,12 @@ def batch_record(
         "lhv": b.lhv_MJ_per_kg,
         "lhv_uom": "MJ/kg",
         "energy_MJ": b.energy_MJ,
+        # Where the batch's RFNBO entered a ledger: one storage, or each part of a split output.
+        "to": [
+            {"storage": s, "rfnbo_kg": x.in_kg}
+            for s in run.storages_of.get(b.id, ())
+            if (x := run.line(s, b.id)) is not None
+        ],
     }
     rec.update(
         {
@@ -122,7 +129,14 @@ def batch_record(
             "rfnbo_MJ": b.rfnbo_MJ,
             "formula": FORMULA_DOWNSTREAM if downstream_unit else FORMULA_ELECTROLYTIC,
             "lineage": {
-                "upstream": [{"batch": f.source_batch, "kg": f.kg} for f in b.feed],
+                "upstream": [
+                    {
+                        "batch": f.source_batch,
+                        "via": run.feed_storage(f.source_batch, b.id),
+                        "kg": f.kg,
+                    }
+                    for f in b.feed
+                ],
                 "downstream": [{"to": e.target, "kind": e.kind, "kg": e.kg} for e in downstream],
             },
             "checks": [

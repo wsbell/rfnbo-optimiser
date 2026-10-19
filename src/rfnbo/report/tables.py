@@ -163,7 +163,9 @@ def feed_matrix(run: RunResult, unit: ProcessingUnit) -> Table:
     for a in run.decisions.feed:
         feed[a.source, a.target] += a.kg
     target_ids = {t.id for t in targets}
-    store_ids = {run.storage_of[a.source] for a in run.decisions.feed if a.target in target_ids}
+    store_ids = {
+        run.feed_storage(a.source, a.target) for a in run.decisions.feed if a.target in target_ids
+    }
     lines = [x for led in run.ledgers if led.storage in store_ids for x in led.lines]
     cols = [
         _c("batch", "Upstream batch", kind="text"),

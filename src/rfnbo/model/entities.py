@@ -43,6 +43,15 @@ class FeedAllocation(_Model):
     kg: float = Field(gt=0)
 
 
+class OutputAllocation(_Model):
+    """RFNBO kg of a batch assigned to one of its unit's metered output flows, when the unit
+    splits its output between several destinations (build plan §10.2 rule 4)."""
+
+    batch: str
+    flow: str  # flow id from the unit to a storage
+    kg: float = Field(ge=0)
+
+
 class RenewableAllocation(_Model):
     """Renewable kWh per interval given to one unit, when several units share the pool."""
 
@@ -82,6 +91,7 @@ class Decisions(_Model):
     batches: list[BatchSpec]
     feed: list[FeedAllocation] = Field(default_factory=list)
     renewable_allocations: list[RenewableAllocation] = Field(default_factory=list)
+    output_allocations: list[OutputAllocation] = Field(default_factory=list)
     consignments: list[ConsignmentSpec] = Field(default_factory=list)
     aggregated_batches: list[AggregatedBatchSpec] = Field(default_factory=list)
     write_offs: list[WriteOff] = Field(default_factory=list)
