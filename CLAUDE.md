@@ -78,4 +78,5 @@ uv run rfnbo validate examples/test_plant.json
   by hand (test case 2 uses `--rule-2-5`). Test case 3 (multi-step plant): `build_tc3_workbook.py`
   writes the workbook (recalculate it with LibreOffice before committing), `tc3_reference.py` is
   the independent check, `export_tc3.py` writes `tc3.*.json`; `tc3.plant.json` is test plant 3
-  (the calculator reproduces it in `test_tc3_calc.py`).
+  (the calculator reproduces it in `test_tc3_calc.py`). `benchmark_networks.py` times the
+  optimiser on test plant 3 and a five-unit plant (`--profile` for where the time goes).

@@ -331,3 +331,33 @@ def test_reference_cases_reproduce_in_the_app(case: str) -> None:
         approx(got.write_off_kg, led["write_off_kg"], f"{storage} write-off")
         approx(got.carried_kg, led["carried_kg"], f"{storage} carried")
     approx(run.carried_value_MJ, want["objectives"]["carried_value_MJ"], "carried value")
+
+
+def test_every_consignment_traces_through_every_step_to_interval_data() -> None:
+    """Phase 15: drill-down from each consignment through the conditioning unit and the split
+    electrolyser output to 15-minute data, on a run the optimiser made."""
+    from tests.golden.test_pipeline_network_golden import _optimised
+
+    run = _optimised("base").optimised.run
+    for c in run.consignments:
+        paths = V.trace_paths(run, c.id)
+        assert paths and all(len(p) == 4 for p in paths), (c.id, paths)
+        for path in paths:
+            _, _, conditioning, electrolysis = path
+            assert run.batches[conditioning].kind == "downstream"
+            assert run.batches[electrolysis].kind == "electrolytic"
+            for bid in (conditioning, electrolysis):
+                assert V.batch_view(run, bid)["recompute_ok"], bid
+                iv = V.interval_view(run, bid)
+                assert iv.consistent and len(iv.table.rows) == run.batches[bid].intervals, bid
+        product = {"lh2_storage": "LH2", "ch2_storage": "CH2"}[c.source_storage]
+        assert V.consignment_view(run, c.id)["summary"]["product"] == product
+    e = next(b for b in run.batches.values() if b.unit == "electrolyser")
+    view = V.batch_view(run, e.id)
+    assert {o["storage"] for o in view["outputs"]} == {"h2_buffer", "pt_compressor"}
+    liq = next(b for b in run.batches.values() if b.unit == "liquefier")
+    assert {u["via"] for u in V.batch_view(run, liq.id)["upstream"]} == {"h2_buffer"}
+    products = {r["storage"]: r for r in V.overview(run)["products"]}
+    assert products["lh2_storage"]["kind"] == "final product"
+    assert products["pt_compressor"]["kind"] == "pass-through"
+    assert products["h2_buffer"]["kind"] == "intermediate"

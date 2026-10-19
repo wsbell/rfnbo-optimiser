@@ -492,7 +492,17 @@ back-propagated from each final product to every intermediate unit (as the 13.45
 is derived today), iterated until stable; report the gap to an upper bound from the LP with
 intermediate GHGs fixed at their best values. Objective 2 as settled in §10.3 question 1.
 
-**Phase 15 — Stage C, reports and UI.** Stage C per final-product storage; consignments carry a
+**Phase 15 — Stage C, reports and UI.** *Done 2026-10-19:* stage C runs per final-product
+storage (each distribution block is fed by storages of one product, so every consignment
+carries one product, shown in reports and the UI). New reports: Products (each storage's RFNBO
+in, fed on, consigned, written off and carried, with its weight and carried value), Split
+outputs, and Renewable by batch for a shared pool; the per-period matching table shows only
+hourly-batched units under hourly correlation. The results browser shows products, split
+outputs and the storage each feed came through; a browser test follows CA (LH₂) through the
+liquefier and the split electrolyser batch to 15-minute data. Baseline on networks: phase 14.
+Performance (`tests/golden/benchmark_networks.py`): test plant 3 about 12 s per quarter, a
+five-unit plant about 13 s, every check passing; stage A's batching search is about 90% of
+the time, so it is where to start if larger plants need speed. Plan: Stage C per final-product storage; consignments carry a
 product; the baseline (one batch per unit per month, FIFO) on networks; reports grouped by unit
 and product; drill-down from a consignment through every step to 15-minute data. Measure the
 performance budget on test plant 3 and a five-unit plant; profile before optimising.

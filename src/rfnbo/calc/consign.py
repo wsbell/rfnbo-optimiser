@@ -57,6 +57,7 @@ class ConsignmentResult:
     customer: str
     distribution: str
     source_storage: str
+    product: str  # the source storage's product: one consignment, one product
     ship_date: dt.date
     volume_kg: float
     target_gCO2e_per_MJ: float | None
@@ -159,6 +160,7 @@ def _consignment(
         customer=out.customer,
         distribution=dist.id,
         source_storage=store.id,
+        product=store.product,
         ship_date=spec.ship_date,
         volume_kg=spec.volume_kg,
         target_gCO2e_per_MJ=spec.target_gCO2e_per_MJ,

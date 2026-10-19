@@ -14,7 +14,7 @@ from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
 from rfnbo.calc.calculator import RunResult
-from rfnbo.config.schema import InputBlock, ProcessingUnit
+from rfnbo.config.schema import InputBlock, ProcessingUnit, StorageUnit
 from rfnbo.data import calendar as cal
 from rfnbo.trace import lineage
 
@@ -231,6 +231,7 @@ def consignment_summary(run: RunResult) -> Table:
     cols = (
         _c("consignment", "Consignment", kind="text"),
         _c("customer", "Customer", kind="text"),
+        _c("product", "Product", kind="text"),
         _c("ship_date", "Ship date", kind="text"),
         _c("volume_kg", "Volume", "kg"),
         _c("energy_MJ", "Energy", "MJ"),
@@ -251,6 +252,7 @@ def consignment_summary(run: RunResult) -> Table:
             {
                 "consignment": c.id,
                 "customer": c.customer,
+                "product": c.product,
                 "ship_date": c.ship_date.isoformat(),
                 "volume_kg": c.volume_kg,
                 "energy_MJ": c.energy_MJ,
@@ -280,6 +282,7 @@ def consignment_summary(run: RunResult) -> Table:
 def consignment_parts(run: RunResult) -> Table:
     cols = (
         _c("consignment", "Consignment", kind="text"),
+        _c("product", "Product", kind="text"),
         _c("aggregated", "Aggregated batch", kind="text"),
         _c("month", "Production month", kind="text"),
         _c("batch", "Batch", kind="text"),
@@ -292,6 +295,7 @@ def consignment_parts(run: RunResult) -> Table:
     rows = [
         {
             "consignment": c.id,
+            "product": c.product,
             "aggregated": a.id,
             "month": p.month,
             "batch": p.batch,
@@ -306,6 +310,147 @@ def consignment_parts(run: RunResult) -> Table:
         for p in a.parts
     ]
     return Table("Consignment batches", "Batches allocated to consignments", cols, rows)
+
+
+# ---- products and split outputs -------------------------------------------------------------
+
+
+def product_summary(run: RunResult) -> Table:
+    """Each storage's product: RFNBO in, fed on, consigned, written off and carried, with the
+    storage weight and the carried value (objective 2)."""
+    cfg = run.config
+    rows = []
+    for led in run.ledgers:
+        s = cfg.block(led.storage)
+        assert isinstance(s, StorageUnit)
+        final = any(cfg.block(f.target).kind == "distribution" for f in cfg.flows_out_of(s.id))
+        kind = "pass-through" if s.pass_through else ("final product" if final else "intermediate")
+        w = run.storage_weights[s.id].weight if s.id in run.storage_weights else None
+        lhv = led.lines[0].lhv_MJ_per_kg if led.lines else 0.0
+        carried_mj = sum(x.carried_kg * x.lhv_MJ_per_kg for x in led.lines if x.compliant)
+        rows.append(
+            {
+                "storage": s.id,
+                "product": s.product,
+                "kind": kind,
+                "in_kg": led.opening_kg + led.produced_kg,
+                "out_feed_kg": led.out_feed_kg,
+                "out_consignment_kg": led.out_consignment_kg,
+                "write_off_kg": led.write_off_kg,
+                "noncompliant_kg": led.noncompliant_closing_kg,
+                "carried_kg": led.carried_kg,
+                "carried_ghg": led.carried_ghg_gCO2e_per_MJ,
+                "lhv": lhv,
+                "weight": w,
+                "value_MJ": None if w is None else carried_mj * w,
+            }
+        )
+    cols = (
+        _c("storage", "Storage", kind="text"),
+        _c("product", "Product", kind="text"),
+        _c("kind", "Role", kind="text"),
+        _c("in_kg", "RFNBO in (opening + produced)", "kg"),
+        _c("out_feed_kg", "Fed to downstream units", "kg"),
+        _c("out_consignment_kg", "Consigned", "kg"),
+        _c("write_off_kg", "Written off", "kg"),
+        _c("noncompliant_kg", "Of which non-compliant", "kg"),
+        _c("carried_kg", "Carried forward", "kg"),
+        _c("carried_ghg", "GHG of carried RFNBO", "gCO2e/MJ"),
+        _c("lhv", "LHV", "MJ/kg"),
+        _c("weight", "Storage weight (MJ final product per MJ)", ""),
+        _c("value_MJ", "Carried value (objective 2)", "MJ"),
+    )
+    return Table(
+        "Products",
+        "RFNBO by storage and product",
+        cols,
+        rows,
+        "Carried value = compliant RFNBO carried forward × LHV × storage weight; the weight is "
+        "1 for a final product and the downstream energy yield for an intermediate.",
+    )
+
+
+def output_splits(run: RunResult) -> Table:
+    """Where each batch of a unit that splits its output sent its RFNBO (§10.2 rule 4)."""
+    cfg = run.config
+    rows = []
+    for b in run.batches.values():
+        flows = cfg.flows_out_of(b.unit)
+        if len(flows) < 2:
+            continue
+        for f in flows:
+            metered = float(run.frame.series[f.series or ""][b.start_index : b.end_index].sum())
+            line = run.line(f.target, b.id)
+            rows.append(
+                {
+                    "batch": b.id,
+                    "unit": b.unit,
+                    "flow": f.id,
+                    "storage": f.target,
+                    "metered_kg": metered,
+                    "rfnbo_kg": line.in_kg if line else 0.0,
+                    "share": (line.in_kg / metered) if line and metered else 0.0,
+                }
+            )
+    cols = (
+        _c("batch", "Batch", kind="text"),
+        _c("unit", "Unit", kind="text"),
+        _c("flow", "Output flow", kind="text"),
+        _c("storage", "To storage", kind="text"),
+        _c("metered_kg", "Metered", "kg"),
+        _c("rfnbo_kg", "RFNBO assigned", "kg"),
+        _c("share", "RFNBO share of the flow", ""),
+    )
+    return Table(
+        "Split outputs",
+        "RFNBO assigned to each output flow",
+        cols,
+        rows,
+        "Each flow receives at most its metered quantity; a batch's parts add up to its RFNBO.",
+    )
+
+
+def renewable_by_batch(run: RunResult) -> Table:
+    """Renewable allocated, electricity and matched kWh per batch of every unit on a shared
+    pool (matching is within each batch, whatever its length)."""
+    from rfnbo.calc.batch import renewable_series
+
+    alloc = renewable_series(run.config, run.frame, run.decisions)
+    tz = run.frame.timezone
+    rows = [
+        {
+            "unit": b.unit,
+            "batch": b.id,
+            "start": _local(b.start, tz),
+            "end": _local(b.end, tz),
+            "allocated_kWh": float(alloc[b.unit][b.start_index : b.end_index].sum())
+            if b.unit in alloc
+            else 0.0,
+            "electricity_kWh": b.electricity_kWh,
+            "matched_kWh": b.renewable_matched_kWh,
+            "grid_kWh": b.nonrenewable_kWh,
+        }
+        for b in sorted(run.batches.values(), key=lambda b: (b.unit, b.start))
+        if b.unit in alloc
+    ]
+    cols = (
+        _c("unit", "Unit", kind="text"),
+        _c("batch", "Batch", kind="text"),
+        _c("start", "Start (local)", kind="datetime"),
+        _c("end", "End (local)", kind="datetime"),
+        _c("allocated_kWh", "Renewable allocated", "kWh"),
+        _c("electricity_kWh", "Electricity used", "kWh"),
+        _c("matched_kWh", "Renewable matched", "kWh"),
+        _c("grid_kWh", "Non-renewable", "kWh"),
+    )
+    return Table(
+        "Renewable by batch",
+        "Shared renewable pool: allocation and matching per batch",
+        cols,
+        rows,
+        "Matched = min(allocated, electricity) within the batch. Per interval, allocations to "
+        "all units never exceed the renewable available.",
+    )
 
 
 # ---- renewable matching -------------------------------------------------------------------
@@ -337,6 +482,10 @@ def renewable_matching(run: RunResult) -> Table:
     def hourly(ts: dt.datetime) -> bool:
         return lhv_units and cal.hourly_correlation_applies(ts, tz, switch)
 
+    if any(hourly(ts) for ts in frame.index):
+        # Monthly batches of conditioning units do not fit hourly periods; they are in the
+        # per-batch table.
+        units = [u for u in units if u.electricity_adds_to_lhv]
     available: dict[str, float] = defaultdict(float)
     for p in pools:
         values = frame.series[p.series or ""]
@@ -367,7 +516,8 @@ def renewable_matching(run: RunResult) -> Table:
         tuple(cols),
         rows,
         "Matching is within each batch; a period's unused kWh were available but not "
-        "matched by any batch.",
+        "matched by the units shown. Under hourly correlation only hourly-batched units are "
+        "shown; units with month-long batches on a shared pool are in Renewable by batch.",
     )
 
 
@@ -643,11 +793,15 @@ def all_tables(
             for a in run.decisions.feed
         ):
             tables.append(feed_matrix(run, unit))
+    if any(len(run.config.flows_out_of(u.id)) > 1 for u in unit_order(run.config)):
+        tables.append(output_splits(run))
     tables += [
+        product_summary(run),
         lineage_table(run),
         consignment_summary(run),
         consignment_parts(run),
         renewable_matching(run),
+        *([renewable_by_batch(run)] if run.decisions.renewable_allocations else []),
         ledger_summary(run),
         ledger_lines(run),
         reconciliation(run),

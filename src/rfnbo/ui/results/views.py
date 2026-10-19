@@ -116,6 +116,7 @@ def overview(run: RunResult) -> dict[str, Any]:
         "objectives": obj,
         "units": units,
         "consignments": T.consignment_summary(run).rows,
+        "products": T.product_summary(run).rows,
         "ledgers": T.ledger_summary(run).rows,
         "failures": [
             {"check": c.name, "subject": c.subject, "detail": c.detail, "reference": c.reference}
@@ -197,9 +198,11 @@ def batch_view(run: RunResult, batch_id: str) -> dict[str, Any]:
         "kind": b.kind,
         "id": b.id,
         "record": rec,
+        "outputs": rec["output"]["to"],  # each storage the batch's RFNBO went to
         "upstream": [
             {
                 "batch": f.source_batch,
+                "via": run.feed_storage(f.source_batch, b.id),
                 "kg": f.kg,
                 "MJ": f.energy_MJ,
                 "ghg": f.ghg_gCO2e_per_MJ,

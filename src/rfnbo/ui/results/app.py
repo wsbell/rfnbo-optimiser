@@ -184,6 +184,7 @@ def run_page(run_id: str) -> None:
         [
             ("consignment", "Consignment", ""),
             ("customer", "Customer", ""),
+            ("product", "Product", ""),
             ("ship_date", "Ship date", ""),
             ("volume_kg", "Volume", "kg"),
             ("target", "Target", "gCO2e/MJ"),
@@ -207,6 +208,24 @@ def run_page(run_id: str) -> None:
         ],
         view["units"],
         testid="units",
+    )
+
+    ui.label("Products").classes("text-base font-medium mt-4")
+    _table(
+        [
+            ("storage", "Storage", ""),
+            ("product", "Product", ""),
+            ("kind", "Role", ""),
+            ("in_kg", "RFNBO in", "kg"),
+            ("out_feed_kg", "Fed on", "kg"),
+            ("out_consignment_kg", "Consigned", "kg"),
+            ("write_off_kg", "Written off", "kg"),
+            ("carried_kg", "Carried", "kg"),
+            ("weight", "Weight", "num"),
+            ("value_MJ", "Carried value", "MJ"),
+        ],
+        view["products"],
+        testid="products",
     )
 
     ui.label("Storage ledgers").classes("text-base font-medium mt-4")
@@ -259,9 +278,9 @@ def consignment_page(run_id: str, consignment_id: str) -> None:
         return
     s = view["summary"]
     _crumbs(("Sealed runs", "/"), (run_id, f"/run/{run_id}"), (consignment_id, None))
-    ui.label(f"Consignment {consignment_id} · {s['customer']} · ships {s['ship_date']}").classes(
-        "text-lg font-medium"
-    )
+    ui.label(
+        f"Consignment {consignment_id} · {s['customer']} · {s['product']} · ships {s['ship_date']}"
+    ).classes("text-lg font-medium")
     with ui.row().classes("gap-4"):
         for label, value in (
             ("Volume (kg)", fmt(s["volume_kg"])),
@@ -360,12 +379,20 @@ def batch_page(run_id: str, batch_id: str) -> None:
             rec["inputs"],
             testid="inputs",
         )
+        if len(view["outputs"]) > 1:
+            ui.label("Split output (RFNBO to each storage)").classes("text-base font-medium mt-4")
+            _table(
+                [("storage", "Storage", ""), ("rfnbo_kg", "RFNBO", "kg")],
+                view["outputs"],
+                testid="outputs",
+            )
         if view["upstream"]:
             ui.label("Upstream batches (RFNBO feed)").classes("text-base font-medium mt-4")
             rows = [dict(u, href=f"/run/{run_id}/batch/{u['batch']}") for u in view["upstream"]]
             _table(
                 [
                     ("batch", "Batch", ""),
+                    ("via", "Via storage", ""),
                     ("kg", "Feed", "kg"),
                     ("MJ", "Energy", "MJ"),
                     ("ghg", "GHG", "gCO2e/MJ"),
