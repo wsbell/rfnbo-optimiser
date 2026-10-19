@@ -160,16 +160,16 @@ def downstream(cfg: PlantConfig, frame: Frame, unit: ProcessingUnit) -> Downstre
     if len(units) > 1:
         # Several units take the product (a split output, or one storage feeding several):
         # the blend must suit the most demanding of them; their feed adds up (phase 13).
-        parts = [_downstream_of(cfg, frame, unit, u) for u in units]
+        parts = [downstream_of(cfg, frame, unit, u) for u in units]
         return Downstream(
             ",".join(p.unit for p in parts),
             min(p.limit_gCO2e_per_MJ for p in parts),
             sum(p.cap_MJ for p in parts),
         )
-    return _downstream_of(cfg, frame, unit, units[0])
+    return downstream_of(cfg, frame, unit, units[0])
 
 
-def _downstream_of(
+def downstream_of(
     cfg: PlantConfig, frame: Frame, unit: ProcessingUnit, down: ProcessingUnit
 ) -> Downstream:
     feed_flows = [
@@ -182,12 +182,18 @@ def _downstream_of(
     out_mj = float(s[down.production_series or ""].sum()) * down.lhv_MJ_per_kg
     on = cal.local_date(frame.index[0], frame.timezone)
     own = 0.0
+    # A downstream unit on the renewable pool is assumed covered by the pool's surplus (the
+    # pool split gives it renewable; stage B enforces each batch's actual limit).
+    on_pool = any(
+        isinstance(b, InputBlock) and b.renewable
+        for b in (cfg.block(f.source) for f in cfg.flows_into(down.id))
+    )
     for f in cfg.flows_into(down.id):
         b = cfg.block(f.source)
         if not isinstance(b, InputBlock):
             continue
         if f.material == ELECTRICITY:
-            if not b.renewable:
+            if not b.renewable and not on_pool:
                 own += (
                     float(s[down.electricity_series or ""].sum()) * b.emission_factor_at(on).value
                 )

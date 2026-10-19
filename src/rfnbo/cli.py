@@ -161,6 +161,7 @@ def _optimise(args: argparse.Namespace) -> int:
         d = sealed.seal(outcome.run, out / name, flags)
         ids[name] = sealed.load_record(d)["run_id"]
     bound = result.bound()
+    vb = result.value_bound()
     summary = {
         "run_ids": ids,
         "feasible": result.feasible,
@@ -183,6 +184,11 @@ def _optimise(args: argparse.Namespace) -> int:
         "bound": None
         if bound is None
         else {"upper_kg": bound.upper_kg, "achieved_kg": bound.achieved_kg, "gap": bound.gap},
+        "value_bound": {
+            "upper_MJ": vb.upper_MJ,
+            "achieved_MJ": vb.achieved_MJ,
+            "gap": vb.gap,
+        },
         "log": result.log,
     }
     (out / "comparison.json").write_text(json.dumps(summary, indent=1) + "\n", encoding="utf-8")
@@ -198,6 +204,7 @@ def _optimise(args: argparse.Namespace) -> int:
     print(f"{'batches':>24} {o.batches:>18,} {b.batches:>18,}")
     if bound is not None:
         print(f"upper bound for this batching {bound.upper_kg:,.1f} kg (gap {bound.gap:.4%})")
+    print(f"carried value bound {vb.upper_MJ:,.1f} MJ (gap {vb.gap:.4%})")
     for s in result.shortfalls:
         print(
             f"  {s.consignment} not met: {s.reason}; achievable {s.achievable_kg:,.1f} kg",

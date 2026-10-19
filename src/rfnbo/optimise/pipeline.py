@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 
 from rfnbo.calc import RunResult, calculate
 from rfnbo.calc.batch import unit_order
-from rfnbo.config.schema import PlantConfig
+from rfnbo.config.schema import PlantConfig, ProcessingUnit, StorageUnit
 from rfnbo.data.quality import Frame
 from rfnbo.model.entities import ConsignmentSpec, Decisions, FeedAllocation
 from rfnbo.optimise import allocate
@@ -110,6 +110,10 @@ class OptimisationResult:
     def feasible(self) -> bool:
         return not self.shortfalls
 
+    def value_bound(self) -> ValueBound:
+        """Gap of objective 2 (carried value, MJ) to :func:`value_bound`; any plant."""
+        return value_bound(self.optimised.run)
+
     def bound(self) -> Bound | None:
         """Gap of the final RFNBO to stage A's relaxation (single downstream stage only)."""
         run = self.optimised.run
@@ -123,6 +127,53 @@ class OptimisationResult:
         product = sum(b.product_kg for b in down)
         upper = self.batching.units[0].score.feedable_MJ * product / consumed
         return Bound(upper, self.optimised.objectives.final_rfnbo_kg)
+
+
+@dataclass(frozen=True)
+class ValueBound:
+    """Upper bound on objective 2 (carried value, MJ of final product) and what was achieved."""
+
+    upper_MJ: float
+    achieved_MJ: float
+
+    @property
+    def gap(self) -> float:
+        return 0.0 if self.upper_MJ <= 0 else max(0.0, 1 - self.achieved_MJ / self.upper_MJ)
+
+
+def value_bound(run: RunResult) -> ValueBound:
+    """Upper bound on objective 2 (carried value, final-product MJ) for this batching, and the
+    value achieved. Each storage holds at most its measured inventory, and at most the RFNBO
+    that could ever enter it (every downstream batch fully RFNBO-fed, every split flow full)
+    less what its consignments take. Loose where product is counted in a storage and again
+    downstream; exact on test case 3."""
+    cfg = run.config
+    by_storage: dict[str, float] = {}
+    for led in run.ledgers:
+        s = cfg.block(led.storage)
+        assert isinstance(s, StorageUnit)
+        top = led.opening_kg
+        for f in cfg.flows_into(s.id):
+            unit = cfg.block(f.source)
+            if not isinstance(unit, ProcessingUnit):
+                continue
+            several = len(cfg.flows_out_of(unit.id)) > 1
+            for b in run.batches.values():
+                if b.unit != unit.id:
+                    continue
+                share = b.rfnbo_share if unit.electricity_adds_to_lhv else 1.0
+                kg = (
+                    float(run.frame.series[f.series or ""][b.start_index : b.end_index].sum())
+                    if several
+                    else b.product_kg
+                )
+                top += share * kg
+        consigned = sum(c.volume_kg for c in run.consignments if c.source_storage == s.id)
+        held = max(0.0, min(led.physical_kg, top - consigned))
+        weight = run.storage_weights[s.id].weight or 0.0
+        by_storage[s.id] = held * led.lines[0].lhv_MJ_per_kg * weight if led.lines else 0.0
+    achieved = run.carried_value_MJ or 0.0
+    return ValueBound(sum(by_storage.values()), achieved)
 
 
 def _assemble(cfg: PlantConfig, frame: Frame, decisions: Decisions) -> Outcome:
@@ -142,22 +193,45 @@ def _feed_all(
     log: list[str],
     kept: dict[str, dict[str, float]] | None = None,
 ) -> Decisions:
-    """Stage B for every downstream unit, upstream first."""
-    for unit in allocate.downstream_units(cfg, unit_order(cfg)):
+    """Stage B for every downstream unit, upstream first. Parallel units on one producer (and
+    a producer's split output) are allocated in one LP; units in series stage by stage."""
+    for stage in allocate.stages(cfg, unit_order(cfg)):
         current = calculate(cfg, frame, decisions)
-        plan = allocate.stage_b(
-            cfg, current, unit, weights.get(unit.id), floor, None if kept is None else kept[unit.id]
-        )
+        stage_ids = {u.id for u in stage}
+        targets = {b.id for b in current.batches.values() if b.unit in stage_ids}
+        others = [a for a in decisions.feed if a.target not in targets]
+        if not allocate.needs_network(cfg, stage):
+            (unit,) = stage
+            plan = allocate.stage_b(
+                cfg,
+                current,
+                unit,
+                weights.get(unit.id),
+                floor,
+                None if kept is None else kept[unit.id],
+            )
+            log.append(
+                f"stage B {unit.id}: {plan.status}, RFNBO output {plan.rfnbo_kg:,.1f} kg "
+                f"from {len(plan.feed)} allocations"
+            )
+            decisions = decisions.model_copy(update={"feed": others + plan.feed})
+            continue
+        merged_w = {b: v for u in stage for b, v in weights.get(u.id, {}).items()}
+        merged_k = None if kept is None else {b: v for u in stage for b, v in kept[u.id].items()}
+        net = allocate.stage_b_network(cfg, current, stage, merged_w, floor, merged_k)
         log.append(
-            f"stage B {unit.id}: {plan.status}, RFNBO output {plan.rfnbo_kg:,.1f} kg "
-            f"from {len(plan.feed)} allocations"
+            f"stage B {'+'.join(net.units)}: {net.status}, RFNBO output {net.rfnbo_kg:,.1f} kg "
+            f"from {len(net.feed)} allocations, {len(net.outputs)} output splits"
         )
-        others = [
-            a
-            for a in decisions.feed
-            if a.target not in {b.id for b in current.batches.values() if b.unit == unit.id}
-        ]
-        decisions = decisions.model_copy(update={"feed": others + plan.feed})
+        split = {o.batch for o in net.outputs} | {
+            b.id
+            for b in current.batches.values()
+            if b.unit in {p for u in stage for p in allocate.producers(cfg, u)}
+        }
+        kept_outputs = [o for o in decisions.output_allocations if o.batch not in split]
+        decisions = decisions.model_copy(
+            update={"feed": others + net.feed, "output_allocations": kept_outputs + net.outputs}
+        )
     return decisions
 
 

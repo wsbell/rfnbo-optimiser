@@ -353,8 +353,8 @@ decisions, the lineage graph) already works on networks.
 | ~~`calc/batch.py` `output_storage`~~ | ~~One output storage per unit~~ (phase 12: `output_storages`; the single-chain optimiser still uses `output_storage`) |
 | `calc/consign.py` `consignment_route` | One storage feeds each distribution block (kept: validated by `distribution_single_product`) |
 | `optimise/batching.py` | ~~One unit per renewable pool~~ (phase 13: `optimise/pool.py`); one electrolytic unit per pool |
-| `optimise/allocate.py` `feed_storage` | One product feed per downstream unit; one downstream stage |
-| `optimise/pipeline.py` `bound` | Bound reported only for a single downstream stage |
+| ~~`optimise/allocate.py` `feed_storage`~~ | ~~One downstream stage~~ (phase 14: `stages`, `stage_b_network`) |
+| ~~`optimise/pipeline.py` `bound`~~ | ~~Single downstream stage only~~ (phase 14: `value_bound` for any plant) |
 
 ### 10.2 Domain rules to add (decided 2026-10-17; see §10.3)
 
@@ -474,7 +474,17 @@ Conditioning units keep one batch per month unless splitting lowers final-produc
 Acceptance includes: the electrolyser's results are unchanged when no other unit draws on the
 pool.
 
-**Phase 14 — Stage B on networks.** Parallel units sharing one storage: one LP with joint
+**Phase 14 — Stage B on networks.** *Done 2026-10-19:* downstream units are grouped into
+stages by the units that feed them. A stage of parallel units (or one fed through a split
+output) is one LP with joint availability rows and the split output's assignment as
+variables; units in series are solved stage by stage, each intermediate held to the blended-
+feed limit its downstream unit needs (back-propagated). Objectives as §2.8, with the value
+objective from the second pipeline round. A bound on objective 2 (each storage at most its
+measured inventory and its largest possible RFNBO inflow, less consignments) is reported for
+any plant. Test case 3: carried value equals the hand calculation (gap to the bound 0); the
+shortfall variant is beaten (19,427,373 vs 19,421,847 MJ); the infeasible target is reported on
+CA only. A series plant (H₂ → compressor → NH₃) meets every check. The baseline splits outputs
+pro rata to the metered flows. Plan: Parallel units sharing one storage: one LP with joint
 availability rows (linear, exact). Units in series: downstream GHG depends on the GHG of an
 intermediate batch, which depends on its own feed, so the joint problem is bilinear (a pooling
 problem). Approach: successive linear programmes in topological order, with GHG limits

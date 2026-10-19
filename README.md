@@ -23,7 +23,8 @@ plant dispatch.
 | 11 | Config, validation and editor for networks | done (split outputs, pass-through links, parallel units; test plant 3 draws and validates) |
 | 12 | Calculator and traceability on networks | done (reproduces test case 3 to 1e-6; split outputs, pass-through ledgers, lineage across steps) |
 | 13 | Optimiser stage A for several electricity users | done (shared renewable pool split per interval; test case 3 and its variants match the hand calculation) |
-| 14–15 | Multiple and parallel processing steps in feed allocation, consignments, reports and UI | planned; decisions settled (`docs/build-plan.md` §10.3) |
+| 14 | Optimiser stage B on networks | done (`rfnbo optimise` runs test plant 3 end to end and matches or beats test case 3; series plants supported) |
+| 15 | Stage C, reports and UI for several final products | planned; decisions settled (`docs/build-plan.md` §10.3) |
 | 16 | Purchased RFNBO with a proof of sustainability, allocated to unit inputs | planned; decisions settled (`docs/build-plan.md` §11.1) |
 | 17 | Plant data entry in the UI | planned (`docs/build-plan.md` §11.2) |
 

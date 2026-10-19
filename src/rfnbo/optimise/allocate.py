@@ -31,18 +31,21 @@ from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 
-from rfnbo.calc.batch import BatchResult, output_storage
+from rfnbo.calc.batch import BatchResult, output_storage, output_storages, storage_lhv
 from rfnbo.calc.calculator import RunResult
 from rfnbo.calc.consign import consignment_route
 from rfnbo.calc.ledger import LedgerLine, LedgerResult, rule_write_offs
 from rfnbo.config.schema import PlantConfig, ProcessingUnit, StorageUnit
+from rfnbo.data.quality import Frame
 from rfnbo.model.entities import (
     AggregatedBatchSpec,
     ConsignmentSpec,
     FeedAllocation,
+    OutputAllocation,
     Part,
     WriteOff,
 )
+from rfnbo.optimise.batching import downstream_of
 from rfnbo.optimise.lp import INF, LinearProgram
 
 MARGIN = 1e-7  # gCO2e/MJ kept below every limit, so solver tolerance never breaks a check
@@ -220,6 +223,252 @@ def stage_b(
     feed.sort(key=lambda a: (a.target, a.source))
     rfnbo = sum(rfnbo_coef[j] * final.x[j] for j in x.values() if final.x[j] > DROP_KG)
     return FeedPlan(unit.id, feed, rfnbo, final.status)
+
+
+@dataclass(frozen=True)
+class NetworkPlan:
+    units: list[str]
+    feed: list[FeedAllocation]
+    outputs: list[OutputAllocation]
+    rfnbo_kg: float  # RFNBO output of the stage's units
+    status: str
+
+
+def feed_storages(cfg: PlantConfig, unit: ProcessingUnit) -> list[StorageUnit]:
+    return [b for f in cfg.flows_into(unit.id) if isinstance(b := cfg.block(f.source), StorageUnit)]
+
+
+def producers(cfg: PlantConfig, unit: ProcessingUnit) -> frozenset[str]:
+    """Units that make the product ``unit`` takes from storage."""
+    return frozenset(
+        f.source
+        for s in feed_storages(cfg, unit)
+        for f in cfg.flows_into(s.id)
+        if isinstance(cfg.block(f.source), ProcessingUnit)
+    )
+
+
+def stages(cfg: PlantConfig, order: Sequence[ProcessingUnit]) -> list[list[ProcessingUnit]]:
+    """Downstream units grouped by the units that feed them, upstream first: parallel units
+    on one producer are allocated together (one LP); units in series one stage after another."""
+    groups: dict[frozenset[str], list[ProcessingUnit]] = {}
+    for u in downstream_units(cfg, order):
+        groups.setdefault(producers(cfg, u), []).append(u)
+    return list(groups.values())
+
+
+def needs_network(cfg: PlantConfig, stage: Sequence[ProcessingUnit]) -> bool:
+    """A stage that is not a single chain: several units, several feed storages, or a
+    producer that splits its output."""
+    if len(stage) > 1 or any(len(feed_storages(cfg, u)) > 1 for u in stage):
+        return True
+    return any(len(cfg.flows_out_of(p)) > 1 for u in stage for p in producers(cfg, u))
+
+
+def ghg_limit(cfg: PlantConfig, frame: Frame, unit: ProcessingUnit) -> float:
+    """GHG the unit's product may reach: the threshold for a final product; for an
+    intermediate, also the blended-feed limit of every unit it feeds (back-propagated)."""
+    threshold = cfg.settings.rfnbo_threshold_gCO2e_per_MJ
+    limit = threshold
+    for s in output_storages(cfg, unit.id):
+        for f in cfg.flows_out_of(s.id):
+            down = cfg.block(f.target)
+            if isinstance(down, ProcessingUnit):
+                limit = min(limit, downstream_of(cfg, frame, unit, down).limit_gCO2e_per_MJ)
+    return limit
+
+
+def stage_b_network(
+    cfg: PlantConfig,
+    run: RunResult,
+    units: Sequence[ProcessingUnit],
+    carried_weight: Mapping[str, float] | None = None,
+    min_rfnbo_kg: float | None = None,
+    kept_share: Mapping[str, float] | None = None,
+) -> NetworkPlan:
+    """Feed allocation for a stage of parallel units in one LP (build plan §10.4 phase 14).
+
+    Variables: feed x[(s, b), m] from batch b in storage s into downstream batch m; carried
+    k[(s, b)] (compliant only); and, for a producer that splits its output, o[b, flow]: the
+    RFNBO of b assigned to each output flow (§10.2 rule 4), within the flow's metered kg and
+    adding up to b's RFNBO. Availability rows are joint across the units, so the problem stays
+    linear and exact. Each downstream batch is held to its unit's GHG limit (threshold, or the
+    back-propagated limit for an intermediate product). Objectives as in :func:`stage_b`:
+    output (round 1) or value (later rounds), then carried value, then carried emissions, then
+    same-month feed.
+    """
+    ids = [u.id for u in units]
+    lp = LinearProgram()
+    frame = run.frame
+    stores = {s.id: s for u in units for s in feed_storages(cfg, u)}
+    targets = sorted(
+        (b for b in run.batches.values() if b.unit in ids and b.feed_consumed_MJ > 0),
+        key=lambda b: (b.unit, b.start),
+    )
+    fed_by = {u.id: {s.id for s in feed_storages(cfg, u)} for u in units}
+
+    # Sources: (storage, batch) with availability either fixed or an output-allocation variable.
+    o: dict[tuple[str, str], int] = {}
+    split_batches: dict[str, list[tuple[str, int]]] = defaultdict(list)
+    sources: dict[tuple[str, str], tuple[LedgerLine | None, BatchResult | None]] = {}
+    for sid in stores:
+        for ln in run.ledger(sid).lines:
+            if ln.origin == "opening" or len(run.storages_of.get(ln.batch, ())) == 1:
+                sources[sid, ln.batch] = (ln, None)
+        for f in cfg.flows_into(sid):
+            prod = cfg.block(f.source)
+            if not isinstance(prod, ProcessingUnit) or len(cfg.flows_out_of(prod.id)) < 2:
+                continue
+            for pb in run.batches.values():
+                if pb.unit != prod.id or pb.rfnbo_kg <= 0:
+                    continue
+                metered = float(frame.series[f.series or ""][pb.start_index : pb.end_index].sum())
+                jo = lp.var(upper=metered)
+                o[pb.id, f.id] = jo
+                split_batches[pb.id].append((f.id, jo))
+                sources[sid, pb.id] = (None, pb)
+    for bid, parts in split_batches.items():
+        rf = run.batches[bid].rfnbo_kg
+        lp.row([j for _, j in parts], [1.0] * len(parts), lower=rf, upper=rf)
+
+    def ghg(key: tuple[str, str]) -> float:
+        line, b = sources[key]
+        if line is not None:
+            return line.ghg_gCO2e_per_MJ
+        assert b is not None and b.ghg_gCO2e_per_MJ is not None
+        return b.ghg_gCO2e_per_MJ
+
+    def compliant(key: tuple[str, str]) -> bool:
+        line, b = sources[key]
+        return line.compliant if line is not None else bool(b and b.compliant)
+
+    def month(key: tuple[str, str]) -> str:
+        line, b = sources[key]
+        return line.month if line is not None else (b.month if b else "")
+
+    lhv = {sid: storage_lhv(cfg, sid) for sid in stores}
+    x: dict[tuple[tuple[str, str], str], int] = {}
+    for key in sources:
+        for t in targets:
+            if key[0] in fed_by[t.unit]:
+                x[key, t.id] = lp.var()
+    k = {key: lp.var() for key in sources if compliant(key)}
+    by_source: dict[tuple[str, str], list[int]] = defaultdict(list)
+    for (key, _), j in x.items():
+        by_source[key].append(j)
+    flow_into = {(f.target, f.source): f.id for f in cfg.flows if f.target in stores}
+    for key, (src_line, src_batch) in sources.items():
+        use = [*by_source[key], *([k[key]] if key in k else [])]
+        if not use:
+            continue
+        if src_line is not None:
+            lp.row(use, [1.0] * len(use), upper=src_line.in_kg - src_line.out_consignment_kg)
+        else:
+            assert src_batch is not None
+            j_o = o[src_batch.id, flow_into[key[0], src_batch.unit]]
+            lp.row([*use, j_o], [1.0] * len(use) + [-1.0], upper=0.0)
+    for sid in stores:
+        ks = [j for key, j in k.items() if key[0] == sid]
+        if ks:
+            lp.row(ks, [1.0] * len(ks), upper=run.ledger(sid).physical_kg)
+
+    limits = {u.id: ghg_limit(cfg, frame, u) for u in units}
+    rfnbo_coef: dict[int, float] = {}
+    emissions_coef: dict[int, float] = {}
+    unit_of: dict[int, str] = {}
+    for t in targets:
+        cols = [(key, j) for (key, tb), j in x.items() if tb == t.id]
+        if not cols:
+            continue
+        lp.row([j for _, j in cols], [lhv[key[0]] for key, _ in cols], upper=t.feed_consumed_MJ)
+        own_per_mj = t.own_emissions_g / t.feed_consumed_MJ
+        out_per_mj = t.energy_MJ / t.feed_consumed_MJ
+        limit = (limits[t.unit] - t.adder_gCO2e_per_MJ - MARGIN) * out_per_mj
+        lp.row(
+            [j for _, j in cols],
+            [lhv[key[0]] * (ghg(key) + own_per_mj - limit) for key, _ in cols],
+            upper=0.0,
+        )
+        for key, j in cols:
+            rfnbo_coef[j] = lhv[key[0]] * t.product_kg / t.feed_consumed_MJ
+            emissions_coef[j] = lhv[key[0]] * (
+                ghg(key) + own_per_mj + t.adder_gCO2e_per_MJ * out_per_mj
+            )
+            unit_of[j] = t.id
+    if not x:
+        return NetworkPlan(ids, [], [], 0.0, "no feed")
+
+    weight = {sid: run.storage_weights[sid].weight for sid in stores}
+    carry_value = {kj: lhv[key[0]] * (weight[key[0]] or 0.0) for key, kj in k.items()}
+    # 1. Most RFNBO output, or most value.
+    if kept_share is None:
+        cost1 = dict(rfnbo_coef)
+    else:
+        cost1 = {}
+        for j, c in rfnbo_coef.items():
+            tgt = run.batches[unit_of[j]]
+            w_down = run.storage_weights[output_storage(cfg, tgt.unit).id].weight or 0.0
+            cost1[j] = c * tgt.lhv_MJ_per_kg * w_down * kept_share.get(tgt.id, 1.0)
+        cost1.update(carry_value)
+    lp.set_cost(cost1)
+    best = lp.solve(maximise=True)
+    if not best.optimal:
+        return NetworkPlan(ids, [], [], 0.0, best.status)
+    if kept_share is None:
+        floor = best.objective if min_rfnbo_kg is None else min(best.objective, min_rfnbo_kg)
+        lp.row(list(rfnbo_coef), list(rfnbo_coef.values()), lower=floor * (1 - KEEP) - 1e-6)
+        # 2. Most carried value within that output.
+        lp.set_cost(carry_value)
+        second = lp.solve(maximise=True)
+        if second.optimal and carry_value:
+            lp.row(
+                list(carry_value),
+                list(carry_value.values()),
+                lower=second.objective * (1 - KEEP) - 1e-6,
+            )
+    else:
+        lp.row(list(cost1), list(cost1.values()), lower=best.objective * (1 - KEEP) - 1e-6)
+
+    # 3. Least GHG carried forward.
+    weights = carried_weight or {}
+    cost3: dict[int, float] = {kj: lhv[key[0]] * ghg(key) for key, kj in k.items()}
+    for j, tb in unit_of.items():
+        cost3[j] = cost3.get(j, 0.0) + weights.get(tb, 0.0) * emissions_coef[j]
+    lp.set_cost(cost3)
+    third = lp.solve()
+    final = best
+    if third.optimal:
+        final = third
+        lp.row(
+            list(cost3),
+            list(cost3.values()),
+            upper=third.objective + abs(third.objective) * KEEP + 1e-3,
+        )
+        # 4. Same-month feed where it makes no difference.
+        months = {t.id: t.month for t in targets}
+        lp.set_cost(
+            {
+                j: abs(_month_number(month(key)) - _month_number(months[tb]))
+                for (key, tb), j in x.items()
+            }
+        )
+        fourth = lp.solve()
+        if fourth.optimal:
+            final = fourth
+
+    feed = [
+        FeedAllocation(source=key[1], target=tb, kg=float(final.x[j]))
+        for (key, tb), j in x.items()
+        if final.x[j] > DROP_KG
+    ]
+    feed.sort(key=lambda a: (a.target, a.source))
+    outputs = [
+        OutputAllocation(batch=bid, flow=fid, kg=float(final.x[j]))
+        for (bid, fid), j in sorted(o.items())
+        if final.x[j] > DROP_KG
+    ]
+    rfnbo = sum(rfnbo_coef[j] * final.x[j] for j in rfnbo_coef if final.x[j] > DROP_KG)
+    return NetworkPlan(ids, feed, outputs, rfnbo, final.status)
 
 
 @dataclass(frozen=True)

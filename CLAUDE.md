@@ -62,6 +62,8 @@ uv run rfnbo validate examples/test_plant.json
   conditioning units: alternates the DP with a per-interval split until stable.
 - `src/rfnbo/optimise/allocate.py`: stage B (feed LP per downstream unit; compliance is linear
   in the feed) and stage C (consignment LP, then write-offs by the §2.7 rule).
+  On networks `stage_b_network` allocates a stage of parallel units in one LP, including
+  a split output's assignment; `stages` orders units in series.
   `pipeline.py` runs A → B → C with B↔C feedback and relaxation when a consignment cannot be
   met; `baseline.py` is one batch per month, FIFO; `lp.py` wraps HiGHS with fixed, recorded
   options (`solver_info()` goes into every sealed run).

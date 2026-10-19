@@ -23,6 +23,7 @@ from rfnbo.model.entities import (
     ConsignmentSpec,
     Decisions,
     FeedAllocation,
+    OutputAllocation,
     Part,
     RenewableAllocation,
 )
@@ -63,6 +64,26 @@ def monthly_split(cfg: PlantConfig, frame: Frame) -> list[RenewableAllocation]:
     return out
 
 
+def pro_rata_outputs(
+    cfg: PlantConfig, frame: Frame, decisions: Decisions
+) -> list[OutputAllocation]:
+    """A split output, baseline style: each batch's RFNBO in proportion to the metered flows."""
+    run = calculate(cfg, frame, decisions)
+    out: list[OutputAllocation] = []
+    for b in run.batches.values():
+        flows = cfg.flows_out_of(b.unit)
+        if len(flows) < 2 or b.rfnbo_kg <= 0:
+            continue
+        metered = [
+            float(frame.series[f.series or ""][b.start_index : b.end_index].sum()) for f in flows
+        ]
+        total = sum(metered)
+        for f, m in zip(flows, metered, strict=True):
+            if total > 0 and m > 0:
+                out.append(OutputAllocation(batch=b.id, flow=f.id, kg=b.rfnbo_kg * m / total))
+    return out
+
+
 def baseline_decisions(
     cfg: PlantConfig, frame: Frame, consignments: Sequence[ConsignmentSpec]
 ) -> Decisions:
@@ -70,6 +91,9 @@ def baseline_decisions(
         batches=monthly_batches(cfg, frame),
         renewable_allocations=monthly_split(cfg, frame),
         consignments=list(consignments),
+    )
+    decisions = decisions.model_copy(
+        update={"output_allocations": pro_rata_outputs(cfg, frame, decisions)}
     )
     for unit in allocate.downstream_units(cfg, unit_order(cfg)):
         store = allocate.feed_storage(cfg, unit)
