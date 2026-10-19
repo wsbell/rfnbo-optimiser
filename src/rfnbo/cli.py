@@ -102,7 +102,9 @@ def _batch(args: argparse.Namespace) -> int:
             print(f"  {f}", file=sys.stderr)
         return 1
     result = optimise_batching(cfg, frame, materiality_MJ=args.batch_materiality_MJ)
-    decisions = Decisions(batches=result.batches)
+    decisions = Decisions(
+        batches=result.batches, renewable_allocations=result.renewable_allocations
+    )
     check = calculate(cfg, frame, decisions)
     Path(args.out).write_text(decisions.model_dump_json(indent=1) + "\n", encoding="utf-8")
     for ub in result.units:

@@ -175,7 +175,12 @@ def optimise(
             f"stage A {ub.unit}: {ub.score.batches} batches, mu {ub.mu}, "
             f"feedable {ub.score.feedable_MJ:,.0f} MJ"
         )
-    base = Decisions(batches=batching.batches, consignments=list(consignments))
+    base = Decisions(
+        batches=batching.batches,
+        renewable_allocations=batching.renewable_allocations,
+        consignments=list(consignments),
+    )
+    log += batching.log
     final_units = allocate.final_units(cfg)
 
     best: Outcome | None = None

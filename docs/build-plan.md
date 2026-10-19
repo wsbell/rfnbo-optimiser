@@ -352,7 +352,7 @@ decisions, the lineage graph) already works on networks.
 | ~~`config/validate.py` `ALLOWED_CONNECTIONS`~~ | ~~No unit → unit link~~ (phase 11: a pass-through storage) |
 | ~~`calc/batch.py` `output_storage`~~ | ~~One output storage per unit~~ (phase 12: `output_storages`; the single-chain optimiser still uses `output_storage`) |
 | `calc/consign.py` `consignment_route` | One storage feeds each distribution block (kept: validated by `distribution_single_product`) |
-| `optimise/batching.py` | One unit per renewable pool; the product feeds one downstream unit with one feed |
+| `optimise/batching.py` | ~~One unit per renewable pool~~ (phase 13: `optimise/pool.py`); one electrolytic unit per pool |
 | `optimise/allocate.py` `feed_storage` | One product feed per downstream unit; one downstream stage |
 | `optimise/pipeline.py` `bound` | Bound reported only for a single downstream stage |
 
@@ -456,7 +456,16 @@ closes at zero; renewable pool across all units (existing check, now exercised).
 records list every upstream batch at every step; lineage drill-down crosses N steps. Golden
 tests 1 and 2 must still pass unchanged.
 
-**Phase 13 — Stage A for several electricity users.** Extend the dynamic programme with a
+**Phase 13 — Stage A for several electricity users.** *Done 2026-10-19* (`optimise/pool.py`):
+stage A alternates with a pool split until stable. The electrolyser is batched on its pool;
+each batch keeps what it can match from its own intervals; the surplus covers the
+conditioning units within their month-long batches; a conditioning batch that would miss the
+threshold takes the shortfall from the electrolyser, from the end of the month backwards, when
+its compliant product is worth more (objective 2) than the electrolyser RFNBO given up; then
+the electrolyser is re-batched. The baseline gives the electrolyser first call with no repair.
+Test case 3: full cover in the base case; the hourly variant's 2,209 batches; in the shortfall
+the liquefier takes exactly the least it needs (190,615.7 kWh). Conditioning units keep one
+batch per month. Plan: Extend the dynamic programme with a
 renewable split: for each correlation window, renewable kWh is shared between the electrolyser
 (raises RFNBO share) and conditioning units (lowers their GHG only). Approach: a per-window LP
 inside the DP value for the electrolyser, with the conditioning units' monthly demand as a

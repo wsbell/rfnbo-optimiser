@@ -1,6 +1,7 @@
 """The baseline method: one batch per unit per month, first-in-first-out allocation.
 
-Feed: RFNBO batches in production order fill downstream batches in time order, up to what
+A renewable pool shared by several units goes to the electrolyser first and the surplus to the
+others. Feed: RFNBO batches in production order fill downstream batches in time order, up to what
 each consumes, with no regard to GHG. Consignments: compliant stock, oldest first, in ship
 date order. Write-offs: the §2.7 rule. Reported next to every optimised result.
 """
@@ -14,6 +15,7 @@ from rfnbo.calc.batch import unit_order
 from rfnbo.calc.consign import consignment_route
 from rfnbo.config.schema import PlantConfig
 from rfnbo.data import calendar as cal
+from rfnbo.data.ingest import FloatArray
 from rfnbo.data.quality import Frame
 from rfnbo.model.entities import (
     AggregatedBatchSpec,
@@ -22,9 +24,10 @@ from rfnbo.model.entities import (
     Decisions,
     FeedAllocation,
     Part,
+    RenewableAllocation,
 )
-from rfnbo.optimise import allocate
-from rfnbo.optimise.batching import windows
+from rfnbo.optimise import allocate, pool
+from rfnbo.optimise.batching import Score, UnitBatching, windows
 
 
 def monthly_batches(cfg: PlantConfig, frame: Frame) -> list[BatchSpec]:
@@ -44,10 +47,30 @@ def monthly_batches(cfg: PlantConfig, frame: Frame) -> list[BatchSpec]:
     return specs
 
 
+def monthly_split(cfg: PlantConfig, frame: Frame) -> list[RenewableAllocation]:
+    """A shared renewable pool, baseline style: the electrolyser's monthly batch first, the
+    surplus to the other units, with no regard to their compliance."""
+    out: list[RenewableAllocation] = []
+    for unit in unit_order(cfg):
+        if unit.electricity_adds_to_lhv and pool.shares_pool(cfg, unit):
+            cuts = windows(cfg, frame, unit)[0]
+            fixed = UnitBatching(unit.id, cuts, None, None, Score(0.0, 0.0, len(cuts)))
+
+            def monthly(_pool: FloatArray, b: UnitBatching = fixed) -> UnitBatching:
+                return b
+
+            out += pool.plan(cfg, frame, unit, monthly, repair=False).allocations
+    return out
+
+
 def baseline_decisions(
     cfg: PlantConfig, frame: Frame, consignments: Sequence[ConsignmentSpec]
 ) -> Decisions:
-    decisions = Decisions(batches=monthly_batches(cfg, frame), consignments=list(consignments))
+    decisions = Decisions(
+        batches=monthly_batches(cfg, frame),
+        renewable_allocations=monthly_split(cfg, frame),
+        consignments=list(consignments),
+    )
     for unit in allocate.downstream_units(cfg, unit_order(cfg)):
         store = allocate.feed_storage(cfg, unit)
         if store is None:

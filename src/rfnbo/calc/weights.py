@@ -121,3 +121,22 @@ def storage_weights(cfg: PlantConfig, frame: Frame) -> dict[str, StorageWeight]:
     for s in cfg.blocks_of(StorageUnit):
         weigh(s)
     return {s.id: out[s.id] for s in cfg.blocks_of(StorageUnit)}
+
+
+def unit_output_weight(cfg: PlantConfig, frame: Frame, unit: ProcessingUnit) -> float | None:
+    """Weight of a unit's output: its storage's weight, or a split output's average weighted
+    by the metered flows."""
+    weights = storage_weights(cfg, frame)
+    flows = output_flows(cfg, unit.id)
+    if len(flows) == 1:
+        return weights[flows[0].target].weight
+    total = sum(_kg(frame, f.series) for f in flows)
+    if total <= 0:
+        return None
+    acc = 0.0
+    for f in flows:
+        w = weights[f.target].weight
+        if w is None:
+            return None
+        acc += _kg(frame, f.series) / total * w
+    return acc

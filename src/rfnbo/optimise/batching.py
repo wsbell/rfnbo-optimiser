@@ -21,6 +21,7 @@ result is re-run through the calculator before anything is reported.
 
 from __future__ import annotations
 
+import functools
 import math
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
@@ -29,13 +30,13 @@ from typing import Literal
 import numpy as np
 import numpy.typing as npt
 
-from rfnbo.calc.batch import output_storage, unit_order
-from rfnbo.calc.weights import storage_weights
+from rfnbo.calc.batch import output_storages, unit_order
+from rfnbo.calc.weights import unit_output_weight
 from rfnbo.config.schema import ELECTRICITY, InputBlock, PlantConfig, ProcessingUnit, StorageUnit
 from rfnbo.data import calendar as cal
 from rfnbo.data.ingest import FloatArray
 from rfnbo.data.quality import Frame
-from rfnbo.model.entities import BatchSpec
+from rfnbo.model.entities import BatchSpec, RenewableAllocation
 
 IntArray = npt.NDArray[np.int64]
 EPS_MJ = 0.01  # smallest per-batch penalty: far below any real gain, far above float noise
@@ -96,7 +97,11 @@ def _ef_by_interval(src: InputBlock, frame: Frame) -> FloatArray:
     return out
 
 
-def unit_series(cfg: PlantConfig, frame: Frame, unit: ProcessingUnit) -> UnitSeries:
+def unit_series(
+    cfg: PlantConfig, frame: Frame, unit: ProcessingUnit, renewable_kWh: FloatArray | None = None
+) -> UnitSeries:
+    """``renewable_kWh`` is the unit's share of a pool other units also draw on (phase 13);
+    by default the unit has the whole pool."""
     if not unit.electricity_adds_to_lhv:
         raise BatchingError(f"{unit.id}: stage A batches only electrolytic units")
     into = [(f, cfg.block(f.source)) for f in cfg.flows_into(unit.id)]
@@ -108,12 +113,8 @@ def unit_series(cfg: PlantConfig, frame: Frame, unit: ProcessingUnit) -> UnitSer
     ]
     if len(renewable) != 1 or len(grid) != 1:
         raise BatchingError(f"{unit.id}: needs one renewable and one non-renewable input")
-    if len(cfg.flows_out_of(renewable[0].id)) > 1:
-        raise BatchingError(
-            f"{renewable[0].id} feeds several units; splitting the renewable pool between "
-            "units is not part of stage A yet"
-        )
     series = frame.series
+    pool = series[renewable[0].series or ""] if renewable_kWh is None else renewable_kWh
     other = tuple(
         (_prefix(series[f.series or ""]), _ef_by_interval(b, frame))
         for f, b in into
@@ -124,7 +125,7 @@ def unit_series(cfg: PlantConfig, frame: Frame, unit: ProcessingUnit) -> UnitSer
         lhv=unit.lhv_MJ_per_kg,
         adder=unit.fixed_adder_gCO2e_per_MJ,
         electricity=_prefix(series[unit.electricity_series or ""]),
-        renewable=_prefix(series[renewable[0].series or ""]),
+        renewable=_prefix(pool),
         product=_prefix(series[unit.production_series or ""]),
         other=other,
         grid_ef=_ef_by_interval(grid[0], frame),
@@ -148,14 +149,29 @@ def downstream(cfg: PlantConfig, frame: Frame, unit: ProcessingUnit) -> Downstre
     limit. Totals are taken over the whole period (a stage A approximation; stage B enforces
     the limit for each downstream batch).
     """
-    store = output_storage(cfg, unit.id)
-    takers = [cfg.block(f.target) for f in cfg.flows_out_of(store.id)]
-    units = [u for u in takers if isinstance(u, ProcessingUnit)]
+    units = [
+        u
+        for store in output_storages(cfg, unit.id)
+        for f in cfg.flows_out_of(store.id)
+        if isinstance(u := cfg.block(f.target), ProcessingUnit)
+    ]
     if not units:
         return None
     if len(units) > 1:
-        raise BatchingError(f"{store.id} feeds several units; stage A supports one")
-    down = units[0]
+        # Several units take the product (a split output, or one storage feeding several):
+        # the blend must suit the most demanding of them; their feed adds up (phase 13).
+        parts = [_downstream_of(cfg, frame, unit, u) for u in units]
+        return Downstream(
+            ",".join(p.unit for p in parts),
+            min(p.limit_gCO2e_per_MJ for p in parts),
+            sum(p.cap_MJ for p in parts),
+        )
+    return _downstream_of(cfg, frame, unit, units[0])
+
+
+def _downstream_of(
+    cfg: PlantConfig, frame: Frame, unit: ProcessingUnit, down: ProcessingUnit
+) -> Downstream:
     feed_flows = [
         f for f in cfg.flows_into(down.id) if isinstance(cfg.block(f.source), StorageUnit)
     ]
@@ -316,8 +332,9 @@ def batch_unit(
     unit: ProcessingUnit,
     mus: Sequence[float] = MU_GRID,
     eps: float = EPS_MJ,
+    renewable_kWh: FloatArray | None = None,
 ) -> UnitBatching:
-    us = unit_series(cfg, frame, unit)
+    us = unit_series(cfg, frame, unit, renewable_kWh)
     slices, lo = windows(cfg, frame, unit)
     threshold = cfg.settings.rfnbo_threshold_gCO2e_per_MJ
     down = downstream(cfg, frame, unit)
@@ -367,6 +384,9 @@ def batch_unit(
 class BatchingResult:
     units: list[UnitBatching]
     batches: list[BatchSpec]
+    # Per-interval renewable split when several units share a pool (phase 13).
+    renewable_allocations: list[RenewableAllocation] = field(default_factory=list)
+    log: list[str] = field(default_factory=list)
 
 
 def batch_ids(prefix: str, months: Sequence[str]) -> list[str]:
@@ -382,7 +402,7 @@ def materiality_eps(
     cfg: PlantConfig, frame: Frame, unit: ProcessingUnit, materiality_MJ: float
 ) -> float:
     """Per-batch penalty in the unit's own product MJ for a final-product materiality."""
-    w = storage_weights(cfg, frame)[output_storage(cfg, unit.id).id].weight
+    w = unit_output_weight(cfg, frame, unit)
     return max(EPS_MJ, materiality_MJ / w if w else materiality_MJ)
 
 
@@ -393,14 +413,29 @@ def optimise_batching(
     materiality_MJ: float = MATERIALITY_MJ,
 ) -> BatchingResult:
     """Batches for every unit: stage A for electrolytic units, one per month for the rest."""
+    from rfnbo.optimise import pool  # pool builds on this module
+
     end = frame.end
     tz = frame.timezone
     results: list[UnitBatching] = []
     specs: list[BatchSpec] = []
+    allocations: list[RenewableAllocation] = []
+    log: list[str] = []
     for unit in unit_order(cfg):
         if unit.electricity_adds_to_lhv:
             eps = materiality_eps(cfg, frame, unit, materiality_MJ)
-            ub = batch_unit(cfg, frame, unit, mus, eps)
+            if pool.shares_pool(cfg, unit):
+                split = pool.plan(
+                    cfg,
+                    frame,
+                    unit,
+                    functools.partial(batch_unit, cfg, frame, unit, mus, eps),
+                )
+                ub = split.batching
+                allocations += split.allocations
+                log += split.log
+            else:
+                ub = batch_unit(cfg, frame, unit, mus, eps)
             results.append(ub)
             cuts = ub.cuts
         else:
@@ -420,4 +455,4 @@ def optimise_batching(
                     end=frame.index[e] if e < len(frame) else end,
                 )
             )
-    return BatchingResult(results, specs)
+    return BatchingResult(results, specs, allocations, log)

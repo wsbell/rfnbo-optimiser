@@ -58,6 +58,8 @@ uv run rfnbo validate examples/test_plant.json
   intervals (hourly windows from the switch date for electrolytic units), Lagrangian value
   against the downstream blend limit, μ search on feedable RFNBO. Proposals only: re-run
   everything through the calculator.
+- `src/rfnbo/optimise/pool.py`: stage A with a renewable pool shared by the electrolyser and
+  conditioning units: alternates the DP with a per-interval split until stable.
 - `src/rfnbo/optimise/allocate.py`: stage B (feed LP per downstream unit; compliance is linear
   in the feed) and stage C (consignment LP, then write-offs by the §2.7 rule).
   `pipeline.py` runs A → B → C with B↔C feedback and relaxation when a consignment cannot be
