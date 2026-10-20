@@ -1,6 +1,7 @@
 """Export a test workbook's decision set and expected values to JSON fixtures.
 
     uv run python tests/golden/export_workbook.py <workbook.xlsx> <out-prefix> [--rule-2-5]
+        [--no-averaging]
 
 Writes ``<out-prefix>.decisions.json`` and ``<out-prefix>.expected.json``. Values are read from
 the workbook's cached results; nothing here uses the calculator.
@@ -11,6 +12,16 @@ kg and the H2 ledger and write-off are recomputed here, independently of the app
 RFNBO cannot be carried into the next quarter (decided 2026-10-17), so all of it left at quarter
 end is written off, ahead of compliant batches. Workbook values that change are kept under
 ``superseded``.
+
+``--no-averaging`` regenerates what build plan §12 (decided 2026-10-20) changes: batches are never
+averaged. Each NH₃ batch's RFNBO output is split into parts, one per H₂ source GHG
+(GHG_j = g_j · C ÷ E + own ÷ E + adder, with C the H₂ consumed and E the NH₃ energy, both in MJ),
+the NH₃ ledger works on parts, and each consignment's GHG is its highest part plus the
+distribution adder. The workbook's consignment allocations average September and October NH₃ to
+meet the targets, which is no longer allowed, so they are re-derived: each consignment takes the
+parts at or below its limit (target − adder, and the threshold) in ascending GHG, oldest first;
+what is still missing comes from the lowest-GHG parts left, and the consignment then misses its
+target. Workbook values that change are kept under ``superseded``.
 """
 
 from __future__ import annotations
@@ -35,6 +46,7 @@ MONTHS = {
     )
 }
 THRESHOLD = 28.2
+H2_LHV, NH3_LHV, NH3_ADDER = 120.0, 18.6, 2.0  # examples/test_plant.json
 
 
 def rows(wb: Any, sheet: str) -> list[tuple[Any, ...]]:
@@ -71,7 +83,9 @@ def runs(
     return out
 
 
-def export(path: Path, rule_2_5: bool) -> tuple[dict[str, Any], dict[str, Any]]:
+def export(
+    path: Path, rule_2_5: bool, no_averaging: bool = False
+) -> tuple[dict[str, Any], dict[str, Any]]:
     wb = openpyxl.load_workbook(path, data_only=True, read_only=True)
 
     # --- 15-minute data: electrolyser batch ids and local months ---
@@ -128,6 +142,7 @@ def export(path: Path, rule_2_5: bool) -> tuple[dict[str, Any], dict[str, Any]]:
     }
     feed = []
     fed: dict[str, float] = {}
+    fed_into: dict[str, dict[str, float]] = {}
     for r in feed_rows[1:]:
         if not (isinstance(r[0], str) and r[0].startswith("E-")):
             continue
@@ -135,6 +150,8 @@ def export(path: Path, rule_2_5: bool) -> tuple[dict[str, Any], dict[str, Any]]:
             if r[j]:
                 feed.append({"source": r[0], "target": target, "kg": r[j]})
                 fed[r[0]] = fed.get(r[0], 0.0) + r[j]
+                into = fed_into.setdefault(target, {})
+                into[r[0]] = into.get(r[0], 0.0) + r[j]
 
     # --- NH3 batches ---
     nh3: dict[str, dict[str, Any]] = OrderedDict()
@@ -288,6 +305,12 @@ def export(path: Path, rule_2_5: bool) -> tuple[dict[str, Any], dict[str, Any]]:
             shipped_ghg=r[12],
         )
 
+    if no_averaging:
+        consignments_by_id = {c["id"]: c for c in consignments}
+        aggregated = _no_averaging(
+            h2, nh3, fed_into, nh3_lines, nh3_ledger, consignments_by_id, cons_expected, superseded
+        )
+
     write_offs = [
         {"storage": "nh3_storage", "batch": b, "kg": v["write_off_kg"]}
         for b, v in nh3_lines.items()
@@ -307,6 +330,9 @@ def export(path: Path, rule_2_5: bool) -> tuple[dict[str, Any], dict[str, Any]]:
         shipped_ghg=pick(vt, "Lowest achievable shipped GHG"),
     )
 
+    if no_averaging:
+        v1 = _variant_minimise(v1, nh3_lines, superseded)
+
     decisions = {
         "batches": batches,
         "feed": feed,
@@ -317,6 +343,7 @@ def export(path: Path, rule_2_5: bool) -> tuple[dict[str, Any], dict[str, Any]]:
     expected = {
         "source": path.name,
         "rule_2_5_applied": rule_2_5,
+        "no_averaging_applied": no_averaging,
         "intervals": len(body),
         "h2_batches": h2,
         "nh3_batches": nh3,
@@ -331,13 +358,160 @@ def export(path: Path, rule_2_5: bool) -> tuple[dict[str, Any], dict[str, Any]]:
     return decisions, expected
 
 
+def _parts(
+    h2: dict[str, dict[str, Any]], b: dict[str, Any], sources: dict[str, float]
+) -> list[tuple[float, float, float, list[str]]]:
+    """(GHG, kg, share, sources) of each part of NH₃ batch ``b``, in ascending GHG."""
+    c_mj = b["feed_consumed_kg"] * H2_LHV
+    e_mj = b["product_kg"] * NH3_LHV
+    own = b["electricity_emissions_g"]
+    groups: dict[float, list[str]] = {}
+    for src in sorted(sources):
+        if h2[src]["rfnbo_kg"] > 0:
+            groups.setdefault(round(h2[src]["ghg"], 9), []).append(src)
+    out = []
+    for _g, srcs in sorted(groups.items()):
+        share = sum(sources[s] for s in srcs) * H2_LHV / c_mj
+        ghg = h2[srcs[0]]["ghg"] * c_mj / e_mj + own / e_mj + NH3_ADDER
+        out.append((ghg, share * b["product_kg"], share, srcs))
+    return out
+
+
+def _write_off(lines: dict[str, dict[str, Any]], physical_kg: float) -> float:
+    """Write off by the §2.7 rule: all non-compliant RFNBO, then the excess over the physical
+    inventory, highest GHG first, then the latest month. Returns the total written off."""
+    closing = sum(x["closing_before_kg"] for x in lines.values())
+    noncompliant = sum(x["closing_before_kg"] for x in lines.values() if x["ghg"] > THRESHOLD)
+    excess = max(0.0, closing - physical_kg, noncompliant)
+    left = excess
+    order = sorted(
+        lines.items(),
+        key=lambda kv: (kv[1]["ghg"] > THRESHOLD, round(kv[1]["ghg"], 9), kv[1]["month"], kv[0]),
+        reverse=True,
+    )
+    for _b, x in order:
+        take = min(x["closing_before_kg"], max(0.0, left))
+        x["write_off_kg"] = take
+        x["carried_kg"] = x["closing_before_kg"] - take
+        left -= take
+    return excess
+
+
+def _no_averaging(
+    h2: dict[str, dict[str, Any]],
+    nh3: dict[str, dict[str, Any]],
+    fed_into: dict[str, dict[str, float]],
+    nh3_lines: dict[str, dict[str, Any]],
+    nh3_ledger: dict[str, Any],
+    consignments: dict[str, dict[str, Any]],
+    cons_expected: dict[str, dict[str, Any]],
+    superseded: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Apply build plan §12 to the NH₃ batches, the NH₃ ledger and the consignments; returns
+    the re-derived aggregated batches."""
+    superseded["nh3_ghg"] = {b: v["ghg"] for b, v in nh3.items()}
+    superseded["nh3_ledger"] = {
+        "lines": {b: dict(x) for b, x in nh3_lines.items()},
+        "write_off_kg": nh3_ledger["write_off_kg"],
+        "carried_ghg": nh3_ledger["carried_ghg"],
+    }
+    superseded["consignments"] = {
+        c: {"parts": dict(e["parts"]), "weighted_ghg": e["weighted_ghg"]}
+        for c, e in cons_expected.items()
+    }
+    lines: dict[str, dict[str, Any]] = OrderedDict(
+        (b, x) for b, x in nh3_lines.items() if b not in nh3
+    )
+    for bid, b in nh3.items():
+        parts = _parts(h2, b, fed_into.get(bid, {}))
+        b["parts"] = {}
+        for k, (ghg, kg, share, srcs) in enumerate(parts, 1):
+            pid = bid if len(parts) == 1 else f"{bid}.{k}"
+            b["parts"][pid] = dict(
+                ghg=ghg, kg=kg, share=share, compliant=ghg <= THRESHOLD + 1e-9, sources=srcs
+            )
+            lines[pid] = dict(month=b["month"], ghg=ghg, in_kg=kg)
+        b["ghg"] = parts[0][0] if len(parts) == 1 else None
+        b["compliant"] = all(p["compliant"] for p in b["parts"].values())
+    for x in lines.values():
+        x["out_consignment_kg"] = 0.0
+    aggregated = []
+    for cid, c in consignments.items():
+        e = cons_expected[cid]
+        limit = min(e["target"] - e["distribution_adder"], THRESHOLD)
+        ship_month = c["ship_date"][:7]
+        avail = [
+            (round(x["ghg"], 9), x["month"], pid)
+            for pid, x in lines.items()
+            if x["month"] <= ship_month and x["in_kg"] - x["out_consignment_kg"] > 1e-9
+        ]
+        order = sorted(a for a in avail if a[0] <= limit + 1e-9)
+        order += sorted(a for a in avail if a[0] > limit + 1e-9)
+        left, taken = float(c["volume_kg"]), {}
+        for _g, _m, pid in order:
+            if left <= 1e-9:
+                break
+            x = lines[pid]
+            kg = min(left, x["in_kg"] - x["out_consignment_kg"])
+            x["out_consignment_kg"] += kg
+            taken[pid] = kg
+            left -= kg
+        e["parts"] = taken
+        e["highest_ghg"] = max(lines[pid]["ghg"] for pid in taken)
+        e["shipped_ghg"] = e["highest_ghg"] + e["distribution_adder"]
+        del e["weighted_ghg"]
+        for month in sorted({lines[pid]["month"] for pid in taken}):
+            aggregated.append(
+                {
+                    "id": f"{cid}-{month}",
+                    "consignment": cid,
+                    "parts": [
+                        {"batch": pid, "kg": kg}
+                        for pid, kg in taken.items()
+                        if lines[pid]["month"] == month
+                    ],
+                }
+            )
+    for x in lines.values():
+        x["closing_before_kg"] = x["in_kg"] - x["out_consignment_kg"]
+    nh3_ledger["write_off_kg"] = _write_off(lines, nh3_ledger["physical_kg"])
+    mj = sum(x["carried_kg"] for x in lines.values())
+    nh3_ledger["carried_ghg"] = (
+        sum(x["carried_kg"] * x["ghg"] for x in lines.values()) / mj if mj > 1e-6 else None
+    )
+    nh3_lines.clear()
+    nh3_lines.update(lines)
+    return aggregated
+
+
+def _variant_minimise(
+    v1: dict[str, Any], lines: dict[str, dict[str, Any]], superseded: dict[str, Any]
+) -> dict[str, Any]:
+    """V1 under §12: the lowest highest-part GHG for the volume, taking parts in ascending GHG
+    (the September opening batch, then Q4 parts)."""
+    superseded["variant_minimise"] = dict(v1)
+    left, parts = float(v1["volume_kg"]), {}
+    for pid, x in sorted(lines.items(), key=lambda kv: (round(kv[1]["ghg"], 9), kv[1]["month"])):
+        if left <= 1e-9:
+            break
+        kg = min(left, x["in_kg"])
+        parts[pid] = kg
+        left -= kg
+    out = dict(v1, parts=parts)
+    out["sep_kg"] = sum(kg for pid, kg in parts.items() if lines[pid]["month"] == "2026-09")
+    out["q4_kg"] = v1["volume_kg"] - out["sep_kg"]
+    out["shipped_ghg"] = max(lines[pid]["ghg"] for pid in parts) + v1["distribution_adder"]
+    return out
+
+
 def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("workbook", type=Path)
     p.add_argument("out_prefix")
     p.add_argument("--rule-2-5", action="store_true")
+    p.add_argument("--no-averaging", action="store_true")
     args = p.parse_args()
-    decisions, expected = export(args.workbook, args.rule_2_5)
+    decisions, expected = export(args.workbook, args.rule_2_5, args.no_averaging)
     for suffix, obj in (("decisions", decisions), ("expected", expected)):
         Path(f"{args.out_prefix}.{suffix}.json").write_text(
             json.dumps(obj, indent=1, default=str) + "\n", encoding="utf-8"

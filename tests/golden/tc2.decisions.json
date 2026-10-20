@@ -4828,17 +4828,7 @@
    "parts": [
     {
      "batch": "N-2026-09",
-     "kg": 18243.2429369959
-    }
-   ]
-  },
-  {
-   "id": "C1-2026-10",
-   "consignment": "C1",
-   "parts": [
-    {
-     "batch": "N-2026-10",
-     "kg": 6756.75706300408
+     "kg": 25000.0
     }
    ]
   },
@@ -4848,17 +4838,7 @@
    "parts": [
     {
      "batch": "N-2026-09",
-     "kg": 29189.1886991935
-    }
-   ]
-  },
-  {
-   "id": "C2-2026-10",
-   "consignment": "C2",
-   "parts": [
-    {
-     "batch": "N-2026-10",
-     "kg": 10810.8113008065
+     "kg": 40000.0
     }
    ]
   }
@@ -4866,8 +4846,983 @@
  "write_offs": [
   {
    "storage": "nh3_storage",
-   "batch": "N-2026-12",
-   "kg": 151450.397939742
+   "batch": "N-2026-10.41",
+   "kg": 258.9887640449438
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-10.42",
+   "kg": 258.42696629213486
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-10.43",
+   "kg": 773.5955056179774
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-10.44",
+   "kg": 514.6067415730337
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-10.45",
+   "kg": 256.7415730337078
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-10.46",
+   "kg": 512.9213483146068
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-10.47",
+   "kg": 255.0561797752809
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-10.48",
+   "kg": 253.93258426966293
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-10.49",
+   "kg": 252.80898876404495
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-10.50",
+   "kg": 251.12359550561797
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-10.51",
+   "kg": 501.123595505618
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-10.52",
+   "kg": 750.0
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-10.53",
+   "kg": 746.6292134831459
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-10.54",
+   "kg": 248.31460674157304
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-10.55",
+   "kg": 494.38202247191015
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-10.56",
+   "kg": 493.82022471910113
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-10.57",
+   "kg": 491.0112359550562
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-10.58",
+   "kg": 490.44943820224717
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-10.59",
+   "kg": 489.8876404494382
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-10.60",
+   "kg": 244.38202247191012
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-10.61",
+   "kg": 488.2022471910112
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-10.62",
+   "kg": 487.64044943820227
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-10.63",
+   "kg": 1459.5505617977526
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-10.64",
+   "kg": 242.69662921348316
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-10.65",
+   "kg": 1939.3258426966293
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-10.66",
+   "kg": 2903.9325842696626
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-10.67",
+   "kg": 241.5730337078652
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-10.68",
+   "kg": 241.01123595505618
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-10.69",
+   "kg": 240.44943820224722
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-10.70",
+   "kg": 1200.5617977528088
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-10.71",
+   "kg": 239.8876404494382
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-10.72",
+   "kg": 4789.3258426966295
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-10.73",
+   "kg": 239.32584269662922
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-10.74",
+   "kg": 2627.528089887641
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-10.75",
+   "kg": 238.7640449438202
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-10.76",
+   "kg": 2386.516853932584
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-10.77",
+   "kg": 2144.943820224719
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-10.78",
+   "kg": 13577.528089887639
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-10.79",
+   "kg": 3096.067415730337
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-10.80",
+   "kg": 237.64044943820224
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-10.81",
+   "kg": 948.876404494382
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-10.82",
+   "kg": 3083.1460674157306
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-10.83",
+   "kg": 237.07865168539328
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-10.84",
+   "kg": 4503.370786516854
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-10.85",
+   "kg": 5439.325842696629
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-10.86",
+   "kg": 2835.9550561797755
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-10.87",
+   "kg": 1653.9325842696628
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-10.88",
+   "kg": 8503.370786516853
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-10.89",
+   "kg": 1653.370786516854
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-10.90",
+   "kg": 4723.033707865169
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-10.91",
+   "kg": 2597.191011235955
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-10.92",
+   "kg": 944.3820224719101
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-10.93",
+   "kg": 2124.7191011235955
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-10.94",
+   "kg": 10385.393258426966
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-10.95",
+   "kg": 5664.044943820225
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-10.96",
+   "kg": 5191.011235955056
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-10.97",
+   "kg": 2594.38202247191
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-10.98",
+   "kg": 6131.460674157304
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-10.99",
+   "kg": 5658.426966292135
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-10.100",
+   "kg": 12258.988764044943
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-10.101",
+   "kg": 7071.348314606742
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-10.102",
+   "kg": 4006.741573033708
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-10.103",
+   "kg": 6363.483146067416
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-10.104",
+   "kg": 471.3483146067416
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-10.105",
+   "kg": 8483.707865168539
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-10.106",
+   "kg": 6126.966292134831
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-10.107",
+   "kg": 5419.101123595506
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-10.108",
+   "kg": 1648.876404494382
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-10.109",
+   "kg": 16482.584269662922
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-10.110",
+   "kg": 5414.606741573034
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-10.111",
+   "kg": 10828.089887640448
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-10.112",
+   "kg": 4001.1235955056177
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-10.113",
+   "kg": 7296.0674157303365
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-10.114",
+   "kg": 1805.7544943820228
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-10.115",
+   "kg": 10120.224719101123
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-11.34",
+   "kg": 260.1123595505618
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-11.35",
+   "kg": 517.9775280898876
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-11.36",
+   "kg": 255.0561797752809
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-11.37",
+   "kg": 253.9325842696629
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-11.38",
+   "kg": 252.24719101123594
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-11.39",
+   "kg": 502.24719101123594
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-11.40",
+   "kg": 501.12359550561797
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-11.41",
+   "kg": 249.43820224719101
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-11.42",
+   "kg": 496.62921348314603
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-11.43",
+   "kg": 743.2584269662922
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-11.44",
+   "kg": 246.62921348314606
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-11.45",
+   "kg": 244.9438202247191
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-11.46",
+   "kg": 488.2022471910113
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-11.47",
+   "kg": 487.64044943820227
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-11.48",
+   "kg": 243.25842696629215
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-11.49",
+   "kg": 485.9550561797753
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-11.50",
+   "kg": 242.69662921348313
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-11.51",
+   "kg": 241.57303370786516
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-11.52",
+   "kg": 241.01123595505618
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-11.53",
+   "kg": 240.44943820224717
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-11.54",
+   "kg": 480.33707865168543
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-11.55",
+   "kg": 239.8876404494382
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-11.56",
+   "kg": 239.32584269662922
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-11.57",
+   "kg": 478.08988764044943
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-11.58",
+   "kg": 238.7640449438202
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-11.59",
+   "kg": 2382.584269662921
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-11.60",
+   "kg": 238.20224719101125
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-11.61",
+   "kg": 1188.2022471910113
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-11.62",
+   "kg": 712.3595505617977
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-11.63",
+   "kg": 2370.7865168539324
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-11.64",
+   "kg": 1656.741573033708
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-11.65",
+   "kg": 236.51685393258424
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-11.66",
+   "kg": 2362.921348314607
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-11.67",
+   "kg": 2834.8314606741574
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-11.68",
+   "kg": 3543.2584269662916
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-11.69",
+   "kg": 3779.213483146067
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-11.70",
+   "kg": 1652.247191011236
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-11.71",
+   "kg": 2360.112359550562
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-11.72",
+   "kg": 8023.033707865169
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-11.73",
+   "kg": 1887.6404494382023
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-11.74",
+   "kg": 8488.202247191011
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-11.75",
+   "kg": 5187.078651685393
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-11.76",
+   "kg": 3510.499438202248
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-12.40",
+   "kg": 8.72546479513403e-11
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-12.41",
+   "kg": 517.9775280898876
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-12.42",
+   "kg": 257.86516853932585
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-12.43",
+   "kg": 257.30337078651684
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-12.44",
+   "kg": 1283.7078651685395
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-12.45",
+   "kg": 256.17977528089887
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-12.46",
+   "kg": 511.7977528089888
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-12.47",
+   "kg": 511.23595505617976
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-12.48",
+   "kg": 765.1685393258426
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-12.49",
+   "kg": 508.98876404494376
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-12.50",
+   "kg": 508.4269662921348
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-12.51",
+   "kg": 507.86516853932585
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-12.52",
+   "kg": 253.37078651685394
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-12.53",
+   "kg": 1011.2359550561798
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-12.54",
+   "kg": 252.24719101123594
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-12.55",
+   "kg": 503.9325842696629
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-12.56",
+   "kg": 503.37078651685397
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-12.57",
+   "kg": 502.247191011236
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-12.58",
+   "kg": 250.56179775280899
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-12.59",
+   "kg": 250.0
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-12.60",
+   "kg": 249.43820224719101
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-12.61",
+   "kg": 496.62921348314603
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-12.62",
+   "kg": 247.19101123595505
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-12.63",
+   "kg": 985.3932584269663
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-12.64",
+   "kg": 245.50561797752812
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-12.65",
+   "kg": 12744.38202247191
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-12.66",
+   "kg": 489.88764044943815
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-12.67",
+   "kg": 488.76404494382024
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-12.68",
+   "kg": 243.82022471910113
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-12.69",
+   "kg": 243.25842696629212
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-12.70",
+   "kg": 483.1460674157303
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-12.71",
+   "kg": 724.1573033707865
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-12.72",
+   "kg": 7959.550561797753
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-12.73",
+   "kg": 241.01123595505618
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-12.74",
+   "kg": 479.7752808988764
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-12.75",
+   "kg": 239.3258426966292
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-12.76",
+   "kg": 1196.0674157303372
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-12.77",
+   "kg": 477.5280898876405
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-12.78",
+   "kg": 4774.7191011235955
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-12.79",
+   "kg": 2380.8988764044943
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-12.80",
+   "kg": 475.84269662921344
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-12.81",
+   "kg": 237.64044943820224
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-12.82",
+   "kg": 1662.3595505617975
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-12.83",
+   "kg": 6643.258426966292
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-12.84",
+   "kg": 4980.898876404494
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-12.85",
+   "kg": 5925.2808988764045
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-12.86",
+   "kg": 4967.4157303370785
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-12.87",
+   "kg": 2128.651685393258
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-12.88",
+   "kg": 2127.5280898876404
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-12.89",
+   "kg": 4491.011235955056
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-12.90",
+   "kg": 6143.820224719101
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-12.91",
+   "kg": 2126.404494382022
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-12.92",
+   "kg": 1180.8988764044943
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-12.93",
+   "kg": 14170.224719101123
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-12.94",
+   "kg": 1416.8539325842696
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-12.95",
+   "kg": 6372.47191011236
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-12.96",
+   "kg": 3303.3707865168535
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-12.97",
+   "kg": 2830.8988764044943
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-12.98",
+   "kg": 9671.91011235955
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-12.99",
+   "kg": 1415.1685393258429
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-12.100",
+   "kg": 3065.730337078652
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-12.101",
+   "kg": 943.2584269662922
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-12.102",
+   "kg": 1650.561797752809
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-12.103",
+   "kg": 707.3033707865169
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-12.104",
+   "kg": 261.4106741573034
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-12.105",
+   "kg": 8956.741573033707
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-12.106",
+   "kg": 1178.0898876404494
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-12.107",
+   "kg": 4476.404494382023
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-12.108",
+   "kg": 8008.426966292134
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-12.109",
+   "kg": 2355.0561797752807
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-12.110",
+   "kg": 4237.640449438202
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-12.111",
+   "kg": 8945.505617977527
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-12.112",
+   "kg": 14594.943820224718
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-12.113",
+   "kg": 9180.337078651684
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-12.114",
+   "kg": 13416.85393258427
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-12.115",
+   "kg": 7767.4157303370785
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-12.116",
+   "kg": 6119.662921348315
+  },
+  {
+   "storage": "nh3_storage",
+   "batch": "N-2026-12.117",
+   "kg": 1724.5825842696631
   },
   {
    "storage": "h2_storage",

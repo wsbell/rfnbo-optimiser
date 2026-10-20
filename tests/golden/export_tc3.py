@@ -252,7 +252,7 @@ def export(path: Path) -> tuple[dict[str, Any], dict[str, Any]]:
         "kg_2026_10",
         "kg_2026_11",
         "kg_2026_12",
-        "weighted_ghg",
+        "highest_ghg",
         "shipped_ghg",
         "meets_target",
         "within_threshold",
@@ -308,8 +308,9 @@ def export(path: Path) -> tuple[dict[str, Any], dict[str, Any]]:
         },
         "v2_shortfall": {
             "note": "December renewable 2,500 kWh per interval and no LH2 spot sale. "
-            "Non-compliant RFNBO cannot be carried, so the liquefier gets just enough renewable "
-            "for December LH2 to comply.",
+            "Non-compliant RFNBO cannot be carried, so the liquefier gets enough renewable "
+            "(whole intervals) for December LH2 to comply. December CH2 is above CB's limit and "
+            "is not averaged down (§12), so CB is not met.",
             "december_renewable_per_interval_kWh": at(17),
             "lh2_ghg_without_renewable": at(24),
             "least_liquefier_renewable_kWh": at(25),
@@ -329,13 +330,14 @@ def export(path: Path) -> tuple[dict[str, Any], dict[str, Any]]:
             "december_lh2_ghg": at(39),
             "liquefier_rfnbo_feed_kg": at(41),
             "compressor_rfnbo_feed_kg": at(42),
-            "part_interval_ghg": at(43),
+            "cb_limit": at(43),
             "december_ch2_ghg": at(44),
             "lh2_carried_kg": at(45),
             "ch2_carried_kg": at(46),
             "h2_buffer_carried_kg": at(47),
             "carried_value_MJ": at(48),
             "beats_rejected": v["Better than the rejected alternative?"],
+            "cb_met": v["CB met?"],
         },
         "v3_infeasible": {
             "ca_target": at(52),

@@ -12,10 +12,12 @@ The split alternates stage A with an allocation until stable:
    of each interval is surplus.
 3. Share the surplus between the conditioning units, up to each one's electricity in its
    month (averaging within the month-long batch).
-4. A conditioning batch whose product would miss the RFNBO threshold with that cover takes the
-   shortfall from the electrolyser (from the end of the month backwards), but only when its
-   compliant product is worth more, in final-product MJ, than the RFNBO H₂ the electrolyser
-   loses (objective 2, §2.8). Then back to 1 with the electrolyser's reduced pool.
+4. A conditioning batch whose product would miss the RFNBO threshold (or its cap, a
+   consignment's limit) with that cover takes the shortfall from the electrolyser, from the end
+   of the month backwards, in whole intervals of the batch its part is fed from, but only when
+   its compliant product is worth more, in final-product MJ, than the RFNBO H₂ the electrolyser
+   loses (objective 2, §2.8). Without averaging (§12) its part's GHG is set by the lowest-GHG
+   electrolyser batch of the month. Then back to 1 with the electrolyser's reduced pool.
 
 The pool is never over-allocated. With no other unit on the pool the electrolyser keeps the
 whole pool and stage A is unchanged. The split is a proposal: the calculator re-runs it.
@@ -35,7 +37,7 @@ from rfnbo.data import calendar as cal
 from rfnbo.data.ingest import FloatArray
 from rfnbo.data.quality import Frame
 from rfnbo.model.entities import RenewableAllocation
-from rfnbo.optimise.batching import BatchingError, UnitBatching, windows
+from rfnbo.optimise.batching import BatchingError, Caps, UnitBatching, product_limit, windows
 
 ROUNDS = 6
 MARGIN = 1e-6  # gCO2e/MJ kept below the threshold so the calculator's check always passes
@@ -116,11 +118,13 @@ def plan(
     electrolyser: ProcessingUnit,
     batch: Callable[[FloatArray], UnitBatching],
     repair: bool = True,
+    caps: Caps | None = None,
 ) -> PoolSplit:
     """Split the electrolyser's renewable pool with the conditioning units sharing it.
 
     ``repair=False`` (the baseline) skips step 4: the electrolyser first, the surplus to the
-    others, whatever their compliance."""
+    others, whatever their compliance. A conditioning unit with a cap (a consignment's limit)
+    is repaired to that cap rather than to the threshold."""
     src = renewable_source(cfg, electrolyser)
     assert src is not None
     users = [cfg.block(f.target) for f in cfg.flows_out_of(src.id)]
@@ -135,9 +139,9 @@ def plan(
         _Conditioning(u, _series(frame, u.electricity_series), windows(cfg, frame, u)[0])
         for u in sorted(others, key=lambda u: u.id)
     ]
-    threshold = cfg.settings.rfnbo_threshold_gCO2e_per_MJ
     reserved = {c.unit.id: np.zeros(len(frame)) for c in cond}  # taken from the electrolyser
     log: list[str] = []
+    repaired: set[tuple[str, int]] = set()  # (conditioning unit, month start) given renewable
 
     def taken() -> FloatArray:
         return sum((r for r in reserved.values()), np.zeros(len(frame)))
@@ -164,34 +168,65 @@ def plan(
         e_ghg = _batch_ghg(cfg, frame, electrolyser, ub.cuts, e_alloc)
         for c in cond if repair else []:
             for s, e in c.months:
-                short = _compliance_shortfall(
-                    cfg, frame, c, s, e, float(alloc[c.unit.id][s:e].sum()), e_ghg, threshold
+                found = _compliance_shortfall(
+                    cfg,
+                    frame,
+                    c,
+                    s,
+                    e,
+                    float(alloc[c.unit.id][s:e].sum()),
+                    e_ghg,
+                    product_limit(cfg, frame, c.unit, caps),
                 )
-                if short is None or short <= TOL_KWH:
+                if found is None or found[0] <= TOL_KWH:
                     continue
+                short, (bs, be), rise = found
+                free = pool - taken()
+                # From the end of the month backwards, sparing the binding batch first. Stage A
+                # usually isolates the intervals given up, so the first take is the shortfall
+                # itself. If the shortfall comes back, the binding batch kept them: each kWh taken
+                # from it then raises the GHG that sets the shortfall, by ``rise`` kWh more
+                # shortfall, so what is still short there is scaled by 1 / (1 − rise).
+                if (c.unit.id, s) not in repaired:
+                    rise = 0.0
+                spared = [i for i in range(e - 1, s - 1, -1) if not bs <= i < be]
+                binding = list(range(min(be, e) - 1, max(bs, s) - 1, -1))
+                from_spared = min(short, float(sum(free[i] for i in spared)))
+                rest = short - from_spared
+                if rest > TOL_KWH and rise >= 1.0:
+                    log.append(
+                        f"stage A pool: {c.unit.id} {cal.month_key(frame.index[s], frame.timezone)}"
+                        " left non-compliant (taking renewable raises its feed GHG faster)"
+                    )
+                    continue
+                need = from_spared + (rest / (1.0 - rise) if rest > TOL_KWH else 0.0)
                 gain, loss = _worth(
-                    cfg, frame, c.unit, s, e, short, e_elec, e_prod, w_e, electrolyser
+                    cfg, frame, c.unit, s, e, need, e_elec, e_prod, w_e, electrolyser
                 )
                 if gain <= loss:
                     log.append(
                         f"stage A pool: {c.unit.id} {cal.month_key(frame.index[s], frame.timezone)}"
-                        f" left non-compliant ({short:,.1f} kWh short; worth {gain:,.0f} MJ < "
+                        f" left non-compliant ({need:,.1f} kWh short; worth {gain:,.0f} MJ < "
                         f"{loss:,.0f} MJ of electrolyser RFNBO)"
                     )
                     continue
-                left = short
-                free = pool - taken()
-                for i in range(e - 1, s - 1, -1):  # from the end of the month backwards
-                    take = min(left, float(free[i]))
-                    if take > TOL_KWH:
-                        reserved[c.unit.id][i] += take
-                        left -= take
-                    if left <= TOL_KWH:
-                        break
-                changed = True
+                before = reserved[c.unit.id][s:e].sum()
+                for group, left in ((spared, from_spared), (binding, need - from_spared)):
+                    for i in group:
+                        if left <= TOL_KWH:
+                            break
+                        # Whole intervals from the binding batch: a part-dark interval left in
+                        # it would raise its GHG; a whole one becomes a 0% batch of its own.
+                        take = float(free[i]) if group is binding else min(left, float(free[i]))
+                        if take > TOL_KWH:
+                            reserved[c.unit.id][i] += take
+                            left -= take
+                given = float(reserved[c.unit.id][s:e].sum()) - float(before)
+                changed = given > TOL_KWH or changed
+                repaired.add((c.unit.id, s))
                 log.append(
                     f"stage A pool round {rnd + 1}: {c.unit.id} "
-                    f"{cal.month_key(frame.index[s], frame.timezone)} takes {short - left:,.1f} "
+                    f"{cal.month_key(frame.index[s], frame.timezone)} takes {given:,.1f} "
                     "kWh from the electrolyser to comply"
                 )
         if not changed:
@@ -217,8 +252,9 @@ def _batch_ghg(
     unit: ProcessingUnit,
     cuts: list[tuple[int, int]],
     alloc: FloatArray,
-) -> list[tuple[int, int, float, float]]:
-    """(start, end, GHG, RFNBO kg) of each electrolyser batch, as the calculator computes."""
+) -> list[tuple[int, int, float, float, float]]:
+    """(start, end, GHG, RFNBO kg, GHG rise per matched kWh given up) of each electrolyser
+    batch, as the calculator computes."""
     elec = _series(frame, unit.electricity_series)
     prod = _series(frame, unit.production_series)
     out = []
@@ -232,7 +268,13 @@ def _batch_ghg(
             cfg, frame, unit, s, e
         )
         out.append(
-            (s, e, own / mj + unit.fixed_adder_gCO2e_per_MJ, matched / el * mj / unit.lhv_MJ_per_kg)
+            (
+                s,
+                e,
+                own / mj + unit.fixed_adder_gCO2e_per_MJ,
+                matched / el * mj / unit.lhv_MJ_per_kg,
+                _grid_ef(cfg, frame, unit, s) / mj,
+            )
         )
     return out
 
@@ -244,11 +286,13 @@ def _compliance_shortfall(
     s: int,
     e: int,
     allocated: float,
-    e_batches: list[tuple[int, int, float, float]],
-    threshold: float,
-) -> float | None:
-    """Renewable kWh the conditioning batch [s, e) still needs to reach the threshold, fed from
-    the lowest-GHG electrolyser batches of the same month; None if it cannot comply anyway."""
+    e_batches: list[tuple[int, int, float, float, float]],
+    limit: float,
+) -> tuple[float, tuple[int, int], float] | None:
+    """Renewable kWh the conditioning batch [s, e) still needs for its part from the month's
+    lowest-GHG electrolyser batch to reach ``limit`` (the threshold or a cap), that batch's
+    (start, end), and the extra kWh needed per kWh taken from that batch; None if it cannot
+    comply anyway."""
     u = c.unit
     elec = float(c.electricity[s:e].sum())
     out_kg = float(_series(frame, u.production_series)[s:e].sum())
@@ -268,24 +312,22 @@ def _compliance_shortfall(
     )
     frac = 1.0 if total_out is None else float(_series(frame, branch.series)[s:e].sum()) / total_out
     month = [b for b in e_batches if s <= b[0] < e]
-    need, em, got = feed_kg, 0.0, 0.0
-    for _, _, ghg, rf in sorted(month, key=lambda b: b[2]):
-        take = min(need - got, rf * frac)
-        if take <= 0:
-            break
-        em += take * ghg
-        got += take
-    if got <= 0:
+    # No averaging (§12): each batch fed makes its own part, whose GHG does not depend on how
+    # much is fed. Stage B feeds only sources whose part complies, so the cover needed is set by
+    # the lowest-GHG electrolyser batch of the month that reaches this unit.
+    usable = [(ghg, bs, be, d) for bs, be, ghg, rf, d in month if rf * frac > 0]
+    if not usable:
         return None
-    f = em / got
+    f, bs, be, dghg = min(usable)
     out_mj = out_kg * u.lhv_MJ_per_kg
-    room = threshold - MARGIN - u.fixed_adder_gCO2e_per_MJ - f * feed_kg * lhv_in / out_mj
+    room = limit - MARGIN - u.fixed_adder_gCO2e_per_MJ - f * feed_kg * lhv_in / out_mj
     room -= _other_emissions(cfg, frame, u, s, e) / out_mj
     if room < 0:
         return None
     grid_allowed = room * out_mj / _grid_ef(cfg, frame, u, s)
     required = max(0.0, elec - grid_allowed)
-    return max(0.0, required - min(allocated, elec))
+    rise = feed_kg * lhv_in / _grid_ef(cfg, frame, u, s) * dghg
+    return max(0.0, required - min(allocated, elec)), (bs, be), rise
 
 
 def _worth(

@@ -1,7 +1,9 @@
 """Phase 8 acceptance: reports regenerate the workbook tables.
 
-Test case 1 is compared with the workbook's own sheets, cell by cell. Test case 2 is compared
-with its regenerated fixture (the workbook predates the §2.5 rule).
+Test case 1 is compared with the workbook's own sheets, cell by cell, except where the
+no-averaging rule (§12) changes the workbook's values (NH₃ GHG, the NH₃ ledger and the
+consignments): those are compared with the regenerated fixture. Test case 2 is compared with its
+regenerated fixture (the workbook predates the §2.5 and §12 rules).
 """
 
 from __future__ import annotations
@@ -101,9 +103,8 @@ def test_tc1_nh3_register_is_the_nh3_batches_sheet() -> None:
         GRID: 11,
         "rfnbo_kg": 12,
         "rfnbo_MJ": 13,
-        "ghg": 14,
-        "compliant": 15,
     }
+    _, expected, _ = _run("tc1")
     wb_rows = [
         r
         for r in _sheet("tc1", "NH3_Batches")[1:]
@@ -113,6 +114,9 @@ def test_tc1_nh3_register_is_the_nh3_batches_sheet() -> None:
     for r in wb_rows:
         for key, j in cols.items():
             same(rows[r[0]][key], r[j], f"{r[0]} {key}")
+        e = expected["nh3_batches"][r[0]]
+        assert rows[r[0]]["ghg"] == e["ghg"] or math.isclose(rows[r[0]]["ghg"], e["ghg"]), r[0]
+        same(rows[r[0]]["compliant"], e["compliant"], f"{r[0]} compliant")
 
 
 def test_tc1_feed_matrix_is_the_nh3_feed_sheet() -> None:
@@ -133,20 +137,20 @@ def test_tc1_feed_matrix_is_the_nh3_feed_sheet() -> None:
 
 def test_tc1_ledgers_and_reconciliation_are_the_ledger_sheets() -> None:
     lines = {(r["storage"], r["batch"]): r for r in _table("tc1", "Ledger batches").rows}
-    for r in _sheet("tc1", "NH3_Ledger")[1:]:
-        if not str(r[0]).startswith("N-"):
-            continue
-        row = lines["nh3_storage", r[0].split()[0]]
-        for key, j in (
-            ("month", 1),
-            ("ghg", 2),
-            ("in_kg", 3),
-            ("out_consignment_kg", 4),
-            ("closing_before_kg", 5),
-            ("write_off_kg", 6),
-            ("carried_kg", 7),
+    _, expected, _ = _run("tc1")
+    nh3_lines = expected["nh3_ledger"]["lines"]
+    assert {b for s, b in lines if s == "nh3_storage"} == set(nh3_lines)
+    for bid, x in nh3_lines.items():
+        for key in (
+            "month",
+            "ghg",
+            "in_kg",
+            "out_consignment_kg",
+            "closing_before_kg",
+            "write_off_kg",
+            "carried_kg",
         ):
-            same(row[key], r[j], f"NH3 ledger {r[0]} {key}")
+            same(lines["nh3_storage", bid][key], x[key], f"NH3 ledger {bid} {key}")
 
     summary = {r["storage"]: r for r in _table("tc1", "Ledgers").rows}
     h2 = _labelled("tc1", "H2_Ledger")
@@ -167,14 +171,8 @@ def test_tc1_ledgers_and_reconciliation_are_the_ledger_sheets() -> None:
         nh3["Measured physical inventory at quarter end (kg)"],
         "NH3 physical",
     )
-    same(
-        summary["nh3_storage"]["write_off_kg"], nh3["Shortfall to write off (kg)"], "NH3 write-off"
-    )
-    same(
-        summary["nh3_storage"]["carried_ghg"],
-        nh3["Energy-weighted GHG of carried inventory (gCO₂e/MJ)"],
-        "NH3 carried GHG",
-    )
+    same(summary["nh3_storage"]["write_off_kg"], expected["nh3_ledger"]["write_off_kg"], "NH3 w/o")
+    same(summary["nh3_storage"]["carried_ghg"], expected["nh3_ledger"]["carried_ghg"], "NH3 GHG")
 
     rec = {(r["storage"], r["item"]): r["kg"] for r in _table("tc1", "Reconciliation").rows}
     for store, sheet, items in (
@@ -211,6 +209,7 @@ def test_tc1_ledgers_and_reconciliation_are_the_ledger_sheets() -> None:
 
 
 def test_tc1_consignment_report_is_the_consignments_sheet() -> None:
+    _, expected, _ = _run("tc1")
     summary = _by(_table("tc1", "Consignments"), "consignment")
     parts = {
         (r["consignment"], r["month"]): r["kg"] for r in _table("tc1", "Consignment batches").rows
@@ -218,21 +217,22 @@ def test_tc1_consignment_report_is_the_consignments_sheet() -> None:
     for r in _sheet("tc1", "Consignments")[1:]:
         if r[0] not in ("C1", "C2"):
             continue
-        row = summary[r[0]]
+        row, e = summary[r[0]], expected["consignments"][r[0]]
         same(row["customer"], r[1], "customer")
         same(row["ship_date"], r[2].date().isoformat(), "ship date")
         for key, j in (
             ("volume_kg", 3),
             ("target", 4),
             ("adder", 5),
-            ("weighted_ghg", 11),
-            ("shipped_ghg", 12),
-            ("meets_target", 13),
-            ("meets_threshold", 14),
         ):
             same(row[key], r[j], f"{r[0]} {key}")
-        same(parts[r[0], "2026-09"], r[9], f"{r[0]} Sep NH3")
-        same(parts[r[0], "2026-10"], r[10], f"{r[0]} Oct NH3")
+        # §12: the workbook's averaged allocation is superseded by the regenerated one.
+        same(row["highest_ghg"], e["highest_ghg"], f"{r[0]} highest part GHG")
+        same(row["shipped_ghg"], e["shipped_ghg"], f"{r[0]} shipped GHG")
+        same(row["meets_target"], e["shipped_ghg"] <= e["target"] + 1e-9, f"{r[0]} target")
+        for month in ("2026-09", "2026-10"):
+            kg = sum(v for b, v in e["parts"].items() if b.startswith(f"N-{month}"))
+            same(parts.get((r[0], month), 0.0), kg, f"{r[0]} {month} NH3")
 
 
 def test_tc1_renewable_matching_totals() -> None:
@@ -338,3 +338,19 @@ def test_cli_report_from_a_sealed_run(tmp_path: Path, capsys: pytest.CaptureFixt
     )
     assert main(["report", str(d), "--out", str(tmp_path / "bad")]) == 1
     assert "refusing" in capsys.readouterr().err
+
+
+def test_batch_parts_table_lists_every_downstream_part() -> None:
+    """§12: December NH₃ in test case 1 has a compliant part (from the 1.17 H₂) and a
+    non-compliant one (from the 17.83 H₂); the register shows the highest."""
+    _, expected, _ = _run("tc1")
+    rows = _by(_table("tc1", "Batch parts"), "part")
+    want = {pid: x for b in expected["nh3_batches"].values() for pid, x in b["parts"].items()}
+    assert set(rows) == set(want)
+    for pid, x in want.items():
+        same(rows[pid]["ghg"], x["ghg"], f"{pid} GHG")
+        same(rows[pid]["kg"], x["kg"], f"{pid} kg")
+        same(rows[pid]["compliant"], x["compliant"], f"{pid} compliant")
+    dec = _by(_table("tc1", "Batches NH3 synthesis"))["N-2026-12"]
+    assert dec["parts"] == 2 and dec["ghg"] is None and not dec["compliant"]
+    same(dec["max_ghg"], want["N-2026-12.2"]["ghg"], "highest part")

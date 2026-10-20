@@ -1,11 +1,10 @@
 """Stages B and C (build plan §6): feed allocation, then consignments and write-offs.
 
-Stage B (LP per downstream unit). Variables x[b, m]: kg of upstream ledger batch b fed to
-downstream batch m. With F_m = Σ_b x·LHV_b (RFNBO feed MJ), C_m the feed the batch consumed
-(MJ), own_m its own emissions and MJ_m its output energy, the downstream batch is compliant
-when GHG_m ≤ T, which is linear in x:
-
-    Σ_b x[b, m] · LHV_b · (g_b + own_m / C_m − (T − A) · MJ_m / C_m) ≤ 0
+Stage B (LP per downstream unit). Variables x[b, m]: kg of upstream ledger part b fed to
+downstream batch m. Batches are never averaged (build plan §12): each source becomes its own
+part of m, with GHG g_b · C_m / MJ_m + own_m / MJ_m + A (C_m the feed m consumed, MJ_m its
+output energy, own_m its own emissions), so a variable exists only where that part complies
+(T, or the back-propagated limit for an intermediate product). Feed energy is at most C_m.
 
 Its RFNBO output is P_m · F_m / C_m kg. Objectives, lexicographic:
     1. maximise RFNBO output of the downstream unit (compliant by construction); from the
@@ -15,9 +14,10 @@ Its RFNBO output is P_m · F_m / C_m kg. Objectives, lexicographic:
        (exact) plus the downstream batches' carried shares (weights from stage C);
     3. prefer same-month feed (readability).
 
-Stage C (LP per storage with consignments). Variables y[l, c]: kg of compliant ledger line l
-to consignment c, and k[l]: kg carried forward. Each consignment gets its volume with GHG at or
-below min(target, threshold) − distribution adder. Objectives: minimise-mode consignments'
+Stage C (LP per storage with consignments). Variables y[l, c]: kg of compliant ledger part l
+to consignment c, and k[l]: kg carried forward. Each consignment gets its volume, and every
+part it takes is at or below min(target, threshold) − distribution adder (parts are never
+averaged, §12). Objectives: minimise-mode consignments'
 GHG first, then GHG carried forward, then oldest month first into consignments. Write-offs
 then follow the §2.7 rule exactly (highest GHG first, newest month on ties).
 
@@ -41,7 +41,13 @@ from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 
-from rfnbo.calc.batch import BatchResult, output_storage, output_storages, storage_lhv
+from rfnbo.calc.batch import (
+    BatchPart,
+    BatchResult,
+    output_storage,
+    output_storages,
+    storage_lhv,
+)
 from rfnbo.calc.calculator import RunResult
 from rfnbo.calc.consign import consignment_route
 from rfnbo.calc.ledger import LedgerLine, LedgerResult, rule_write_offs
@@ -80,6 +86,20 @@ class FeedPlan:
     status: str
 
 
+def part_ghg(t: BatchResult, g: float) -> float:
+    """GHG of the part a source at ``g`` makes in downstream batch ``t`` (§12)."""
+    return (
+        g * t.feed_consumed_MJ / t.energy_MJ
+        + t.own_emissions_g / t.energy_MJ
+        + t.adder_gCO2e_per_MJ
+    )
+
+
+def part_ok(t: BatchResult, g: float, limit: float) -> bool:
+    """Whether feeding a source at ``g`` into ``t`` gives a part within ``limit``."""
+    return t.energy_MJ > 0 and part_ghg(t, g) <= limit - MARGIN
+
+
 def feed_storage(cfg: PlantConfig, unit: ProcessingUnit) -> StorageUnit | None:
     stores = [
         b for f in cfg.flows_into(unit.id) if isinstance(b := cfg.block(f.source), StorageUnit)
@@ -114,16 +134,16 @@ def stage_b(
     store = feed_storage(cfg, unit)
     if store is None:
         return FeedPlan(unit.id, [], 0.0, "no feed")
-    threshold = cfg.settings.rfnbo_threshold_gCO2e_per_MJ
     ledger = run.ledger(store.id)
     sources = [x for x in ledger.lines if x.in_kg - x.out_consignment_kg > 0]
     targets = sorted((b for b in run.batches.values() if b.unit == unit.id), key=lambda b: b.start)
 
     lp = LinearProgram()
+    limit_t = ghg_limit(cfg, run.frame, unit)
     x: dict[tuple[str, str], int] = {}
     for s in sources:
         for t in targets:
-            if t.feed_consumed_MJ > 0:
+            if t.feed_consumed_MJ > 0 and part_ok(t, s.ghg_gCO2e_per_MJ, limit_t):
                 x[s.batch, t.id] = lp.var()
     if not x:
         return FeedPlan(unit.id, [], 0.0, "no feed")
@@ -151,16 +171,6 @@ def stage_b(
         lp.row(cols, lhv, upper=t.feed_consumed_MJ)
         own_per_mj = t.own_emissions_g / t.feed_consumed_MJ
         out_per_mj = t.energy_MJ / t.feed_consumed_MJ
-        limit = (threshold - t.adder_gCO2e_per_MJ - MARGIN) * out_per_mj
-        lp.row(
-            cols,
-            [
-                src[sb].lhv_MJ_per_kg * (src[sb].ghg_gCO2e_per_MJ + own_per_mj - limit)
-                for (sb, tb) in x
-                if tb == t.id
-            ],
-            upper=0.0,
-        )
         for (sb, tb), j in x.items():
             if tb != t.id:
                 continue
@@ -361,7 +371,7 @@ def stage_b_network(
     # Sources: (storage, batch) with availability either fixed or an output-allocation variable.
     o: dict[tuple[str, str], int] = {}
     split_batches: dict[str, list[tuple[str, int]]] = defaultdict(list)
-    sources: dict[tuple[str, str], tuple[LedgerLine | None, BatchResult | None]] = {}
+    sources: dict[tuple[str, str], tuple[LedgerLine | None, BatchPart | None]] = {}
     for sid in stores:
         for ln in run.ledger(sid).lines:
             if ln.origin == "opening" or len(run.storages_of.get(ln.batch, ())) == 1:
@@ -371,22 +381,27 @@ def stage_b_network(
             if not isinstance(prod, ProcessingUnit) or len(cfg.flows_out_of(prod.id)) < 2:
                 continue
             for pb in run.batches.values():
-                if pb.unit != prod.id or pb.rfnbo_kg <= 0:
+                if pb.unit != prod.id or not pb.parts:
                     continue
                 metered = float(frame.series[f.series or ""][pb.start_index : pb.end_index].sum())
-                jo = lp.var(upper=metered)
-                o[pb.id, f.id] = jo
-                split_batches[pb.id].append((f.id, jo))
-                sources[sid, pb.id] = (None, pb)
-    for bid, parts in split_batches.items():
-        rf = run.batches[bid].rfnbo_kg
+                shared = []
+                for part in pb.parts:  # the batch's parts share the flow's metered kg
+                    jo = lp.var(upper=metered)
+                    o[part.id, f.id] = jo
+                    split_batches[part.id].append((f.id, jo))
+                    sources[sid, part.id] = (None, part)
+                    shared.append(jo)
+                if len(shared) > 1:
+                    lp.row(shared, [1.0] * len(shared), upper=metered)
+    for pid, parts in split_batches.items():
+        rf = run.parts[pid].kg
         lp.row([j for _, j in parts], [1.0] * len(parts), lower=rf, upper=rf)
 
     def ghg(key: tuple[str, str]) -> float:
         line, b = sources[key]
         if line is not None:
             return line.ghg_gCO2e_per_MJ
-        assert b is not None and b.ghg_gCO2e_per_MJ is not None
+        assert b is not None
         return b.ghg_gCO2e_per_MJ
 
     def compliant(key: tuple[str, str]) -> bool:
@@ -398,10 +413,11 @@ def stage_b_network(
         return line.month if line is not None else (b.month if b else "")
 
     lhv = {sid: storage_lhv(cfg, sid) for sid in stores}
+    limits = {u.id: ghg_limit(cfg, frame, u) for u in units}
     x: dict[tuple[tuple[str, str], str], int] = {}
     for key in sources:
         for t in targets:
-            if key[0] in fed_by[t.unit]:
+            if key[0] in fed_by[t.unit] and part_ok(t, ghg(key), limits[t.unit]):
                 x[key, t.id] = lp.var()
     k = {key: lp.var() for key in sources if compliant(key)}
     by_source: dict[tuple[str, str], list[int]] = defaultdict(list)
@@ -438,6 +454,8 @@ def stage_b_network(
             for pp in usable_pos(run, sup):
                 if metered <= 0 or left.get(pp.id, 0.0) <= DROP_KG:
                     continue
+                if not part_ok(t, pp.ghg_gCO2e_per_MJ, limits[t.unit]):
+                    continue  # its part would not comply, and no blend can save it (§12)
                 j = lp.var()
                 pv[pp.id, f.id, t.id] = j
                 pv_lhv[j] = sup.lhv_MJ_per_kg
@@ -450,7 +468,6 @@ def stage_b_network(
     for pid, cols_p in by_pos.items():
         lp.row(cols_p, [1.0] * len(cols_p), upper=max(0.0, left[pid]))
 
-    limits = {u.id: ghg_limit(cfg, frame, u) for u in units}
     rfnbo_coef: dict[int, float] = {}
     emissions_coef: dict[int, float] = {}
     unit_of: dict[int, str] = {}
@@ -463,12 +480,6 @@ def stage_b_network(
         lp.row([j for _, _, j in cols], [lv for lv, _, _ in cols], upper=t.feed_consumed_MJ)
         own_per_mj = t.own_emissions_g / t.feed_consumed_MJ
         out_per_mj = t.energy_MJ / t.feed_consumed_MJ
-        limit = (limits[t.unit] - t.adder_gCO2e_per_MJ - MARGIN) * out_per_mj
-        lp.row(
-            [j for _, _, j in cols],
-            [lv * (g + own_per_mj - limit) for lv, g, _ in cols],
-            upper=0.0,
-        )
         for lv, g, j in cols:
             rfnbo_coef[j] = lv * t.product_kg / t.feed_consumed_MJ
             emissions_coef[j] = lv * (g + own_per_mj + t.adder_gCO2e_per_MJ * out_per_mj)
@@ -611,11 +622,20 @@ def stage_c(
         ledger = run.ledger(store_id)
         lines = _lines_for(ledger)
         lp = LinearProgram()
+        limits: dict[str, float] = {}
+        for c in cons:
+            target = (
+                threshold
+                if c.target_gCO2e_per_MJ is None
+                else min(c.target_gCO2e_per_MJ, threshold)
+            )
+            limits[c.id] = target - adder[c.id] - MARGIN
         y: dict[tuple[str, str], int] = {}
         for line in lines:
             if line.compliant:
                 for c in cons:
-                    y[line.batch, c.id] = lp.var()
+                    if line.ghg_gCO2e_per_MJ <= limits[c.id]:
+                        y[line.batch, c.id] = lp.var()
         # Only compliant RFNBO can be carried forward; non-compliant is written off.
         k = {line.batch: lp.var() for line in lines if line.compliant}
         for line in lines:
@@ -625,21 +645,9 @@ def stage_c(
             ]
             if cols:
                 lp.row(cols, [1.0] * len(cols), upper=line.in_kg - line.out_feed_kg)
-        limits: dict[str, float] = {}
         for c in cons:
             cols = [y[line.batch, c.id] for line in lines if (line.batch, c.id) in y]
             lp.row(cols, [1.0] * len(cols), lower=c.volume_kg, upper=c.volume_kg)
-            target = (
-                threshold
-                if c.target_gCO2e_per_MJ is None
-                else min(c.target_gCO2e_per_MJ, threshold)
-            )
-            limits[c.id] = target - adder[c.id] - MARGIN
-            lp.row(
-                cols,
-                [line.ghg_gCO2e_per_MJ - limits[c.id] for line in lines if (line.batch, c.id) in y],
-                upper=0.0,
-            )
         remaining = sum(line.in_kg - line.out_feed_kg for line in lines if line.compliant) - sum(
             c.volume_kg for c in cons
         )
@@ -672,14 +680,21 @@ def stage_c(
             shortfalls += diagnose(cfg, run, store_id, cons, limits)
             continue
         for c in cons:
-            parts_by_month: dict[str, list[Part]] = defaultdict(list)
+            # One production month and one origin per aggregated batch (§2.6, §12).
+            groups: dict[tuple[str, bool], list[Part]] = defaultdict(list)
             for line in lines:
                 j = y.get((line.batch, c.id))
                 if j is not None and sol.x[j] > DROP_KG:
-                    parts_by_month[line.month].append(Part(batch=line.batch, kg=float(sol.x[j])))
-            for m in sorted(parts_by_month):
+                    groups[line.month, line.purchased].append(
+                        Part(batch=line.batch, kg=float(sol.x[j]))
+                    )
+            for m, purchased in sorted(groups):
                 aggregated.append(
-                    AggregatedBatchSpec(id=f"{c.id}-{m}", consignment=c.id, parts=parts_by_month[m])
+                    AggregatedBatchSpec(
+                        id=f"{c.id}-{m}" + ("-purchased" if purchased else ""),
+                        consignment=c.id,
+                        parts=groups[m, purchased],
+                    )
                 )
     return ConsignmentPlan(aggregated, not shortfalls, shortfalls)
 
@@ -702,13 +717,8 @@ def diagnose(
     alone: list[Shortfall] = []
     together: list[Shortfall] = []
     for c in cons:
-        lp = LinearProgram()
-        cols = [lp.var(upper=x.in_kg - x.out_feed_kg, cost=1.0) for x in compliant]
-        best = 0.0
-        if cols:
-            lp.row(cols, [x.ghg_gCO2e_per_MJ - limits[c.id] for x in compliant], upper=0.0)
-            sol = lp.solve(maximise=True)
-            best = sol.objective if sol.optimal else 0.0
+        # Parts are never averaged (§12): only parts at or below the limit count.
+        best = sum(x.in_kg - x.out_feed_kg for x in compliant if x.ghg_gCO2e_per_MJ <= limits[c.id])
         limit = limits[c.id] + MARGIN
         if best + 1e-6 >= c.volume_kg:
             together.append(
@@ -730,7 +740,7 @@ def diagnose(
             )
         else:
             alone.append(
-                Shortfall(c.id, f"only {best:,.1f} kg can be blended to {limit:.4g} gCO2e/MJ", best)
+                Shortfall(c.id, f"only {best:,.1f} kg is at or below {limit:.4g} gCO2e/MJ", best)
             )
     return alone or together
 
@@ -750,25 +760,34 @@ def write_offs(run: RunResult) -> list[WriteOff]:
     return out
 
 
+def _batch_lines(run: RunResult, b: BatchResult) -> list[LedgerLine]:
+    """The ledger lines of every part of ``b``."""
+    ids = {p.id for p in b.parts}
+    return [x for led in run.ledgers for x in led.lines if x.batch in ids]
+
+
 def carried_weights(run: RunResult, unit: str) -> dict[str, float]:
-    """Share of each of ``unit``'s batches' RFNBO that is carried forward (for stage B)."""
-    lines = {x.batch: x for led in run.ledgers for x in led.lines}
+    """Share of each of ``unit``'s batches' RFNBO (over its parts) that is carried forward
+    (for stage B)."""
     out: dict[str, float] = {}
     for b in run.batches.values():
-        if b.unit == unit and b.id in lines and lines[b.id].in_kg > 0:
-            out[b.id] = max(0.0, lines[b.id].carried_kg) / lines[b.id].in_kg
+        lines = _batch_lines(run, b) if b.unit == unit else []
+        total = sum(x.in_kg for x in lines)
+        if total > 0:
+            out[b.id] = max(0.0, sum(x.carried_kg for x in lines)) / total
     return out
 
 
 def kept_shares(run: RunResult, unit: str) -> dict[str, float]:
-    """Share of each of ``unit``'s batches' RFNBO that is consigned or carried forward, not
-    written off (for stage B's value objective)."""
-    lines = {x.batch: x for led in run.ledgers for x in led.lines}
+    """Share of each of ``unit``'s batches' RFNBO (over its parts) that is consigned or carried
+    forward, not written off (for stage B's value objective)."""
     out: dict[str, float] = {}
     for b in run.batches.values():
-        if b.unit == unit and b.id in lines and lines[b.id].in_kg > 0:
-            x = lines[b.id]
-            out[b.id] = max(0.0, x.out_consignment_kg + x.carried_kg) / x.in_kg
+        lines = _batch_lines(run, b) if b.unit == unit else []
+        total = sum(x.in_kg for x in lines)
+        if total > 0:
+            kept = sum(x.out_consignment_kg + x.carried_kg for x in lines)
+            out[b.id] = max(0.0, kept) / total
     return out
 
 
@@ -779,7 +798,7 @@ def credit_shares(run: RunResult, unit: str) -> dict[str, float]:
     not pushed into product that would be written off (§11.1 rule 5)."""
     full = {led.storage for led in run.ledgers if led.excess_kg > DROP_KG}
     return {
-        b.id: 0.0 if set(run.storages_of.get(b.id, ())) & full else 1.0
+        b.id: 0.0 if {s.id for s in output_storages(run.config, b.unit)} & full else 1.0
         for b in run.batches.values()
         if b.unit == unit
     }
@@ -831,4 +850,5 @@ def final_units(cfg: PlantConfig) -> list[str]:
 
 
 def batch_rfnbo(batches: Mapping[str, BatchResult], units: Sequence[str]) -> float:
-    return sum(b.rfnbo_kg for b in batches.values() if b.unit in units and b.compliant)
+    """Compliant RFNBO of the units' batches (every compliant part)."""
+    return sum(p.kg for b in batches.values() if b.unit in units for p in b.parts if p.compliant)

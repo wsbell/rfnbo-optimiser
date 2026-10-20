@@ -41,13 +41,119 @@ DATA_COLS = [
 PARAMS = [*W3.PARAMS, (17, "Purchased H₂ lower heating value", 120, "MJ/kg", "Supplier block")]
 POS_ROWS = {"POS-A": 2, "POS-B": 3, "POS-C": 4}
 # PoS_Alloc rows: (row, PoS, flow, target batch, formula). Lowest-GHG credentials first, each
-# nearest its dispatch month; the delivery table is in rows 10-11.
+# nearest its dispatch month; the delivery table is in rows 10-11. POS-C makes no compliant
+# part (Parts!P13:P14), so it gets none (§12: no blend can save it).
 ALLOC = [
     (2, "POS-A", "f_sup_comp", "C-2026-11", "=MIN(PoS!$E$2,$D$10)"),
-    (3, "POS-C", "f_sup_comp", "C-2026-11", "=MIN(PoS!$E$4,$D$10-E2)"),
-    (4, "POS-B", "f_sup_liq", "L-2026-12", "=MIN(PoS!$E$3,$D$11)"),
-    (5, "POS-C", "f_sup_liq", "L-2026-12", "=MIN(PoS!$E$4-E3,$D$11-E4)"),
+    (3, "POS-B", "f_sup_comp", "C-2026-11", "=MIN(PoS!$E$3,$D$10-E2)"),
+    (4, "POS-B", "f_sup_liq", "L-2026-12", "=MIN(PoS!$E$3-E3,$D$11)"),
+    (5, "POS-C", "f_sup_liq", "L-2026-12", "=IF(Parts!P14,MIN(PoS!$E$4,$D$11-E4),0)"),
 ]
+# Parts sheet rows (§12): (row, part, unit, batch, origin, source, source GHG, RFNBO feed kg,
+# batch row on the unit's batch sheet).
+PARTS = [
+    (
+        2,
+        "L-2026-10",
+        "liquefier",
+        "L-2026-10",
+        "own",
+        "E-2026-10",
+        "Buffer_Ledger!B2",
+        "Buffer_Ledger!D2",
+        2,
+    ),
+    (
+        3,
+        "L-2026-11",
+        "liquefier",
+        "L-2026-11",
+        "own",
+        "E-2026-11",
+        "Buffer_Ledger!B3",
+        "Buffer_Ledger!E3",
+        3,
+    ),
+    (
+        4,
+        "L-2026-12.1",
+        "liquefier",
+        "L-2026-12",
+        "own",
+        "E-2026-12",
+        "Buffer_Ledger!B4",
+        "Buffer_Ledger!F4",
+        4,
+    ),
+    (5, "L-2026-12.2", "liquefier", "L-2026-12", "purchased", "POS-B", "PoS!F3", "PoS_Alloc!E4", 4),
+    (
+        6,
+        "C-2026-10",
+        "compressor",
+        "C-2026-10",
+        "own",
+        "E-2026-10",
+        "PT_Ledger!B2",
+        "PT_Ledger!D2",
+        2,
+    ),
+    (
+        7,
+        "C-2026-11.1",
+        "compressor",
+        "C-2026-11",
+        "own",
+        "E-2026-11",
+        "PT_Ledger!B3",
+        "PT_Ledger!E3",
+        3,
+    ),
+    (
+        8,
+        "C-2026-11.2",
+        "compressor",
+        "C-2026-11",
+        "purchased",
+        "POS-A",
+        "PoS!F2",
+        "PoS_Alloc!E2",
+        3,
+    ),
+    (
+        9,
+        "C-2026-11.3",
+        "compressor",
+        "C-2026-11",
+        "purchased",
+        "POS-B",
+        "PoS!F3",
+        "PoS_Alloc!E3",
+        3,
+    ),
+    (
+        10,
+        "C-2026-12",
+        "compressor",
+        "C-2026-12",
+        "own",
+        "E-2026-12",
+        "PT_Ledger!B4",
+        "PT_Ledger!F4",
+        4,
+    ),
+]
+PART_ROW = {p[1]: p[0] for p in PARTS}
+PA, PC, PO, PL = (f"Parts!${c}$2:${c}$10" for c in "ACOL")
+# Product ledgers: lines in write-off priority order (highest GHG, then newest month).
+LEDGER_ORDER = {
+    "LH2_Ledger": ["L-2026-12.2", "L-2026-11", "L-2026-12.1", "L-2026-10"],
+    "CH2_Ledger": ["C-2026-11.3", "C-2026-11.2", "C-2026-12", "C-2026-11.1", "C-2026-10"],
+}
+
+
+def total_row(sheet: str) -> int:
+    """The Total row of a product ledger; labelled rows follow it."""
+    return 2 + len(LEDGER_ORDER[sheet])
 
 
 def readme(wb: Workbook) -> None:
@@ -89,9 +195,9 @@ def readme(wb: Workbook) -> None:
         (
             "POS-A: dispatched 20 Oct, 8,000 kg, 3.0 gCO₂e/MJ (low GHG). POS-B: dispatched 20 "
             "Dec, 9,000 kg, 12.0 gCO₂e/MJ. POS-C: dispatched 25 Nov, 6,000 kg, 27.9 gCO₂e/MJ "
-            "(near the 28.2 threshold). Their 23,000 kg exceed the quarter's 19,200 kg of metered "
-            "delivery, so POS-C is only part covered: 3,800 kg is not allocated and is written "
-            "off at quarter end.",
+            "(near the 28.2 threshold). Without averaging (build plan §12) POS-C's part of either "
+            "unit's batch would be above 28.2 (Parts!O13:O14) and no blend can save it, so all "
+            "6,000 kg of it is not allocated and is written off at quarter end.",
             False,
         ),
         ("", False),
@@ -105,7 +211,7 @@ def readme(wb: Workbook) -> None:
             "2. Its credentials are allocated to the supplier's metered delivery in the same "
             "quarter: into a unit per batch, at most the metered kg in that batch; per PoS at "
             "most its quantity. Credentials may go to flow metered before the dispatch date "
-            "(decision 7): POS-C (25 Nov) covers delivery on 1–10 Nov.",
+            "(decision 7): POS-B (20 Dec) covers delivery on 1–10 Nov.",
             False,
         ),
         (
@@ -123,24 +229,32 @@ def readme(wb: Workbook) -> None:
             "5. PoS quantity not allocated by quarter end is written off (decision 2).",
             False,
         ),
+        (
+            "6. No averaging (§12, decided 2026-10-20): a batch fed from several sources has one "
+            "part per source GHG and origin (Parts sheet), each keeping its source's GHG; "
+            "purchased parts are never aggregated with the plant's own; a consignment's GHG is "
+            "its highest part's.",
+            False,
+        ),
         ("", False),
         ("Why this decision set is optimal", True),
         (
-            "Objective 2 (carried value): every kg of metered delivery gets credentials, so every "
-            "conditioning batch except November's liquefier batch is 100% RFNBO. November's "
-            "liquefier yield (0.97) is below the H₂ buffer's weight (0.9768), so 2,000 kg of RFNBO "
-            "H₂ is worth more left in the buffer, which ends full (4,880 kg); October's and "
-            "December's yield (0.98) beat the weight. LH₂ and CH₂ storage keep all their RFNBO "
-            "after CA and CB, within measured inventory.",
+            "Objective 2 (carried value): the compliant credentials (A and B, 17,000 kg) are all "
+            "allocated: A 8,000 and B 1,600 kg into November's compressor delivery (9,600 kg), "
+            "the rest of B (7,400 kg) into December's liquefier delivery. The 2,200 kg of "
+            "December delivery no credential covers is filled with RFNBO from the H₂ buffer: "
+            "December's liquefier yield (0.98) beats November's (0.97), so November's batch gives "
+            "it up and holds 4,200 kg in the buffer, which ends full (4,880 kg). Every "
+            "conditioning batch but November's liquefier batch is 100% RFNBO. LH₂ and CH₂ storage "
+            "keep all their RFNBO after CA and CB, within measured inventory.",
             False,
         ),
         (
-            "Objective 3 (carried emissions): any credential raises its batch above the plant's "
-            "own LH₂ and CH₂, so the batches with credentials are the highest GHG and CA and CB "
-            "take them first; carried inventory is the plant's own lowest-GHG product whichever "
-            "credentials are used. Ties after that: the lowest-GHG credentials are used (A and B "
-            "in full, C 2,200 kg), each nearest its dispatch month: A (Oct) and C (Nov) into "
-            "November's compressor batch, B (Dec) and C's rest into December's liquefier batch.",
+            "Objective 3 (carried emissions): CA and CB take their highest-GHG own parts within "
+            "their limits first (the parts made from credentials are above both limits), so the "
+            "lowest-GHG product stays in storage. Ties after that: each credential nearest its "
+            "dispatch month: A (Oct) into November, B (Dec) into November's remainder and "
+            "December.",
             False,
         ),
         ("", False),
@@ -157,7 +271,7 @@ def readme(wb: Workbook) -> None:
         ("Sheets", True),
         (
             "Parameters · PoS (register) · Data_15min · E_Batches · E_Split · Buffer_Ledger · "
-            "PoS_Alloc (credentials to deliveries) · L_Batches · PT_Ledger · C_Batches · "
+            "PoS_Alloc (credentials to deliveries) · L_Batches · PT_Ledger · C_Batches · Parts · "
             "LH2_Ledger · CH2_Ledger · Consignments · Objectives · Variants · Checks.",
             False,
         ),
@@ -298,16 +412,14 @@ def buffer_ledger(wb: Workbook, title: str, *, pass_through: bool) -> None:
         s.put(f"B{r}", f"=E_Batches!N{r}")
         s.put(f"C{r}", f"=E_Split!{flow_col}{r}")
         for j, col in enumerate("DEF"):
+            # RFNBO from storage also covers the supplier's delivery that no credential covers.
+            need = f"{target_sheet}!$T${r}+{target_sheet}!$U${r}-{target_sheet}!$W${r}"
             if j != k:
                 s.put(f"{col}{r}", 0, fill=DECISION, fmt="#,##0.000000")
             elif pass_through or k != 1:
-                s.put(f"{col}{r}", f"=MIN($C{r},{target_sheet}!$T${r})", fill=DECISION)
+                s.put(f"{col}{r}", f"=MIN($C{r},{need})", fill=DECISION)
             else:
-                s.put(
-                    f"{col}{r}",
-                    f"=MIN({target_sheet}!$T${r},$C{r}-MAX(0,$B$13-G2-G4))",
-                    fill=DECISION,
-                )
+                s.put(f"{col}{r}", f"=MIN({need},$C{r}-MAX(0,$B$13-G2-G4))", fill=DECISION)
         s.put(f"G{r}", f"=C{r}-SUM(D{r}:F{r})")
         s.put(f"H{r}", f"=G{r}>=-0.000001", fmt="General")
     s.note("A5", "Total RFNBO H₂ (kg)")
@@ -355,9 +467,11 @@ def buffer_ledger(wb: Workbook, title: str, *, pass_through: bool) -> None:
         s.put(f"B{row}", f)
     s.note(
         "A26",
-        "November's liquefier batch takes 2,000 kg less RFNBO than its buffer flow, so the "
-        "buffer ends full of RFNBO (4,880 kg): 1 MJ of H₂ here is worth 0.9768 MJ of final "
-        "product (Objectives!B3), more than the 0.97 MJ of LH₂ November's liquefier makes of it.",
+        "December's liquefier batch takes the 2,200 kg of supplier delivery no credential covers "
+        "from the buffer as well (its yield, 0.98, beats the buffer's weight). November's takes "
+        "less RFNBO than its buffer flow, so the buffer ends full of RFNBO (4,880 kg): 1 MJ of "
+        "H₂ here is worth 0.9768 MJ of final product (Objectives!B3), more than the 0.97 MJ of "
+        "LH₂ November's liquefier makes of it.",
     )
 
 
@@ -425,20 +539,22 @@ def pos_alloc(wb: Workbook) -> None:
         )
     s.put(
         "H10",
-        '=AND(SUMIFS(E2:E5,A2:A5,"POS-C",C2:C5,C10)>0,G10<=PoS!D4)',
+        '=AND(SUMIFS(E2:E5,A2:A5,"POS-B",C2:C5,C10)>0,G10<=PoS!D3)',
         fmt="General",
     )
     s.put("H11", '=AND(SUMIFS(E2:E5,A2:A5,"POS-B",C2:C5,C11)>0,G11<=PoS!D3)', fmt="General")
     s.note("A12", "Total metered supply in the quarter (kg)")
     s.put("D12", f"=SUM({rng('AC')})+SUM({rng('AD')})")
-    s.note("A13", "Every metered kg covered by credentials?")
-    s.put("D13", "=ABS(E6-D12)<=0.000001", fmt="General")
+    s.note("A13", "Metered delivery without credentials: non-RFNBO (kg)")
+    s.put("D13", "=D12-E6")
     s.note(
         "A15",
         "Per batch and supply flow, credentials ≤ metered delivery; per PoS, ≤ its quantity "
-        "(PoS!L). The lowest-GHG credentials are used (A and B in full); each goes to the "
-        "delivery nearest its dispatch month (column I). POS-C (25 Nov) and POS-B (20 Dec) both "
-        "cover delivery metered before their dispatch date, within the quarter (decision 7).",
+        "(PoS!L). The compliant credentials are used in full (A and B); each goes to the "
+        "delivery nearest its dispatch month (column I). POS-B (20 Dec) covers delivery metered "
+        "before its dispatch date, within the quarter (decision 7). POS-C's part would be above "
+        "28.2 in either unit (Parts!O13:O14) and cannot be blended down (§12), so none of it is "
+        "allocated.",
     )
 
 
@@ -467,7 +583,7 @@ def unit_batches(
             "Production month",
             "H₂ consumed, all feed (kg)",
             "RFNBO H₂ feed (kg)",
-            "Feed GHG (gCO₂e/MJ H₂)",
+            "Feed GHG, all RFNBO feed (gCO₂e/MJ H₂; information, not averaged into GHG)",
             "RFNBO share",
             f"{product_label} produced (kg)",
             "Loss (kg)",
@@ -479,8 +595,8 @@ def unit_batches(
             "Feed emissions (gCO₂e)",
             f"RFNBO {product_label} (kg)",
             f"RFNBO {product_label} (MJ)",
-            "Batch GHG (gCO₂e/MJ)",
-            "≤ 28.2 gCO₂e/MJ?",
+            "Highest part GHG (gCO₂e/MJ)",
+            "Every part ≤ 28.2 gCO₂e/MJ?",
             "Intervals",
             "H₂ from storage (kg)",
             "H₂ from the supplier (kg)",
@@ -508,8 +624,12 @@ def unit_batches(
         s.put(f"N{r}", f"=X{r}+Y{r}")
         s.put(f"O{r}", f"=F{r}*G{r}")
         s.put(f"P{r}", f"=O{r}*{P(2)}")
-        s.put(f"Q{r}", f"=(N{r}+F{r}*M{r})/P{r}+{P(adder)}")
-        s.put(f"R{r}", f"=Q{r}<={P(8)}+0.000000001", fmt="General")
+        s.put(f"Q{r}", f"=_xlfn.MAXIFS({PO},{PC},A{r})")
+        s.put(
+            f"R{r}",
+            f"=SUMPRODUCT(({PC}=A{r})*({PO}>{P(8)}+0.000000001))=0",
+            fmt="General",
+        )
         s.put(f"S{r}", f"=COUNTIF({B},A{r})", fmt="#,##0")
         s.put(f"T{r}", f"=SUMIF({B},A{r},{rng(consumed)})")
         s.put(f"U{r}", f"=SUMIF({B},A{r},{rng(supply)})")
@@ -523,9 +643,163 @@ def unit_batches(
     s.note(
         "A7",
         "Share = (RFNBO from storage + credentials) ÷ all H₂ consumed, the supplier's H₂ "
-        "included whether or not it carries credentials. GHG = (feed emissions + share × own "
-        "emissions) ÷ RFNBO product energy + adder; credentials' emissions are at their PoS's GHG.",
+        "included whether or not it carries credentials. No averaging (§12): the batch's RFNBO "
+        "is split into parts, one per source GHG and origin (Parts sheet); each part keeps its "
+        "source's GHG, and the batch is compliant when every part is.",
     )
+
+
+def parts(wb: Workbook) -> None:
+    """One row per part (§12): each keeps its source's GHG, adjusted by the unit's yield, own
+    emissions and adder: GHG = (feed × LHV × g + share × own) ÷ (RFNBO product × LHV) + adder,
+    which is g × C ÷ E + own ÷ E + adder."""
+    s = Sheet(wb, "Parts", {"A": 34} | {get_column_letter(i): 15 for i in range(2, 17)})
+    s.header(
+        1,
+        [
+            "Part",
+            "Unit",
+            "Batch",
+            "Production month",
+            "Origin",
+            "Source",
+            "Source GHG (gCO₂e/MJ)",
+            "RFNBO feed (kg)",
+            "H₂ consumed by the batch (kg)",
+            "Share",
+            "Batch product (kg)",
+            "RFNBO product (kg)",
+            "Batch own emissions (gCO₂e)",
+            "Adder (gCO₂e/MJ)",
+            "Part GHG (gCO₂e/MJ)",
+            "≤ 28.2 gCO₂e/MJ?",
+        ],
+    )
+    for r, pid, unit, bid, origin, src, ghg, feed, br in PARTS:
+        sheet, adder = ("L_Batches", 6) if unit == "liquefier" else ("C_Batches", 7)
+        s.put(f"A{r}", pid, kind="text")
+        s.put(f"B{r}", unit, kind="text")
+        s.put(f"C{r}", bid, kind="text")
+        s.put(f"D{r}", f"={sheet}!B{br}", fmt="General")
+        s.put(f"E{r}", origin, kind="text")
+        s.put(f"F{r}", src, kind="text")
+        s.put(f"G{r}", f"={ghg}")
+        s.put(f"H{r}", f"={feed}")
+        s.put(f"I{r}", f"={sheet}!C{br}")
+        s.put(f"J{r}", f"=H{r}/I{r}")
+        s.put(f"K{r}", f"={sheet}!G{br}")
+        s.put(f"L{r}", f"=J{r}*K{r}")
+        s.put(f"M{r}", f"={sheet}!M{br}")
+        s.put(f"N{r}", f"={P(adder)}")
+        s.put(f"O{r}", f"=(H{r}*{P(2)}*G{r}+J{r}*M{r})/(L{r}*{P(2)})+N{r}", fill=KEY)
+        s.put(f"P{r}", f"=O{r}<={P(8)}+0.000000001", fmt="General")
+    s.note("A12", "Rejected: POS-C's part in either unit (its GHG does not depend on the kg)")
+    for r, unit, bid, br in ((13, "compressor", "C-2026-11", 3), (14, "liquefier", "L-2026-12", 4)):
+        sheet, adder = ("L_Batches", 6) if unit == "liquefier" else ("C_Batches", 7)
+        s.put(f"A{r}", f"POS-C in {bid}", kind="text")
+        s.put(f"B{r}", unit, kind="text")
+        s.put(f"C{r}", bid, kind="text")
+        s.put(f"F{r}", "POS-C", kind="text")
+        s.put(f"G{r}", "=PoS!F4")
+        s.put(f"I{r}", f"={sheet}!C{br}")
+        s.put(f"K{r}", f"={sheet}!G{br}")
+        s.put(f"M{r}", f"={sheet}!M{br}")
+        s.put(f"N{r}", f"={P(adder)}")
+        s.put(f"O{r}", f"=G{r}*I{r}/K{r}+M{r}/(K{r}*{P(2)})+N{r}")
+        s.put(f"P{r}", f"=O{r}<={P(8)}+0.000000001", fmt="General")
+    s.note("A15", "POS-C makes no compliant part?")
+    s.put("B15", "=AND(NOT(P13),NOT(P14))", fmt="General")
+    s.note(
+        "A17",
+        "No averaging (build plan §12, ISCC EU 203 §4.2): batches with different GHG are kept "
+        "apart in the bookkeeping, so a unit batch fed from several sources has one part per "
+        "source GHG and origin, named <batch>.1, .2, … in ascending GHG. Purchased parts are "
+        "never aggregated with the plant's own. A part from a non-compliant source cannot be "
+        "saved by blending.",
+    )
+
+
+def product_ledger(
+    wb: Workbook,
+    title: str,
+    *,
+    inv_col: str,
+    opening_physical: int,
+    opening_ledger: int,
+    produced_col: str,
+    shipped: list[tuple[str, str]],
+) -> None:
+    """Test case 3's product ledger, one line per part (§12), in write-off priority order."""
+    order = LEDGER_ORDER[title]
+    n, tr = len(order), total_row(title)
+    s = Sheet(wb, title, {"A": 44} | {get_column_letter(i): 16 for i in range(2, 9)})
+    s.header(
+        1,
+        [
+            "Part (write-off priority order)",
+            "Production month",
+            "GHG (gCO₂e/MJ)",
+            "In: RFNBO (kg)",
+            "Out: consignment (kg)",
+            "Closing before write-off (kg)",
+            "Write-off (kg)",
+            "Carried to Q1 2027 (kg)",
+        ],
+    )
+    short = tr + 3
+    for k, pid in enumerate(order):
+        r, pr = k + 2, PART_ROW[pid]
+        s.put(f"A{r}", pid, kind="text", fill=DECISION)
+        s.put(f"B{r}", f"=Parts!D{pr}", fmt="General")
+        s.put(f"C{r}", f"=Parts!O{pr}")
+        s.put(f"D{r}", f"=Parts!L{pr}")
+        s.put(f"E{r}", f"=SUMIF(Consignments!$D$6:$D$10,A{r},Consignments!$E$6:$E$10)")
+        s.put(f"F{r}", f"=D{r}-E{r}")
+        prev = "0" if k == 0 else f"SUM(G$2:G{r - 1})"
+        s.put(f"G{r}", f"=MIN(F{r},MAX(0,$B${short}-{prev}))")
+        s.put(f"H{r}", f"=F{r}-G{r}")
+    s.note(f"A{tr}", "Total")
+    for c in "DEFGH":
+        s.put(f"{c}{tr}", f"=SUM({c}2:{c}{tr - 1})")
+    lines = f"2:{{c}}{tr - 1}"
+    s.note(f"A{tr + 2}", "Measured physical inventory at quarter end (kg)")
+    s.put(f"B{tr + 2}", f"={last(inv_col)}")
+    s.note(f"A{short}", "Shortfall to write off (kg): over inventory, and all non-compliant")
+    s.put(
+        f"B{short}",
+        f"=MAX(0,{P(opening_ledger)}+F{tr}-B{tr + 2},"
+        f"SUMPRODUCT(--(C{lines.format(c='C')}>{P(8)}+0.000000001),F{lines.format(c='F')}))",
+    )
+    s.note(f"A{tr + 4}", "Energy-weighted GHG of carried inventory (gCO₂e/MJ)")
+    s.put(
+        f"B{tr + 4}",
+        f"=IF(H{tr}>0,SUMPRODUCT(C{lines.format(c='C')},H{lines.format(c='H')})/H{tr},0)",
+    )
+    s.note(f"A{tr + 5}", "Rows in priority order (highest GHG, then newest month)?")
+    pair = "OR(ROUND(C{a},9)>ROUND(C{b},9),AND(ROUND(C{a},9)=ROUND(C{b},9),B{a}>B{b}))"
+    s.put(
+        f"B{tr + 5}",
+        "=AND(" + ",".join(pair.format(a=r, b=r + 1) for r in range(2, 1 + n)) + ")",
+        fmt="General",
+    )
+    s.note(f"A{tr + 7}", "Physical reconciliation")
+    base = tr + 8
+    rows = [
+        (base, "Opening physical inventory (kg)", f"={P(opening_physical)}"),
+        (base + 1, "Produced (kg)", f"=SUM({rng(produced_col)})"),
+    ]
+    for j, (label, col) in enumerate(shipped):
+        rows.append((base + 2 + j, label, f"=SUM({rng(col)})"))
+    m = base + 2 + len(shipped)
+    out = "-".join(f"B{base + 2 + j}" for j in range(len(shipped)))
+    rows += [
+        (m, "Expected closing (kg)", f"=B{base}+B{base + 1}-{out}"),
+        (m + 1, "Measured closing (kg)", f"=B{tr + 2}"),
+        (m + 2, "Implied loss (kg)", f"=B{m}-B{m + 1}"),
+    ]
+    for row, label, f in rows:
+        s.note(f"A{row}", label)
+        s.put(f"B{row}", f)
 
 
 def consignments(wb: Workbook) -> None:
@@ -545,19 +819,19 @@ def consignments(wb: Workbook) -> None:
             "Aggregated batch: Oct 2026 (kg)",
             "Aggregated batch: Nov 2026 (kg)",
             "Aggregated batch: Dec 2026 (kg)",
-            "Weighted GHG before shipping (gCO₂e/MJ)",
+            "Highest part GHG before shipping (gCO₂e/MJ)",
             "Shipped GHG (gCO₂e/MJ)",
             "Meets target?",
             "≤ 28.2 gCO₂e/MJ?",
-            "Only compliant batches?",
+            "Only compliant parts?",
             "Volume met?",
         ],
     )
     spec = [
-        (2, "CA", "Customer A", "LH₂", "lh2_storage", 15, 150000, 5.0, 15, "L_Batches"),
-        (3, "CB", "Customer B", "CH₂", "ch2_storage", 20, 120000, 4.0, 16, "C_Batches"),
+        (2, "CA", "Customer A", "LH₂", "lh2_storage", 15, 150000, 5.0, 15),
+        (3, "CB", "Customer B", "CH₂", "ch2_storage", 20, 120000, 4.0, 16),
     ]
-    for r, cid, cust, prod, sto, day, vol, target, adder, bs in spec:
+    for r, cid, cust, prod, sto, day, vol, target, adder in spec:
         s.put(f"A{r}", cid, kind="text")
         s.put(f"B{r}", cust, kind="text")
         s.put(f"C{r}", prod, kind="text")
@@ -567,45 +841,63 @@ def consignments(wb: Workbook) -> None:
         s.put(f"G{r}", target, fmt="0.0")
         s.put(f"H{r}", f"={P(adder)}")
         s.put(f"I{r}", f"=G{r}-H{r}")
-        if cid == "CA":
-            # Highest GHG first: December LH₂ (with credentials), then November (3% boil-off).
-            s.put(f"L{r}", f"=MIN(F{r},{bs}!$O$4)", fill=DECISION)
-            s.put(f"K{r}", f"=MIN(F{r}-L{r},{bs}!$O$3)", fill=DECISION)
-            s.put(f"J{r}", f"=F{r}-K{r}-L{r}", fill=DECISION)
-        else:
-            # November CH₂ (with credentials) first; then the oldest of the equal-GHG months.
-            s.put(f"K{r}", f"=MIN(F{r},{bs}!$O$3)", fill=DECISION)
-            s.put(f"J{r}", f"=MIN(F{r}-K{r},{bs}!$O$2)", fill=DECISION)
-            s.put(f"L{r}", f"=F{r}-J{r}-K{r}", fill=DECISION)
-        s.put(f"M{r}", f"=(J{r}*{bs}!$Q$2+K{r}*{bs}!$Q$3+L{r}*{bs}!$Q$4)/(J{r}+K{r}+L{r})")
+        months = [("J", "2026-10"), ("K", "2026-11"), ("L", "2026-12")]
+        for col, month in months:
+            s.put(f"{col}{r}", f'=SUMIFS($E$6:$E$10,$B$6:$B$10,A{r},$C$6:$C$10,"{month}")')
+        # No average (§12 decision 4): every part plus the adder meets the target.
+        s.put(f"M{r}", f"=_xlfn.MAXIFS($F$6:$F$10,$B$6:$B$10,A{r})")
         s.put(f"N{r}", f"=M{r}+H{r}", fill=KEY)
         s.put(f"O{r}", f"=N{r}<=G{r}+0.000000001", fmt="General")
         s.put(f"P{r}", f"=N{r}<={P(8)}+0.000000001", fmt="General")
         s.put(
             f"Q{r}",
-            f"=AND(OR(J{r}=0,{bs}!$R$2),OR(K{r}=0,{bs}!$R$3),OR(L{r}=0,{bs}!$R$4))",
+            f"=SUMPRODUCT(($B$6:$B$10=A{r})*($F$6:$F$10>{P(8)}+0.000000001))=0",
             fmt="General",
         )
         s.put(f"R{r}", f"=ABS(J{r}+K{r}+L{r}-F{r})<=0.000001*F{r}", fmt="General")
-    s.header(5, ["Aggregated batch", "Consignment", "Production month", "Source batch", "kg"])
+    s.header(
+        5,
+        [
+            "Aggregated batch",
+            "Consignment",
+            "Production month",
+            "Part",
+            "kg",
+            "Part GHG",
+            "≤ 28.2?",
+        ],
+    )
+    # Highest GHG first among the parts within each consignment's limit (I2, I3), then the
+    # oldest month. The purchased parts (3.5 and above) are above both limits.
     agg = [
-        (6, "CA-2026-11", "CA", "2026-11", "L-2026-11", "=K2"),
-        (7, "CA-2026-12", "CA", "2026-12", "L-2026-12", "=L2"),
-        (8, "CB-2026-10", "CB", "2026-10", "C-2026-10", "=J3"),
-        (9, "CB-2026-11", "CB", "2026-11", "C-2026-11", "=K3"),
-        (10, "CB-2026-12", "CB", "2026-12", "C-2026-12", "=L3"),
+        (6, "CA-2026-11", "CA", "2026-11", "L-2026-11", f"=MIN(F2,Parts!L{PART_ROW['L-2026-11']})"),
+        (7, "CA-2026-10", "CA", "2026-10", "L-2026-10", "=F2-E6"),
+        (8, "CB-2026-10", "CB", "2026-10", "C-2026-10", f"=MIN(F3,Parts!L{PART_ROW['C-2026-10']})"),
+        (
+            9,
+            "CB-2026-11",
+            "CB",
+            "2026-11",
+            "C-2026-11.1",
+            f"=MIN(F3-E8,Parts!L{PART_ROW['C-2026-11.1']})",
+        ),
+        (10, "CB-2026-12", "CB", "2026-12", "C-2026-12", "=F3-E8-E9"),
     ]
     for r, aid, cid, month, src, f in agg:
         s.put(f"A{r}", aid, kind="text")
         s.put(f"B{r}", cid, kind="text")
         s.put(f"C{r}", month, kind="text")
         s.put(f"D{r}", src, kind="text")
-        s.put(f"E{r}", f)
+        s.put(f"E{r}", f, fill=DECISION)
+        s.put(f"F{r}", f"=INDEX({PO},MATCH(D{r},{PA},0))")
+        s.put(f"G{r}", f"=F{r}<={P(8)}+0.000000001", fmt="General")
     s.note(
         "A12",
-        "The batches holding credentials are the highest GHG of each product, so CA and CB take "
-        "them first; the plant's own lowest-GHG product stays in storage. Purchased H₂ processed "
-        "here is part of the unit's batch and is aggregated as that batch (decision 8).",
+        "No averaging (§12): each part of a consignment plus the adder must meet the target, so "
+        "the consignment's GHG is its highest part's. The parts made from credentials (CH₂ 3.5 "
+        "and 12.5, LH₂ 12.7) are above CA's and CB's limits; each consignment takes its "
+        "highest-GHG own parts within the limit first, then the oldest month, so the lowest-GHG "
+        "product stays in storage.",
     )
 
 
@@ -613,6 +905,7 @@ def objectives(wb: Workbook) -> None:
     s = Sheet(wb, "Objectives", {"A": 70, "B": 18, "C": 70})
     s.header(1, ["Objective (in order)", "Value", "Note"])
     lhv = P(2)
+    tl, tc = total_row("LH2_Ledger"), total_row("CH2_Ledger")
     rows: list[tuple[int, str, Any, str]] = [
         (
             2,
@@ -637,8 +930,8 @@ def objectives(wb: Workbook) -> None:
         (6, "Storage weight: CH₂ storage", 1, "Final product"),
         (7, "Compliant RFNBO carried: H₂ buffer (MJ)", f"=Buffer_Ledger!B15*{lhv}", ""),
         (8, "Compliant RFNBO carried: pass-through (MJ)", f"=PT_Ledger!B15*{lhv}", ""),
-        (9, "Compliant RFNBO carried: LH₂ storage (MJ)", f"=LH2_Ledger!H5*{lhv}", ""),
-        (10, "Compliant RFNBO carried: CH₂ storage (MJ)", f"=CH2_Ledger!H5*{lhv}", ""),
+        (9, "Compliant RFNBO carried: LH₂ storage (MJ)", f"=LH2_Ledger!H{tl}*{lhv}", ""),
+        (10, "Compliant RFNBO carried: CH₂ storage (MJ)", f"=CH2_Ledger!H{tc}*{lhv}", ""),
         (
             11,
             "2. Compliant RFNBO carried forward (MJ of final product)",
@@ -649,8 +942,8 @@ def objectives(wb: Workbook) -> None:
             12,
             "3. Carried emissions (gCO₂e)",
             f"=Buffer_Ledger!B15*Buffer_Ledger!B16*{lhv}"
-            f"+SUMPRODUCT(LH2_Ledger!C2:C4,LH2_Ledger!H2:H4)*{lhv}"
-            f"+SUMPRODUCT(CH2_Ledger!C2:C4,CH2_Ledger!H2:H4)*{lhv}",
+            f"+SUMPRODUCT(LH2_Ledger!C2:C{tl - 1},LH2_Ledger!H2:H{tl - 1})*{lhv}"
+            f"+SUMPRODUCT(CH2_Ledger!C2:C{tc - 1},CH2_Ledger!H2:H{tc - 1})*{lhv}",
             "",
         ),
         (
@@ -676,7 +969,11 @@ def objectives(wb: Workbook) -> None:
     s.note("A17", "Upper-bound argument for objective 2")
     bound = [
         (18, "Every electrolyser batch 100% RFNBO?", "=MIN(E_Batches!I2:I4)>=1-0.000000001"),
-        (19, "Every metered kg of supply covered by credentials?", "=PoS_Alloc!D13"),
+        (
+            19,
+            "Every compliant credential allocated (POS-C makes no compliant part)?",
+            "=AND(PoS!K2=0,PoS!K3=0,Parts!B15)",
+        ),
         (
             20,
             "H₂ buffer holds RFNBO up to its measured inventory?",
@@ -696,9 +993,9 @@ def objectives(wb: Workbook) -> None:
         (
             23,
             "LH₂ and CH₂ storage hold all their RFNBO less CA and CB, within inventory?",
-            "=AND(ABS(LH2_Ledger!H5-(L_Batches!O5-Consignments!F2))<=0.000001,"
-            "ABS(CH2_Ledger!H5-(C_Batches!O5-Consignments!F3))<=0.000001,"
-            "LH2_Ledger!G5=0,CH2_Ledger!G5=0)",
+            f"=AND(ABS(LH2_Ledger!H{tl}-(L_Batches!O5-Consignments!F2))<=0.000001,"
+            f"ABS(CH2_Ledger!H{tc}-(C_Batches!O5-Consignments!F3))<=0.000001,"
+            f"LH2_Ledger!G{tl}=0,CH2_Ledger!G{tc}=0)",
         ),
         (24, "Objective 2 at its upper bound?", "=AND(B18:B23)"),
     ]
@@ -708,7 +1005,9 @@ def objectives(wb: Workbook) -> None:
     s.note(
         "A26",
         "Credentials add to objective 2 only where the product they make is kept: here every "
-        "batch they go to stays within its storage's inventory. Variant V1 shows the opposite.",
+        "part they make stays within its storage's inventory. Variant V1 shows the opposite. "
+        "December's liquefier delivery that no compliant credential covers (2,200 kg) is filled "
+        "with RFNBO from the buffer, at December's 0.98 yield rather than November's 0.97.",
     )
 
 
@@ -716,15 +1015,16 @@ def variants(wb: Workbook) -> None:
     s = Sheet(wb, "Variants", {"A": 74, "B": 18, "C": 90})
     s.header(1, ["Variant", "Value", "Note"])
     lhv, w = P(2), "Objectives!$B$3"
+    tl, tc = total_row("LH2_Ledger"), total_row("CH2_Ledger")
     rows: list[tuple[int, str, Any, str]] = [
         (2, "V1 — LH₂ spot sale back (no RFNBO claim)", None, "Test case 3's 60,000 kg on 29 Dec"),
         (3, "Spot sale (kg)", R.SPOT_KG, "Input"),
-        (4, "LH₂ storage measured inventory at quarter end (kg)", "=LH2_Ledger!B7-B3", ""),
+        (4, "LH₂ storage measured inventory at quarter end (kg)", f"=LH2_Ledger!B{tl + 2}-B3", ""),
         (
             5,
             "H₂ the December liquefier batch takes from the buffer (kg)",
-            "=L_Batches!T4-(Buffer_Ledger!B13-Buffer_Ledger!G4)",
-            "Test case 3's routing: the buffer stays full; November takes all its flow",
+            "=Buffer_Ledger!C4-Buffer_Ledger!B13",
+            "Test case 3's routing: December's batch fills the buffer; November takes all its flow",
         ),
         (
             6,
@@ -755,7 +1055,7 @@ def variants(wb: Workbook) -> None:
         ),
         (13, "PoS quantity written off, not allocated (kg)", "=PoS!E5-B11-B12", ""),
         (14, "H₂ buffer carried (kg)", "=Buffer_Ledger!B13", "Full"),
-        (15, "CH₂ carried (kg)", "=CH2_Ledger!H5", "As the base case: 9,600 kg of credentials"),
+        (15, "CH₂ carried (kg)", f"=CH2_Ledger!H{tc}", "As the base case: 9,600 kg of credentials"),
         (
             16,
             "RFNBO carried forward (MJ final product)",
@@ -802,8 +1102,18 @@ def check_rows(cases: dict[str, Any]) -> list[tuple[str, str, float]]:
                 (f"{bid} RFNBO feed (kg)", f"={sheet}!D{r}", x["rfnbo_feed_kg"]),
                 (f"{bid} RFNBO share", f"={sheet}!F{r}", x["rfnbo_share"]),
                 (f"{bid} RFNBO product (kg)", f"={sheet}!O{r}", x["rfnbo_kg"]),
-                (f"{bid} GHG (gCO₂e/MJ)", f"={sheet}!Q{r}", x["ghg"]),
+                (
+                    f"{bid} highest part GHG (gCO₂e/MJ)",
+                    f"={sheet}!Q{r}",
+                    max(y["ghg"] for y in x["parts"].values()),
+                ),
             ]
+            for pid, y in x["parts"].items():
+                pr = PART_ROW[pid]
+                out += [
+                    (f"{pid} RFNBO (kg)", f"=Parts!L{pr}", y["rfnbo_kg"]),
+                    (f"{pid} GHG (gCO₂e/MJ)", f"=Parts!O{pr}", y["ghg"]),
+                ]
     out += [
         ("H₂ buffer carried (kg)", "=Buffer_Ledger!B15", led["h2_buffer"]["carried_kg"]),
         (
@@ -812,18 +1122,20 @@ def check_rows(cases: dict[str, Any]) -> list[tuple[str, str, float]]:
             led["pt_compressor"]["closing_before_kg"],
         ),
     ]
-    for sheet, storage, order in (
-        ("LH2_Ledger", "lh2_storage", ("L-2026-12", "L-2026-11", "L-2026-10")),
-        ("CH2_Ledger", "ch2_storage", ("C-2026-11", "C-2026-12", "C-2026-10")),
-    ):
+    for sheet, storage in (("LH2_Ledger", "lh2_storage"), ("CH2_Ledger", "ch2_storage")):
         lines = led[storage]["lines"]
-        for r, bid in zip((2, 3, 4), order, strict=True):
+        assert set(lines) == set(LEDGER_ORDER[sheet]), sheet
+        for r, pid in enumerate(LEDGER_ORDER[sheet], 2):
             out += [
-                (f"{storage} write-off {bid} (kg)", f"={sheet}!G{r}", lines[bid]["write_off_kg"]),
-                (f"{storage} carried {bid} (kg)", f"={sheet}!H{r}", lines[bid]["carried_kg"]),
+                (f"{storage} write-off {pid} (kg)", f"={sheet}!G{r}", lines[pid]["write_off_kg"]),
+                (f"{storage} carried {pid} (kg)", f"={sheet}!H{r}", lines[pid]["carried_kg"]),
             ]
         out.append(
-            (f"{storage} measured closing (kg)", f"={sheet}!B7", led[storage]["physical_kg"])
+            (
+                f"{storage} measured closing (kg)",
+                f"={sheet}!B{total_row(sheet) + 2}",
+                led[storage]["physical_kg"],
+            )
         )
     for r, cid in ((2, "CA"), (3, "CB")):
         out.append(
@@ -878,8 +1190,9 @@ def checks(wb: Workbook, cases: dict[str, Any]) -> int:
         "Buffer_Ledger!H2:H4",
         "PT_Ledger!H2:H4",
         "PT_Ledger!B17",
-        "LH2_Ledger!B10",
-        "CH2_Ledger!B10",
+        f"LH2_Ledger!B{total_row('LH2_Ledger') + 5}",
+        f"CH2_Ledger!B{total_row('CH2_Ledger') + 5}",
+        "Parts!B15",
         "PoS!H2:H4",
         "PoS!I2:I4",
         "PoS!L2:L4",
@@ -957,24 +1270,19 @@ def build(out: Path) -> Path:
         adder=7,
         product_label="CH₂",
     )
-    W3.product_ledger(
+    parts(wb)
+    product_ledger(
         wb,
         "LH2_Ledger",
-        order=["L-2026-12", "L-2026-11", "L-2026-10"],
-        batch_sheet="L_Batches",
-        cons_row=2,
         inv_col="W",
         opening_physical=11,
         opening_ledger=12,
         produced_col="P",
         shipped=[("Shipped CA (kg)", "U"), ("Spot sale, no claim (kg)", "V")],
     )
-    W3.product_ledger(
+    product_ledger(
         wb,
         "CH2_Ledger",
-        order=["C-2026-11", "C-2026-12", "C-2026-10"],
-        batch_sheet="C_Batches",
-        cons_row=3,
         inv_col="Y",
         opening_physical=13,
         opening_ledger=14,

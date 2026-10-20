@@ -91,7 +91,8 @@ def test_trace_a_consignment_to_15_minute_data(
 
     _link(page, "C1").click()
     expect(page.get_by_text("Consignment C1 · Customer A")).to_be_visible()
-    expect(page.get_by_test_id("cons-shipped")).to_have_text("15.000000")
+    # §12: October NH₃ (14.09) sets C1's GHG; it is no longer averaged with September's.
+    expect(page.get_by_test_id("cons-shipped")).to_have_text("17.092473")
 
     _link(page, "N-2026-10").click()
     expect(page.get_by_text("N-2026-10 · NH3 synthesis")).to_be_visible()
@@ -110,7 +111,7 @@ def test_trace_a_consignment_to_15_minute_data(
 
     # Back up the breadcrumb to the run, then into the opening entry.
     page.get_by_test_id("crumb-1").click()
-    _link(page, "C2").click()
+    _link(page, "C1").click()
     _link(page, "N-2026-09").click()
     expect(page.get_by_test_id("opening-note")).to_contain_text("no 15-minute data")
     page.close()
@@ -162,17 +163,17 @@ def test_trace_a_multi_step_consignment_to_15_minute_data(
 def test_trace_a_consignment_to_the_pos_that_fed_it(
     browser: Any, results: tuple[str, str, str, str]
 ) -> None:
-    """Phase 16: the PoS register on the run page, and a consignment drilled down through the
-    liquefier batch to the proof of sustainability whose credentials it holds."""
+    """Phase 16: the PoS register on the run page, and a liquefier batch drilled down to the
+    proof of sustainability whose credentials make one of its parts (§12; CA ships only the
+    plant's own LH₂, the purchased part being above its limit)."""
     url, _, _, tc4_id = results
     page = browser.new_page()
     page.goto(f"{url}run/{tc4_id}")
     expect(page.get_by_test_id("reproduce")).to_have_text("reproduces byte for byte", timeout=30000)
     register = page.get_by_test_id("pos")
     expect(register).to_contain_text("POS-C")
-    expect(register).to_contain_text("3,800")
-    _link(page, "CA").click()
-    _link(page, "L-2026-12").click()
+    expect(register).to_contain_text("6,000")
+    page.goto(f"{url}run/{tc4_id}/batch/L-2026-12")
     expect(page.get_by_test_id("upstream")).to_contain_text("f_sup_liq")
     _link(page, "POS-B").click()
     expect(page.get_by_text("POS-B: proof of sustainability from H2 Trailers BV")).to_be_visible()

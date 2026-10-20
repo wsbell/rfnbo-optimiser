@@ -105,14 +105,13 @@ def test_hourly_windows_on_the_repeated_autumn_hour() -> None:
     assert list(lo[1:]) == [0, 0, 0, 0, 4, 4, 4, 4]
 
 
-def test_feedable_takes_lowest_ghg_first_and_stops_at_the_blend() -> None:
+def test_feedable_counts_only_batches_at_or_below_the_limit() -> None:
+    """§12: batches are never averaged, so a batch above the limit feeds nothing compliant
+    however much lower-GHG feed there is."""
     rf = np.array([100.0, 100.0, 100.0])
     ghg = np.array([5.0, 25.0, 15.0])
-    # Limit 10: 100 MJ at 5 leaves 500 g of room; 15-GHG batch costs 5 g/MJ → all of it;
-    # the 25-GHG batch would cost 15 g/MJ with no room left → none.
-    assert feedable_MJ(rf, rf * ghg, limit=10.0, cap=1e9) == pytest.approx(200.0)
-    # Limit 12: room 700 g; 15-GHG uses 300 g; 400 g left → 400/13 MJ of the 25-GHG batch.
-    assert feedable_MJ(rf, rf * ghg, limit=12.0, cap=1e9) == pytest.approx(200 + 400 / 13)
-    # Cap binds before the blend does.
+    assert feedable_MJ(rf, rf * ghg, limit=10.0, cap=1e9) == pytest.approx(100.0)
+    assert feedable_MJ(rf, rf * ghg, limit=15.0, cap=1e9) == pytest.approx(200.0)
+    # The cap binds.
     assert feedable_MJ(rf, rf * ghg, limit=100.0, cap=150.0) == pytest.approx(150.0)
     assert feedable_MJ(rf, rf * ghg, limit=1.0, cap=1e9) == 0.0

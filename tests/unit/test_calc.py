@@ -126,8 +126,9 @@ def test_short_rfnbo_feed_prorates_own_emissions(cfg: PlantConfig) -> None:
     assert r.passed, r.failures
 
 
-def test_noncompliant_rfnbo_saved_by_blending(cfg: PlantConfig) -> None:
-    """§2.5: a 101 gCO₂e/MJ RFNBO H₂ batch blends into compliant NH₃."""
+def test_noncompliant_rfnbo_is_not_saved_by_blending(cfg: PlantConfig) -> None:
+    """§12 decisions 1 and 2: a 101 gCO₂e/MJ RFNBO H₂ batch fed with compliant H₂ makes its own
+    NH₃ part, which keeps the batch's GHG and is not compliant; nothing is averaged."""
     r = run(
         cfg,
         {**ELECTROLYSER, **NH3},
@@ -138,11 +139,17 @@ def test_noncompliant_rfnbo_saved_by_blending(cfg: PlantConfig) -> None:
         ],
     )
     n = r.batches["N1"]
-    feed_g = 150 * 120 * (3000 / 18000 + 1) + 20 * 120 * ((600000 + 1000) / 6000 + 1)
+    c_mj, e_mj, own_g = 170 * 120, 1000 * 18.6, 200000
+    g1, g2 = 3000 / 18000 + 1, (600000 + 1000) / 6000 + 1
     assert n.rfnbo_share == pytest.approx(1.0)
-    assert n.ghg_gCO2e_per_MJ == pytest.approx((feed_g + 200000) / 18600 + 2.0)
-    assert n.compliant and n.rfnbo_kg == pytest.approx(1000)
-    assert r.passed, r.failures
+    assert n.ghg_gCO2e_per_MJ is None and not n.compliant
+    p1, p2 = n.parts
+    assert (p1.id, p2.id) == ("N1.1", "N1.2")
+    assert p1.ghg_gCO2e_per_MJ == pytest.approx(g1 * c_mj / e_mj + own_g / e_mj + 2.0)
+    assert p2.ghg_gCO2e_per_MJ == pytest.approx(g2 * c_mj / e_mj + own_g / e_mj + 2.0)
+    assert p1.kg == pytest.approx(1000 * 150 / 170) and p2.kg == pytest.approx(1000 * 20 / 170)
+    assert p1.compliant and not p2.compliant
+    assert "noncompliant_not_carried" in {f.name for f in r.failures}
 
 
 def test_h2_write_off_highest_ghg_first(cfg: PlantConfig) -> None:
@@ -394,9 +401,11 @@ def test_consignment_rules(cfg: PlantConfig) -> None:
         "aggregated_single_month",
         "aggregated_compliant_only",
         "consignment_target",
+        "consignment_threshold",  # §12 decision 4: each part, not an average, meets it
     }
+    # §12: no consignment average; the highest part sets the shipped GHG.
     shipped = mixed.consignment("C").shipped_ghg_gCO2e_per_MJ
-    assert shipped is not None and math.isclose(shipped, (400 * 6 + 100 * 30) / 500 + 3)
+    assert shipped is not None and math.isclose(shipped, 30 + 3)
 
 
 def test_feed_from_unknown_batch_is_an_error(cfg: PlantConfig) -> None:

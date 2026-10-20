@@ -76,8 +76,13 @@ def test_reference_reproduces_the_workbook_from_its_own_inputs() -> None:
     for unit, key in (("liquefier", "liquefier_batches"), ("compressor", "compressor_batches")):
         for bid, want in x[key].items():
             b = got["units"][unit][bid]
-            for k in ("feed_consumed_kg", "rfnbo_feed_kg", "pos_feed_kg", "rfnbo_kg", "ghg"):
+            for k in ("feed_consumed_kg", "rfnbo_feed_kg", "pos_feed_kg", "rfnbo_kg"):
                 assert close(b[k], want[k]), (bid, k, b[k], want[k])
+            # The batch sheets show the highest part's GHG (§12).
+            assert close(max(p["ghg"] for p in b["parts"].values()), want["ghg"]), bid
+            for pid, part in b["parts"].items():
+                assert close(part["rfnbo_kg"], x["parts"][pid]["rfnbo_kg"]), pid
+                assert close(part["ghg"], x["parts"][pid]["ghg"]), pid
     for pid, want in x["pos"].items():
         assert close(got["pos"][pid]["allocated_kg"], want["allocated_kg"]), pid
         assert close(got["pos"][pid]["written_off_kg"], want["written_off_kg"]), pid
@@ -96,28 +101,42 @@ def test_hand_calculated_values() -> None:
     """Spot values worked by hand (README of the workbook)."""
     _, x = _fixtures()
     e = 2.0 * 500 / (50 * 120) + 1.0  # 100% electrolyser H₂
-    # December LH₂: 86,400 kg buffer H₂ + POS-B 9,000 kg @ 12 + POS-C 600 kg @ 27.9, 98% yield.
-    dec = x["liquefier_batches"]["L-2026-12"]
-    lh2 = 0.98 * 96000
-    want = (86400 * e + 9000 * 12.0 + 600 * 27.9) / lh2 + 0.5
-    assert close(dec["ghg"], want) and close(dec["rfnbo_kg"], lh2)
-    # November CH₂: 57,600 kg pass-through H₂ + POS-A 8,000 @ 3 + POS-C 1,600 @ 27.9.
-    nov = x["compressor_batches"]["C-2026-11"]
-    assert close(nov["ghg"], (57600 * e + 8000 * 3.0 + 1600 * 27.9) / 67200 + 0.5)
-    # November LH₂ leaves 2,000 kg of RFNBO in the buffer: its yield is below the weight.
+    parts = x["parts"]
+    # December LH₂ (§12, no averaging): 88,600 kg of buffer H₂ and POS-B's 7,400 kg make two
+    # parts at the 98% yield, each keeping its source's GHG: g ÷ 0.98 + 0.5.
+    assert close(parts["L-2026-12.1"]["ghg"], e / 0.98 + 0.5)
+    assert close(parts["L-2026-12.1"]["rfnbo_kg"], 0.98 * 88600)
+    assert close(parts["L-2026-12.2"]["ghg"], 12.0 / 0.98 + 0.5)
+    assert close(parts["L-2026-12.2"]["rfnbo_kg"], 0.98 * 7400)
+    assert close(x["liquefier_batches"]["L-2026-12"]["rfnbo_kg"], 0.98 * 96000)
+    # November CH₂: pass-through H₂, POS-A 8,000 kg and POS-B 1,600 kg, no loss.
+    for pid, g, kg in (
+        ("C-2026-11.1", e, 57600),
+        ("C-2026-11.2", 3.0, 8000),
+        ("C-2026-11.3", 12.0, 1600),
+    ):
+        assert close(parts[pid]["ghg"], g + 0.5) and close(parts[pid]["rfnbo_kg"], kg), pid
+    # POS-C would make a non-compliant part in either unit, so none of it is allocated.
+    rejected = x["rejected_parts"]
+    assert close(rejected["POS-C in C-2026-11"]["ghg"], 27.9 + 0.5)
+    assert close(rejected["POS-C in L-2026-12"]["ghg"], 27.9 / 0.98 + 0.5)
+    assert not any(r["compliant"] for r in rejected.values())
+    # November LH₂ leaves 4,200 kg of RFNBO in the buffer: its yield is below the weight, and
+    # December takes the 2,200 kg of its delivery no credential covers.
     w = x["objectives"]["weights"]["h2_buffer"]
     assert close(w, 265500 / 271800) and 0.97 < w < 0.98
-    assert close(x["liquefier_batches"]["L-2026-11"]["rfnbo_share"], 84400 / 86400)
+    assert close(x["liquefier_batches"]["L-2026-11"]["rfnbo_share"], 82200 / 86400)
     assert close(x["ledgers"]["h2_buffer"]["carried_kg"], 4880)
     assert x["supplier"] == {
         "metered_kg": 19200,
         "pos_kg": 23000,
-        "allocated_kg": 19200,
-        "non_rfnbo_kg": 0,
-        "written_off_kg": 3800,
+        "allocated_kg": 17000,
+        "non_rfnbo_kg": 2200,
+        "written_off_kg": 6000,
     }
-    assert x["pos"]["POS-C"]["written_off_kg"] == 3800
-    value = (4880 * w + 113560 + 66320) * 120
+    assert x["pos"]["POS-C"]["written_off_kg"] == 6000
+    lh2 = 0.98 * 89400 + 0.97 * 82200 + 0.98 * 96000 - 150000
+    value = (4880 * w + lh2 + 66320) * 120
     assert close(x["objectives"]["carried_value_MJ"], value)
     v1 = x["variants"]["v1_spot"]
     assert v1["liquefier_credentials_kg"] == 0 and v1["pos_written_off_kg"] == 13400

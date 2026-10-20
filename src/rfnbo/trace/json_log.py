@@ -23,10 +23,11 @@ FORMULA_ELECTROLYTIC = (
     "rfnbo_qty = rfnbo_share * output.qty; compliant = ghg <= threshold"
 )
 FORMULA_DOWNSTREAM = (
-    "ghg = (sum(feed.emissions_g) + rfnbo_share * sum(inputs.emissions_g) "
-    "+ sum(adders.emissions_g)) / (rfnbo_share * output.energy_MJ); "
-    "rfnbo_share = sum(feed.energy_MJ) / feed_consumed_MJ; "
-    "rfnbo_qty = rfnbo_share * output.qty; compliant = ghg <= threshold"
+    "per part p (one per source GHG and origin; parts are never averaged): "
+    "share_p = sum(feed[p].energy_MJ) / feed_consumed_MJ; "
+    "ghg_p = (sum(feed[p].emissions_g) + share_p * sum(inputs.emissions_g) "
+    "+ adder * share_p * output.energy_MJ) / (share_p * output.energy_MJ); "
+    "qty_p = share_p * output.qty; compliant_p = ghg_p <= threshold"
 )
 
 
@@ -117,6 +118,23 @@ def batch_record(
             if (x := run.line(s, b.id)) is not None
         ],
     }
+    rec["parts"] = [
+        {
+            "part": p.id,
+            "sources": list(p.sources),
+            "purchased": p.purchased,
+            "share": p.share,
+            "qty": p.kg,
+            "uom": "kg",
+            "energy_MJ": p.energy_MJ,
+            "feed_emissions_g": p.feed_emissions_g,
+            "own_emissions_g": p.own_emissions_g,
+            "adder_emissions_g": p.adder_emissions_g,
+            "ghg": p.ghg_gCO2e_per_MJ,
+            "compliant": p.compliant,
+        }
+        for p in b.parts
+    ]
     rec.update(
         {
             "rfnbo_share": b.rfnbo_share,
@@ -156,6 +174,24 @@ def batch_records(run: RunResult, run_id: str, all_edges: list[Edge]) -> list[di
     for e in all_edges:
         out_edges[e.source].append(e)
     return [batch_record(run, b, run_id, out_edges[b.id]) for b in run.batches.values()]
+
+
+def recompute_parts(rec: dict[str, Any]) -> dict[str, float]:
+    """Recompute every part's GHG from the record alone (no app state)."""
+    if rec["kind"] == "electrolytic":
+        g = recompute_ghg(rec)
+        return {p["part"]: g for p in rec["parts"]} if g is not None else {}
+    own = sum(line["emissions_g"] for line in rec["inputs"])
+    adder = sum(a["value"] for a in rec["adders"])
+    energy = rec["output"]["energy_MJ"]
+    out: dict[str, float] = {}
+    for p in rec["parts"]:
+        lines = [f for f in rec["feed"] if f["batch"] in p["sources"]]
+        share = sum(f["energy_MJ"] for f in lines) / rec["feed_consumed_MJ"]
+        feed = sum(f["emissions_g"] for f in lines)
+        mj = share * energy
+        out[p["part"]] = float((feed + share * own + adder * mj) / mj)
+    return out
 
 
 def recompute_ghg(rec: dict[str, Any]) -> float | None:

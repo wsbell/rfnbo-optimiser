@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from rfnbo.calc.batch import (
+    BatchPart,
     BatchResult,
     CalculationError,
     output_storages,
@@ -45,6 +46,7 @@ class LedgerLine:
     out_feed_kg: float
     out_consignment_kg: float
     write_off_kg: float
+    purchased: bool = False  # purchased RFNBO, passed through or processed (§12 decisions 1, 5)
 
     @property
     def closing_before_kg(self) -> float:
@@ -181,7 +183,11 @@ def batch_storages(
     """Which storage ledger(s) each batch (produced, opening or a PoS) belongs to. A batch of a
     unit that splits its output is in every storage its unit outputs to (§10.2 rule 4); a PoS
     is in every storage its credentials were allocated into."""
-    where = {b.id: tuple(s.id for s in output_storages(cfg, b.unit)) for b in batches.values()}
+    where = {
+        part.id: tuple(s.id for s in output_storages(cfg, b.unit))
+        for b in batches.values()
+        for part in b.parts
+    }
     for s in cfg.blocks_of(StorageUnit):
         for entry in s.opening_ledger:
             if entry.batch_id in where:
@@ -224,6 +230,7 @@ def compute_ledgers(
     decisions: Decisions,
 ) -> list[LedgerResult]:
     homes = batch_storages(cfg, batches, decisions)
+    parts = {p.id: p for b in batches.values() for p in b.parts}
     threshold = cfg.settings.rfnbo_threshold_gCO2e_per_MJ
 
     def held(batch: str, context: str) -> tuple[str, ...]:
@@ -262,9 +269,9 @@ def compute_ledgers(
     flows = {f.id: f for f in cfg.flows}
     for o in decisions.output_allocations:
         f = flows.get(o.flow)
-        if o.batch not in batches:
+        if o.batch not in parts:
             raise CalculationError(f"output allocation: unknown batch {o.batch!r}")
-        if f is None or f.source != batches[o.batch].unit or len(homes[o.batch]) < 2:
+        if f is None or f.source != parts[o.batch].unit or len(homes[o.batch]) < 2:
             raise CalculationError(
                 f"output allocation of {o.batch}: {o.flow!r} is not a split output of its unit"
             )
@@ -277,8 +284,8 @@ def compute_ledgers(
             bought[f.target, pa.pos] += pa.kg
     pos = {p.id: p for p in decisions.pos}
 
-    def entering(s: StorageUnit, b: BatchResult) -> float:
-        return b.rfnbo_kg if len(homes[b.id]) == 1 else assigned[s.id, b.id]
+    def entering(s: StorageUnit, b: BatchPart) -> float:
+        return b.kg if len(homes[b.id]) == 1 else assigned[s.id, b.id]
 
     results: list[LedgerResult] = []
     for s in cfg.blocks_of(StorageUnit):
@@ -299,9 +306,10 @@ def compute_ledgers(
                     out_feed_kg=feed_out[k],
                     out_consignment_kg=cons_out[k],
                     write_off_kg=written[k],
+                    purchased=e.origin == "purchased",
                 )
             )
-        for b in batches.values():
+        for b in parts.values():
             if s.id not in homes[b.id]:
                 continue
             k = (s.id, b.id)
@@ -314,9 +322,10 @@ def compute_ledgers(
                     batch=b.id,
                     origin="produced",
                     month=b.month,
-                    ghg_gCO2e_per_MJ=b.ghg_gCO2e_per_MJ if b.ghg_gCO2e_per_MJ is not None else 0.0,
-                    rfnbo_share=b.rfnbo_share,
+                    ghg_gCO2e_per_MJ=b.ghg_gCO2e_per_MJ,
+                    rfnbo_share=b.share,
                     compliant=b.compliant,
+                    purchased=b.purchased,
                     lhv_MJ_per_kg=lhv,
                     in_kg=in_kg,
                     out_feed_kg=feed_out[k],
@@ -342,6 +351,7 @@ def compute_ledgers(
                     out_feed_kg=feed_out[k],
                     out_consignment_kg=cons_out[k],
                     write_off_kg=written[k],
+                    purchased=True,
                 )
             )
         lines.sort(

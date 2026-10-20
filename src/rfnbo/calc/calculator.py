@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from rfnbo.calc.batch import BatchResult, FeedLine, compute_batches
+from rfnbo.calc.batch import BatchPart, BatchResult, FeedLine, compute_batches
 from rfnbo.calc.check import CheckResult, run_checks
 from rfnbo.calc.consign import ConsignmentResult, compute_consignments
 from rfnbo.calc.ledger import (
@@ -39,6 +39,8 @@ class RunResult:
     consignments: list[ConsignmentResult]
     storage_weights: dict[str, StorageWeight] = field(default_factory=dict)
     storages_of: dict[str, tuple[str, ...]] = field(default_factory=dict)  # every storage
+    # Every batch part by id (build plan §12): the units of ledgers, feed and consignments.
+    parts: dict[str, BatchPart] = field(default_factory=dict)
     purchases: list[PoSResult] = field(default_factory=list)  # the PoS register
     supplies: list[SupplyReconciliation] = field(default_factory=list)
     checks: list[CheckResult] = field(default_factory=list)
@@ -104,6 +106,7 @@ def calculate(cfg: PlantConfig, frame: Frame, decisions: Decisions) -> RunResult
         batches=batches,
         storage_of={b: s[0] for b, s in storages_of.items()},
         storages_of=storages_of,
+        parts={p.id: p for b in batches.values() for p in b.parts},
         ledgers=ledgers,
         reconciliation=compute_reconciliation(cfg, frame),
         consignments=consignments,

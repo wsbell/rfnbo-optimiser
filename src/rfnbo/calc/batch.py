@@ -8,6 +8,14 @@ RFNBO feed ÷ total feed (by energy); when short, the unit's own emissions are p
 the RFNBO portion by energy. Purchased RFNBO (§11.1 rule 4) is RFNBO feed like any other:
 credentials allocated to a supplier's metered delivery, at the PoS's GHG intensity; the whole
 metered delivery counts in the feed consumed.
+
+No averaging across batches (build plan §12): a downstream batch's RFNBO output is a set of
+parts, one per source GHG and origin. Part j, fed MJ_j at g_j, with C the feed consumed and E the
+product energy, has share_j = MJ_j ÷ C and
+
+    GHG_j = (MJ_j · g_j + share_j · own) / (share_j · E) + A = g_j · C / E + own / E + A
+
+so a non-compliant source gives a non-compliant part: nothing is saved by blending.
 """
 
 from __future__ import annotations
@@ -19,7 +27,7 @@ from typing import Literal
 
 import numpy as np
 
-from rfnbo.calc.tolerance import meets_threshold, snap_unit_share
+from rfnbo.calc.tolerance import RANK_DECIMALS, meets_threshold, snap_unit_share
 from rfnbo.config.schema import (
     ELECTRICITY,
     Flow,
@@ -59,8 +67,34 @@ class FeedLine:
     ghg_gCO2e_per_MJ: float
     emissions_g: float
     compliant: bool
-    origin: Literal["batch", "pos"] = "batch"  # a produced or opening batch, or a PoS
+    origin: Literal["batch", "pos"] = "batch"  # a produced or opening batch part, or a PoS
     flow: str | None = None  # supply flow, for PoS credentials allocated to the batch directly
+    purchased: bool = False  # a PoS, or a part made from purchased RFNBO
+
+
+@dataclass(frozen=True)
+class BatchPart:
+    """RFNBO of one batch from one source GHG and origin (build plan §12): the unit of the
+    ledgers, feed, consignments and write-offs. An electrolytic batch has one part."""
+
+    id: str
+    batch: str
+    unit: str
+    month: str
+    lhv_MJ_per_kg: float
+    purchased: bool
+    sources: tuple[str, ...]  # upstream part ids or PoS ids (none for an electrolytic batch)
+    share: float  # of the batch's product
+    kg: float
+    feed_emissions_g: float
+    own_emissions_g: float  # the batch's own emissions pro-rated to this part
+    adder_emissions_g: float
+    ghg_gCO2e_per_MJ: float
+    compliant: bool
+
+    @property
+    def energy_MJ(self) -> float:
+        return self.kg * self.lhv_MJ_per_kg
 
 
 @dataclass(frozen=True)
@@ -97,9 +131,14 @@ class BatchResult:
     prorated_own_emissions_g: float
     ghg_gCO2e_per_MJ: float | None
     threshold_gCO2e_per_MJ: float
-    compliant: bool
+    compliant: bool  # every part compliant
     rfnbo_kg: float
     rfnbo_MJ: float
+    parts: tuple[BatchPart, ...] = ()
+
+    @property
+    def max_ghg_gCO2e_per_MJ(self) -> float | None:
+        return max((p.ghg_gCO2e_per_MJ for p in self.parts), default=None)
 
     @property
     def intervals(self) -> int:
@@ -274,19 +313,25 @@ def compute_batches(cfg: PlantConfig, frame: Frame, decisions: Decisions) -> dic
 
     renewable = renewable_series(cfg, frame, decisions)
     results: dict[str, BatchResult] = {}
+    parts: dict[str, BatchPart] = {}
     for unit in unit_order(cfg):
         for spec in sorted(by_unit.get(unit.id, []), key=lambda s: s.start):
-            results[spec.id] = _batch(
+            b = _batch(
                 cfg,
                 frame,
                 unit,
                 spec,
                 renewable.get(unit.id),
                 feed_into[spec.id],
-                results,
+                parts,
                 direct[spec.id],
                 bought,
             )
+            results[spec.id] = b
+            for part in b.parts:
+                if part.id in parts and part.id != b.id:
+                    raise CalculationError(f"part id {part.id} clashes with another batch")
+                parts[part.id] = part
     unknown = {a.target for a in decisions.feed} - results.keys()
     if unknown:
         raise CalculationError(f"feed allocated to unknown batch(es): {sorted(unknown)}")
@@ -300,7 +345,7 @@ def _batch(
     spec: BatchSpec,
     renewable: FloatArray | None,
     feed_alloc: list[tuple[str, float]],
-    done: dict[str, BatchResult],
+    done: dict[str, BatchPart],
     direct: list[tuple[str, str, float]],
     bought: dict[str, Credit],
 ) -> BatchResult:
@@ -362,28 +407,18 @@ def _batch(
         c = bought[pos_id]
         mj = kg * c.lhv_MJ_per_kg
         g = c.pos.ghg_gCO2e_per_MJ
-        return FeedLine(pos_id, kg, mj, g, mj * g, c.compliant, "pos", flow)
+        return FeedLine(pos_id, kg, mj, g, mj * g, c.compliant, "pos", flow, purchased=True)
 
     for source_id, kg in feed_alloc:
-        src_batch = done.get(source_id)
-        if src_batch is None and source_id in bought:
+        up = done.get(source_id)
+        if up is None and source_id in bought:
             feed.append(credit_line(source_id, kg, None))  # a PoS held in the feed storage
             continue
-        if src_batch is None:
+        if up is None:
             raise CalculationError(f"feed into {spec.id}: unknown or downstream batch {source_id}")
-        if src_batch.ghg_gCO2e_per_MJ is None:
-            raise CalculationError(f"feed into {spec.id}: batch {source_id} has no GHG")
-        mj = kg * src_batch.lhv_MJ_per_kg
-        feed.append(
-            FeedLine(
-                source_id,
-                kg,
-                mj,
-                src_batch.ghg_gCO2e_per_MJ,
-                mj * src_batch.ghg_gCO2e_per_MJ,
-                src_batch.compliant,
-            )
-        )
+        mj = kg * up.lhv_MJ_per_kg
+        g = up.ghg_gCO2e_per_MJ
+        feed.append(FeedLine(source_id, kg, mj, g, mj * g, up.compliant, purchased=up.purchased))
     for pos_id, flow, kg in direct:
         feed.append(credit_line(pos_id, kg, flow))
     rfnbo_feed_kg = sum(x.kg for x in feed)
@@ -407,6 +442,62 @@ def _batch(
         ghg = (feed_emissions + prorated) / (share * energy) + adder if share * energy > 0 else None
 
     rfnbo_kg = share * product_kg if ghg is not None else 0.0
+    month = cal.month_key(frame.index[s], tz)
+
+    def part(
+        pid: str, purchased: bool, sources: tuple[str, ...], sh: float, fem: float, own_g: float
+    ) -> BatchPart:
+        mj = sh * energy
+        a_g = adder * mj
+        g = (fem + own_g + a_g) / mj
+        return BatchPart(
+            pid,
+            spec.id,
+            unit.id,
+            month,
+            unit.lhv_MJ_per_kg,
+            purchased,
+            sources,
+            sh,
+            sh * product_kg,
+            fem,
+            own_g,
+            a_g,
+            g,
+            meets_threshold(g, threshold),
+        )
+
+    parts: list[BatchPart] = []
+    if kind == "electrolytic":
+        if rfnbo_kg > 0 and ghg is not None:
+            # Matched renewable sets the share; emissions are over all the batch's product.
+            parts.append(part(spec.id, False, (), share, 0.0, own * share))
+    elif rfnbo_kg > 0:
+        # One part per origin and source GHG (identical characteristics may be summarised).
+        groups: dict[tuple[bool, float], list[FeedLine]] = defaultdict(list)
+        for x in feed:
+            if x.energy_MJ > 0:
+                groups[x.purchased, round(x.ghg_gCO2e_per_MJ, RANK_DECIMALS)].append(x)
+        shares = {
+            # Ratio first: share × energy can underflow into subnormals for tiny feeds.
+            k: share * (sum(x.energy_MJ for x in xs) / rfnbo_feed_MJ)
+            for k, xs in groups.items()
+        }
+        # A part too small to carry any energy in floating point (underflow) is no part.
+        keys = sorted(
+            (k for k, sh in shares.items() if sh * energy > 0), key=lambda k: (k[1], k[0])
+        )
+        for n, key in enumerate(keys, 1):
+            xs = groups[key]
+            sh = shares[key]
+            pid = spec.id if len(keys) == 1 else f"{spec.id}.{n}"
+            sources = tuple(dict.fromkeys(x.source_batch for x in xs))
+            parts.append(part(pid, key[0], sources, sh, sum(x.emissions_g for x in xs), sh * own))
+    if kind == "downstream":
+        ghg = parts[0].ghg_gCO2e_per_MJ if len(parts) == 1 else None
+    compliant = bool(parts) and all(p.compliant for p in parts)
+    if kind == "electrolytic":
+        compliant = ghg is not None and meets_threshold(ghg, threshold)
     return BatchResult(
         id=spec.id,
         unit=unit.id,
@@ -417,7 +508,7 @@ def _batch(
         end=spec.end,
         start_index=s,
         end_index=e,
-        month=cal.month_key(frame.index[s], tz),
+        month=month,
         quarter=cal.quarter_key(frame.index[s], tz),
         product_kg=product_kg,
         lhv_MJ_per_kg=unit.lhv_MJ_per_kg,
@@ -440,9 +531,10 @@ def _batch(
         prorated_own_emissions_g=prorated,
         ghg_gCO2e_per_MJ=ghg,
         threshold_gCO2e_per_MJ=threshold,
-        compliant=ghg is not None and meets_threshold(ghg, threshold),
+        compliant=compliant,
         rfnbo_kg=rfnbo_kg,
         rfnbo_MJ=rfnbo_kg * unit.lhv_MJ_per_kg,
+        parts=tuple(parts),
     )
 
 

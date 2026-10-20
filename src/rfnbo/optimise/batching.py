@@ -6,13 +6,18 @@ chooses where batches start and end. Every candidate batch [s, e) inside the all
 
     value = RFNBO_MJ · (1 − μ · (GHG − L))      floored at 0, then minus ε per batch
 
-L is the GHG the downstream unit can absorb (blended feed GHG that keeps its own product at
-the RFNBO threshold), so batches are shaped for what downstream can use. ε is the materiality
+Batches are never averaged (build plan §12, decided 2026-10-20): a downstream unit turns each
+batch it is fed into a part with that batch's own GHG, so only a batch whose own GHG is at
+most L (the feed GHG that keeps the downstream product at the RFNBO threshold; the threshold
+itself for a final product) can be fed compliantly. No blend can save a batch above L.
+
+μ only shapes candidate batchings (a higher μ prefers batches of lower GHG); each candidate is
+scored by the calculator's rule: the RFNBO MJ in batches at or below L, then the least GHG
+attributed to RFNBO, then the fewest batches. The batching with every batch valued at its
+RFNBO MJ when at or below L, and 0 otherwise, is a candidate too. ε is the materiality
 threshold (decided 2026-10-17): a batch is split off only if that gains at least
 ``materiality_MJ`` of final-product MJ (120 MJ, 1 kg H₂, by default), converted to the unit's
-own product with its output storage's weight (``rfnbo.calc.weights``). μ is searched to
-maximise the RFNBO feed that downstream can take while staying compliant, then the lowest GHG
-attributed to RFNBO, then the fewest batches.
+own product with its output storage's weight (``rfnbo.calc.weights``).
 
 Matching follows the calculator exactly (renewable matched within the batch; emission factors
 in force on the batch's first local day). The optimiser only proposes boundaries: every
@@ -23,7 +28,7 @@ from __future__ import annotations
 
 import functools
 import math
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -141,20 +146,40 @@ def unit_series(
 
 @dataclass(frozen=True)
 class Downstream:
-    """What the unit's product feeds: the GHG limit L on blended feed, and the feed cap."""
+    """What the unit's product feeds: the GHG limit L on each batch fed, and the feed cap."""
 
     unit: str
     limit_gCO2e_per_MJ: float
     cap_MJ: float
 
 
-def downstream(cfg: PlantConfig, frame: Frame, unit: ProcessingUnit) -> Downstream | None:
-    """Blended-feed GHG at which the downstream unit's product sits exactly at the threshold.
+Caps = Mapping[str, float]  # unit id → GHG its product may reach (a consignment's limit)
 
-    For downstream product GHG = (feed_MJ·g + own) / out_MJ + A ≤ T, the feed may average
-    g ≤ (T − A − own/out_MJ) · out_MJ / feed_MJ. Pro-rating on short feed keeps the same
-    limit. Totals are taken over the whole period (a stage A approximation; stage B enforces
-    the limit for each downstream batch).
+
+def product_limit(
+    cfg: PlantConfig, frame: Frame, unit: ProcessingUnit, caps: Caps | None = None
+) -> float:
+    """GHG the unit's product may reach: the threshold, the unit's cap if any, and the feed
+    limit of every unit it feeds, back-propagated through units in series (§12)."""
+    limit = min(cfg.settings.rfnbo_threshold_gCO2e_per_MJ, (caps or {}).get(unit.id, math.inf))
+    for store in output_storages(cfg, unit.id):
+        for f in cfg.flows_out_of(store.id):
+            down = cfg.block(f.target)
+            if isinstance(down, ProcessingUnit):
+                limit = min(limit, downstream_of(cfg, frame, unit, down, caps).limit_gCO2e_per_MJ)
+    return limit
+
+
+def downstream(
+    cfg: PlantConfig, frame: Frame, unit: ProcessingUnit, caps: Caps | None = None
+) -> Downstream | None:
+    """Feed GHG at which the downstream unit's product sits exactly at its limit.
+
+    A part fed at g has GHG = g · feed_MJ / out_MJ + own / out_MJ + A ≤ T, so each batch fed
+    needs g ≤ (T − A − own/out_MJ) · out_MJ / feed_MJ (§12: per batch, never on a blend). T is
+    the downstream product's own limit (:func:`product_limit`): the threshold, or less when that
+    product feeds a further unit or carries a cap. Totals are taken over the whole period (a
+    stage A approximation; stage B enforces the limit for each downstream batch).
     """
     units = [
         u
@@ -167,17 +192,21 @@ def downstream(cfg: PlantConfig, frame: Frame, unit: ProcessingUnit) -> Downstre
     if len(units) > 1:
         # Several units take the product (a split output, or one storage feeding several):
         # the blend must suit the most demanding of them; their feed adds up (phase 13).
-        parts = [downstream_of(cfg, frame, unit, u) for u in units]
+        parts = [downstream_of(cfg, frame, unit, u, caps) for u in units]
         return Downstream(
             ",".join(p.unit for p in parts),
             min(p.limit_gCO2e_per_MJ for p in parts),
             sum(p.cap_MJ for p in parts),
         )
-    return downstream_of(cfg, frame, unit, units[0])
+    return downstream_of(cfg, frame, unit, units[0], caps)
 
 
 def downstream_of(
-    cfg: PlantConfig, frame: Frame, unit: ProcessingUnit, down: ProcessingUnit
+    cfg: PlantConfig,
+    frame: Frame,
+    unit: ProcessingUnit,
+    down: ProcessingUnit,
+    caps: Caps | None = None,
 ) -> Downstream:
     feed_flows = [
         f for f in cfg.flows_into(down.id) if isinstance(cfg.block(f.source), StorageUnit)
@@ -214,8 +243,8 @@ def downstream_of(
             own += float(s[f.series or ""].sum()) * b.emission_factor_at(on).value
     if feed_mj <= 0 or out_mj <= 0:
         return Downstream(down.id, -math.inf, 0.0)
-    threshold = cfg.settings.rfnbo_threshold_gCO2e_per_MJ
-    limit = (threshold - down.fixed_adder_gCO2e_per_MJ - own / out_mj) * out_mj / all_feed_mj
+    target = product_limit(cfg, frame, down, caps)
+    limit = (target - down.fixed_adder_gCO2e_per_MJ - own / out_mj) * out_mj / all_feed_mj
     return Downstream(down.id, limit, feed_mj)
 
 
@@ -271,19 +300,19 @@ def segment(
     return out
 
 
-def value_fn(
-    us: UnitSeries, mode: Literal["blend", "final"], mu: float, limit: float, threshold: float
-) -> ValueFn:
+def value_fn(us: UnitSeries, mode: Literal["blend", "limit"], mu: float, limit: float) -> ValueFn:
+    """``blend``: RFNBO MJ less μ times its GHG above the limit (shapes lower-GHG batches);
+    ``limit``: a batch's RFNBO MJ when its own GHG is at most ``limit``, else nothing."""
+
     def blend(starts: IntArray, end: int) -> FloatArray:
         rf, attributed, _ = us.metrics(starts, end)
         return np.maximum(0.0, rf - mu * (attributed - limit * rf))
 
-    def final(starts: IntArray, end: int) -> FloatArray:
+    def at_limit(starts: IntArray, end: int) -> FloatArray:
         rf, attributed, _ = us.metrics(starts, end)
-        ok = attributed <= (threshold + 1e-9) * rf
-        return np.where(ok, rf, 0.0)
+        return np.where(attributed <= (limit + 1e-9) * rf, rf, 0.0)
 
-    return blend if mode == "blend" else final
+    return blend if mode == "blend" else at_limit
 
 
 @dataclass(frozen=True)
@@ -300,48 +329,30 @@ class Score:
 
 
 def feedable_MJ(rf: FloatArray, attributed: FloatArray, limit: float, cap: float) -> float:
-    """Most RFNBO MJ a downstream unit can take with blended feed GHG ≤ limit and feed ≤ cap.
-
-    Taking batches in ascending GHG is optimal (moving feed from a higher- to a lower-GHG
-    batch keeps the total and lowers the blend), with the last batch taken in part.
-    """
+    """RFNBO MJ a downstream unit can take: batches whose own GHG is at most ``limit`` (no
+    blending, §12), lowest GHG first, up to the feed cap."""
     ghg = np.divide(attributed, rf, out=np.full_like(rf, np.inf), where=rf > 0)
-    fed = cost = 0.0
-    for i in np.argsort(ghg, kind="stable"):
-        if rf[i] <= 0 or fed >= cap:
-            break
-        take = min(float(rf[i]), cap - fed)
-        per_mj = float(ghg[i]) - limit
-        if cost + take * per_mj <= 0:
-            fed += take
-            cost += take * per_mj
-        else:  # per_mj > 0 here: take what keeps the blend at the limit, then stop
-            fed += -cost / per_mj
-            break
-    return fed
+    ok = (rf > 0) & (ghg <= limit + 1e-9)
+    return min(float(rf[ok].sum()), cap)
 
 
 @dataclass(frozen=True)
 class UnitBatching:
     unit: str
     cuts: list[tuple[int, int]]
-    mu: float | None
+    mu: float | None  # the μ whose batching scored best; None for the per-batch limit
     limit_gCO2e_per_MJ: float | None
     score: Score
     search: list[tuple[float, Score]] = field(default_factory=list)
 
 
 def score_of(
-    us: UnitSeries, cuts: Sequence[tuple[int, int]], down: Downstream | None, threshold: float
+    us: UnitSeries, cuts: Sequence[tuple[int, int]], down: Downstream | None, limit: float
 ) -> Score:
     s = np.array([c[0] for c in cuts], dtype=np.int64)
     e = np.array([c[1] for c in cuts], dtype=np.int64)
     rf, attributed, _ = us.metrics(s, e)
-    if down is None:
-        ok = attributed <= (threshold + 1e-9) * rf
-        fed = float(rf[ok].sum())
-    else:
-        fed = feedable_MJ(rf, attributed, down.limit_gCO2e_per_MJ, down.cap_MJ)
+    fed = feedable_MJ(rf, attributed, limit, math.inf if down is None else down.cap_MJ)
     return Score(fed, float(attributed.sum()), len(cuts))
 
 
@@ -352,23 +363,23 @@ def batch_unit(
     mus: Sequence[float] = MU_GRID,
     eps: float = EPS_MJ,
     renewable_kWh: FloatArray | None = None,
+    caps: Caps | None = None,
 ) -> UnitBatching:
     us = unit_series(cfg, frame, unit, renewable_kWh)
     slices, lo = windows(cfg, frame, unit)
-    threshold = cfg.settings.rfnbo_threshold_gCO2e_per_MJ
-    down = downstream(cfg, frame, unit)
+    down = downstream(cfg, frame, unit, caps)
+    limit = product_limit(cfg, frame, unit, caps)
+    base = segment(slices, lo, value_fn(us, "limit", 0.0, limit), eps)
+    best_score, best_cuts, best_mu = score_of(us, base, down, limit), base, None
     if down is None:
-        cuts = segment(slices, lo, value_fn(us, "final", 0.0, threshold, threshold), eps)
-        return UnitBatching(unit.id, cuts, None, None, score_of(us, cuts, None, threshold))
+        return UnitBatching(unit.id, base, None, None, best_score)
 
     tried: dict[float, tuple[Score, list[tuple[int, int]]]] = {}
 
     def run(mu: float) -> Score:
         if mu not in tried:
-            cuts = segment(
-                slices, lo, value_fn(us, "blend", mu, down.limit_gCO2e_per_MJ, threshold), eps
-            )
-            tried[mu] = (score_of(us, cuts, down, threshold), cuts)
+            cuts = segment(slices, lo, value_fn(us, "blend", mu, limit), eps)
+            tried[mu] = (score_of(us, cuts, down, limit), cuts)
         return tried[mu][0]
 
     def better(a: float, b: float) -> bool:
@@ -394,9 +405,10 @@ def batch_unit(
             math.sqrt(left * best) if left > 0 else best / 2,
             math.sqrt(best * right) if best > 0 else right / 2,
         )
-    score, cuts = tried[best]
+    if tried[best][0].key() > best_score.key():
+        best_score, best_cuts, best_mu = tried[best][0], tried[best][1], best
     search = sorted((mu, s) for mu, (s, _) in tried.items())
-    return UnitBatching(unit.id, cuts, best, down.limit_gCO2e_per_MJ, score, search)
+    return UnitBatching(unit.id, best_cuts, best_mu, limit, best_score, search)
 
 
 @dataclass(frozen=True)
@@ -430,8 +442,13 @@ def optimise_batching(
     frame: Frame,
     mus: Sequence[float] = MU_GRID,
     materiality_MJ: float = MATERIALITY_MJ,
+    caps: Caps | None = None,
 ) -> BatchingResult:
-    """Batches for every unit: stage A for electrolytic units, one per month for the rest."""
+    """Batches for every unit: stage A for electrolytic units, one per month for the rest.
+
+    ``caps`` holds tighter limits on some units' products (a consignment's target less its
+    distribution adder): stage A and the pool split then aim below them, not only below the
+    threshold."""
     from rfnbo.optimise import pool  # pool builds on this module
 
     end = frame.end
@@ -448,13 +465,14 @@ def optimise_batching(
                     cfg,
                     frame,
                     unit,
-                    functools.partial(batch_unit, cfg, frame, unit, mus, eps),
+                    functools.partial(batch_unit, cfg, frame, unit, mus, eps, caps=caps),
+                    caps=caps,
                 )
                 ub = split.batching
                 allocations += split.allocations
                 log += split.log
             else:
-                ub = batch_unit(cfg, frame, unit, mus, eps)
+                ub = batch_unit(cfg, frame, unit, mus, eps, caps=caps)
             results.append(ub)
             cuts = ub.cuts
         else:

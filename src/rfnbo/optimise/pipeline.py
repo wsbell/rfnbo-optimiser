@@ -11,11 +11,14 @@ reports the shortfall. Every number reported comes from the calculator.
 
 from __future__ import annotations
 
+import dataclasses
+import math
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 from rfnbo.calc import RunResult, calculate
 from rfnbo.calc.batch import unit_order
+from rfnbo.calc.consign import consignment_route
 from rfnbo.config.schema import PlantConfig, ProcessingUnit, RfnboSupply, StorageUnit
 from rfnbo.data.quality import Frame
 from rfnbo.model.entities import (
@@ -259,9 +262,10 @@ def _feed_all(
             f"from {len(net.feed)} allocations, {len(net.outputs)} output splits"
         )
         split = {o.batch for o in net.outputs} | {
-            b.id
+            part.id
             for b in current.batches.values()
             if b.unit in {p for u in stage for p in allocate.producers(cfg, u)}
+            for part in b.parts
         }
         kept_outputs = [o for o in decisions.output_allocations if o.batch not in split]
         other_pos = [a for a in decisions.pos_allocations if a.batch not in targets]
@@ -292,8 +296,24 @@ def optimise(
     batch_materiality_MJ: float = MATERIALITY_MJ,
     pos: Sequence[ProofOfSustainability] = (),
 ) -> OptimisationResult:
+    if batching is None:
+        batching = optimise_batching(cfg, frame, materiality_MJ=batch_materiality_MJ)
+        res = optimise(cfg, frame, consignments, batching, batch_materiality_MJ, pos)
+        caps = consignment_caps(cfg, consignments, res.shortfalls)
+        if not caps:
+            return res
+        # A consignment cannot be met: batch again aiming below its limit, not only below the
+        # threshold (without averaging, §12, only low-GHG parts can meet a tight target).
+        capped = optimise_batching(cfg, frame, materiality_MJ=batch_materiality_MJ, caps=caps)
+        again = optimise(cfg, frame, consignments, capped, batch_materiality_MJ, pos)
+        note = f"stage A again with caps {caps}"
+        if _met(again, consignments) > _met(res, consignments) or (
+            _met(again, consignments) == _met(res, consignments)
+            and again.optimised.objectives.key() > res.optimised.objectives.key()
+        ):
+            return dataclasses.replace(again, log=[*res.log, f"{note}: kept", *again.log])
+        return dataclasses.replace(res, log=[*res.log, f"{note}: not better"])
     log: list[str] = []
-    batching = batching or optimise_batching(cfg, frame, materiality_MJ=batch_materiality_MJ)
     for ub in batching.units:
         log.append(
             f"stage A {ub.unit}: {ub.score.batches} batches, mu {ub.mu}, "
@@ -377,6 +397,31 @@ def optimise(
     base_decisions = baseline_decisions(cfg, frame, consignments, pos)
     baseline = _assemble(cfg, frame, base_decisions)
     return OptimisationResult(best, baseline, batching, shortfalls, log)
+
+
+def _met(res: OptimisationResult, consignments: Sequence[ConsignmentSpec]) -> int:
+    return len(consignments) - len({s.consignment for s in res.shortfalls})
+
+
+def consignment_caps(
+    cfg: PlantConfig,
+    consignments: Sequence[ConsignmentSpec],
+    shortfalls: Sequence[allocate.Shortfall],
+) -> dict[str, float]:
+    """For each consignment that cannot be met: its limit before distribution (target less the
+    adder), as a cap on the product of every unit filling its source storage."""
+    unmet = {s.consignment for s in shortfalls}
+    caps: dict[str, float] = {}
+    for c in consignments:
+        if c.id not in unmet or c.target_gCO2e_per_MJ is None:
+            continue
+        _, dist, store = consignment_route(cfg, c.output)
+        limit = c.target_gCO2e_per_MJ - dist.fixed_adder_gCO2e_per_MJ
+        for f in cfg.flows_into(store.id):
+            u = cfg.block(f.source)
+            if isinstance(u, ProcessingUnit):
+                caps[u.id] = min(caps.get(u.id, math.inf), limit)
+    return dict(sorted(caps.items()))
 
 
 def feed_summary(feed: Sequence[FeedAllocation]) -> dict[str, float]:

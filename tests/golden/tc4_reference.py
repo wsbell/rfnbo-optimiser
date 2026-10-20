@@ -8,9 +8,9 @@ Three PoS land in the quarter (decisions 2026-10-17):
 - POS-A, dispatched 20 Oct, 8,000 kg at 3.0 gCO₂e/MJ: low GHG.
 - POS-B, dispatched 20 Dec, 9,000 kg at 12.0 gCO₂e/MJ: partly allocated to flow metered before
   its dispatch date, which is allowed within the quarter (decision 7).
-- POS-C, dispatched 25 Nov, 6,000 kg at 27.9 gCO₂e/MJ: near the threshold, and only part
-  covered by metered delivery: the quarter's 19,200 kg of metered supply is less than the
-  23,000 kg of PoS, so 3,800 kg of POS-C is not allocated and is written off (decision 2).
+- POS-C, dispatched 25 Nov, 6,000 kg at 27.9 gCO₂e/MJ: near the threshold. Without averaging
+  (build plan §12) its part of any conditioning batch is above 28.2 (28.4 CH₂, 28.97 LH₂), and
+  no blend can save it, so none of it is allocated and all 6,000 kg is written off (decision 2).
 
 Like ``tc3_reference`` this module is plain Python and does not import the app. It reuses
 test case 3's data and decisions (the electrolyser, its split output and the H₂ buffer are
@@ -18,8 +18,11 @@ unchanged); the base case has no LH₂ spot sale, so LH₂ storage has room for 
 
 Rules applied, in addition to test case 3's:
 - Allocated PoS kg is RFNBO feed with the PoS's GHG intensity (rule 4): it counts in the
-  batch's RFNBO share by energy and adds its emissions to the feed emissions. The supplier's
-  metered delivery counts in the feed the unit consumed whether or not it is RFNBO.
+  batch's RFNBO share by energy. The supplier's metered delivery counts in the feed the unit
+  consumed whether or not it is RFNBO.
+- No averaging (§12): a batch fed from several sources makes one part per origin and source
+  GHG (``tc3_reference.split_parts``); purchased parts are never aggregated with own ones, and a
+  consignment's GHG is its highest part's.
 - Per batch and supply flow, allocated kg ≤ metered kg; per PoS, allocated ≤ quantity.
 - Storage weights count the supplier's delivery in a unit's feed (energy yield = product MJ ÷
   all feed MJ).
@@ -49,6 +52,8 @@ SUPPLIER = "H2 Trailers BV"
 # H₂ buffer physical inventory at quarter end (4,880 kg) less the 2,880 kg built up on the trip
 # day: what November's liquefier batch leaves in the buffer.
 NOV_HELD_KG = 2000.0
+# The December liquefier delivery (9,600 kg) less the credentials allocated to it (B 7,400 kg).
+DEC_UNCOVERED_KG = 2200.0
 
 
 def build_data(spot: bool = False) -> R.Data:
@@ -84,30 +89,34 @@ SUPPLY_FLOW = {"liquefier": "f_sup_liq", "compressor": "f_sup_comp"}
 
 
 def base_decisions(data: R.Data) -> Decisions:
-    """Every metered kg of supply is covered by a PoS (objective 2: carried value). The H₂
-    buffer ends full of RFNBO (4,880 kg): 2,880 kg the liquefier's buffer flow did not take on
-    the trip day, and 2,000 kg that the November liquefier batch does not take, because
-    November's liquefier yield (0.97) is below the buffer's weight (0.9768); October's and
-    December's (0.98) are above it, so those batches are fully RFNBO. Which credentials: the
-    lowest GHG (A and B in full, C 2,200 kg), placed nearest their dispatch month: A (Oct) and
-    C (Nov) into the November compressor batch, B (Dec) and the rest of C into the December
-    liquefier batch."""
+    """A and B are allocated in full (17,000 kg); C cannot make a compliant part (§12). The
+    compressor's November delivery (9,600 kg) takes A 8,000 and B 1,600 (nearest dispatch
+    month first), the liquefier's December delivery B's other 7,400 kg. The 2,200 kg of the
+    December delivery no credential covers is filled with buffer RFNBO instead: December's
+    liquefier yield (0.98) beats November's (0.97), so the November liquefier batch gives up
+    2,200 kg more and holds 4,200 kg in the buffer, which ends full of RFNBO (4,880 kg, with the
+    December batch's 680 kg).
+
+    Consignments: highest GHG first among parts within the limit (target less adder), then the
+    oldest month. CA takes November LH₂ (1.7027), then October (1.6905, older than December);
+    the purchased LH₂ part (3.56) is above CA's limit (3.0). CB: the purchased CH₂ parts (3.5 and
+    12.5) are above its limit (3.0); the own CH₂ parts all sit at 1.6667, oldest first."""
     d = R.base_decisions(data)
     d.outputs, d.feed = {}, {}
     R.route(data, d, buffer_carry_kg=0.0)
-    d.feed[("E-2026-11", "L-2026-11")] -= NOV_HELD_KG
+    d.feed[("E-2026-11", "L-2026-11")] -= NOV_HELD_KG + DEC_UNCOVERED_KG
+    d.feed[("E-2026-12", "L-2026-12")] += DEC_UNCOVERED_KG
+    l_nov = d.feed[("E-2026-11", "L-2026-11")] * 0.97
     return Decisions(
         d,
         pos={
             ("POS-A", "C-2026-11"): 8000.0,
-            ("POS-C", "C-2026-11"): 1600.0,
-            ("POS-B", "L-2026-12"): 9000.0,
-            ("POS-C", "L-2026-12"): 600.0,
+            ("POS-B", "C-2026-11"): 1600.0,
+            ("POS-B", "L-2026-12"): 7400.0,
         },
-        # Highest GHG first: the batches holding credentials, then the next highest.
         parts={
-            "CA": {"L-2026-12": 94080.0, "L-2026-11": 55920.0},
-            "CB": {"C-2026-11": 67200.0, "C-2026-10": 52800.0},
+            "CA": {"L-2026-11": l_nov, "L-2026-10": 150000.0 - l_nov},
+            "CB": {"C-2026-10": 59600.0, "C-2026-11.1": 57600.0, "C-2026-12": 2800.0},
         },
     )
 
@@ -124,7 +133,7 @@ def v1_decisions(data: R.Data) -> Decisions:
         pos={("POS-A", "C-2026-11"): 8000.0, ("POS-B", "C-2026-11"): 1600.0},
         parts={
             "CA": {"L-2026-11": 83808.0, "L-2026-10": 66192.0},
-            "CB": {"C-2026-11": 67200.0, "C-2026-10": 52800.0},
+            "CB": {"C-2026-10": 59600.0, "C-2026-11.1": 57600.0, "C-2026-12": 2800.0},
         },
     )
 
@@ -157,7 +166,16 @@ def run(data: R.Data, dd: Decisions) -> dict[str, Any]:
             matched = min(alloc, elec)
             own_g = (elec - matched) * R.EF_GRID
             rf_kg = share * product
-            ghg = (feed_em + share * own_g) / (rf_kg * LHV) + R.ADDER[unit] if rf_kg else None
+            parts = R.split_parts(
+                bid,
+                {src: (kg, e[src]["ghg"], False) for src, kg in sources.items()}
+                | {p: (kg, POS[p]["ghg"], True) for p, kg in credits.items()},
+                consumed,
+                product,
+                own_g,
+                R.ADDER[unit],
+            )
+            ghg = next(iter(parts.values()))["ghg"] if len(parts) == 1 else None
             units[unit][bid] = {
                 "month": data.month[i0],
                 "start": i0,
@@ -185,24 +203,25 @@ def run(data: R.Data, dd: Decisions) -> dict[str, Any]:
                 "rfnbo_kg": rf_kg,
                 "energy_MJ": rf_kg * LHV,
                 "ghg": ghg,
-                "compliant": ghg is not None and ghg <= THRESHOLD + 1e-9,
+                "parts": parts,
+                "compliant": bool(parts) and all(x["compliant"] for x in parts.values()),
             }
     ledgers = {k: res["ledgers"][k] for k in ("h2_buffer", "pt_compressor")}
     by_storage = {c["storage"]: cid for cid, c in R.CONSIGNMENTS.items()}
     for unit, storage in R.PRODUCT_STORAGE.items():
         cid = by_storage[storage]
         lines = {}
-        for bid, b in units[unit].items():
-            if not b["rfnbo_kg"]:
-                continue
-            out = dd.parts.get(cid, {}).get(bid, 0.0)
-            lines[bid] = {
-                "month": b["month"],
-                "ghg": b["ghg"],
-                "in_kg": b["rfnbo_kg"],
-                "out_kg": out,
-                "closing_kg": b["rfnbo_kg"] - out,
-            }
+        for b in units[unit].values():
+            for pid, x in b["parts"].items():
+                out = dd.parts.get(cid, {}).get(pid, 0.0)
+                lines[pid] = {
+                    "month": b["month"],
+                    "ghg": x["ghg"],
+                    "purchased": x["purchased"],
+                    "in_kg": x["rfnbo_kg"],
+                    "out_kg": out,
+                    "closing_kg": x["rfnbo_kg"] - out,
+                }
         physical = s["lh2_inv_kg" if storage == "lh2_storage" else "ch2_inv_kg"][-1]
         R._close(storage, lines, physical)
         ledgers[storage] = {"lines": lines, "physical_kg": physical}
@@ -225,15 +244,15 @@ def run(data: R.Data, dd: Decisions) -> dict[str, Any]:
         parts = dd.parts.get(cid, {})
         lines = ledgers[c["storage"]]["lines"]
         kg = sum(parts.values())
-        weighted = sum(v * lines[b]["ghg"] for b, v in parts.items()) / kg
-        shipped = weighted + c["adder"]
+        highest = max(lines[b]["ghg"] for b in parts)  # no consignment average (§12)
+        shipped = highest + c["adder"]
         cons[cid] = {
             "volume_kg": c["volume_kg"],
             "allocated_kg": kg,
             "target": c["target"],
             "adder": c["adder"],
             "parts": dict(parts),
-            "weighted_ghg": weighted,
+            "highest_ghg": highest,
             "shipped_ghg": shipped,
             "met": abs(kg - c["volume_kg"]) <= 1e-6 * c["volume_kg"]
             and shipped <= c["target"] + 1e-9

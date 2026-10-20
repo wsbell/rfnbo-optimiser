@@ -1,7 +1,9 @@
 """Phase 4 acceptance: given the workbook decisions, reproduce the workbook values to 1e-6.
 
 Test case 2 predates the non-compliant RFNBO rule (§2.5); its fixtures were regenerated with
-``export_workbook.py --rule-2-5`` (see ``superseded`` in the expected file).
+``export_workbook.py --rule-2-5``. Both workbooks predate the no-averaging rule (§12): their
+fixtures were regenerated with ``--no-averaging``, which splits NH₃ batches into parts and
+re-derives the consignment allocations (see ``superseded`` in the expected files).
 """
 
 from __future__ import annotations
@@ -69,8 +71,17 @@ def test_data_is_clean(case: str) -> None:
 
 
 def test_every_check_passes(case: str) -> None:
-    run, _, _ = _run(case)
-    assert run.failures == [], "\n".join(str(f) for f in run.failures[:20])
+    """Every check passes except, in test case 1, the consignment targets: they were met only by
+    averaging September and October NH₃, and no part of October NH₃ is low enough (§12)."""
+    run, expected, _ = _run(case)
+    missed = sorted(
+        c for c, e in expected["consignments"].items() if e["shipped_ghg"] > e["target"] + 1e-9
+    )
+    assert missed == (["C1", "C2"] if case == "tc1" else [])
+    failures = [(f.name, f.subject) for f in run.failures]
+    assert failures == [("consignment_target", c) for c in missed], "\n".join(
+        str(f) for f in run.failures[:20]
+    )
 
 
 def test_electrolyser_batches(case: str) -> None:
@@ -115,9 +126,21 @@ def test_nh3_batches(case: str) -> None:
             ("electricity_emissions_g", emissions(run, bid, "grid_power")),
             ("rfnbo_kg", b.rfnbo_kg),
             ("rfnbo_MJ", b.rfnbo_MJ),
-            ("ghg", b.ghg_gCO2e_per_MJ),
         ):
             approx(value, e[field], f"{bid} {field}")
+        if e["ghg"] is None:
+            assert b.ghg_gCO2e_per_MJ is None, bid
+        else:
+            approx(b.ghg_gCO2e_per_MJ, e["ghg"], f"{bid} ghg")
+        parts = {p.id: p for p in b.parts}
+        assert set(parts) == set(e["parts"]), bid
+        for pid, x in e["parts"].items():
+            part = parts[pid]
+            assert part.compliant is x["compliant"], pid
+            assert sorted(part.sources) == sorted(x["sources"]), pid
+            approx(part.ghg_gCO2e_per_MJ, x["ghg"], f"{pid} ghg")
+            approx(part.kg, x["kg"], f"{pid} kg")
+            approx(part.share, x["share"], f"{pid} share")
 
 
 def test_h2_ledger_and_reconciliation(case: str) -> None:
@@ -194,7 +217,7 @@ def test_consignments(case: str) -> None:
         assert set(parts) == set(e["parts"]), cid
         for b, kg in e["parts"].items():
             approx(parts[b], kg, f"{cid} {b}")
-        approx(c.weighted_ghg_gCO2e_per_MJ, e["weighted_ghg"], f"{cid} weighted GHG")
+        approx(c.max_ghg_gCO2e_per_MJ, e["highest_ghg"], f"{cid} highest part GHG")
         approx(c.shipped_ghg_gCO2e_per_MJ, e["shipped_ghg"], f"{cid} shipped GHG")
 
 
@@ -202,7 +225,7 @@ def test_minimise_mode_variant(case: str) -> None:
     """Variant V1: the hand-calculated lowest shipped GHG for one volume, no target."""
     run, expected, _ = _run(case)
     v = expected["variant_minimise"]
-    parts = [("N-2026-09", v["sep_kg"]), ("N-2026-10", v["q4_kg"])]
+    parts = sorted(v["parts"].items())
     decisions = Decisions(
         batches=[],
         consignments=[
@@ -231,7 +254,11 @@ def test_rule_2_5_regeneration() -> None:
     left at quarter end (108,729.2 kg) is non-compliant, so all of it is written off."""
     run, expected, _ = _run("tc2")
     assert expected["rule_2_5_applied"]
-    noncompliant = [b for b in run.batches.values() if b.is_rfnbo and not b.compliant]
+    noncompliant = [
+        b
+        for b in run.batches.values()
+        if b.unit == "electrolyser" and b.is_rfnbo and not b.compliant
+    ]
     assert len(noncompliant) == len(expected["superseded"]["h2_rfnbo_kg"]) == 88
     led = run.ledger("h2_storage")
     approx(led.write_off_kg, 108729.2, "H2 write-off")

@@ -156,16 +156,23 @@ def test_run_id_depends_only_on_inputs(tmp_path: Path) -> None:
 
 
 def test_next_quarter_opens_from_sealed_closing_ledger(tmp_path: Path) -> None:
-    run, _, flags = _run("tc1")
+    """Test case 2 passes every check (test case 1's consignments miss their targets under §12,
+    so its sealed run cannot open a quarter); its carried NH₃ parts open 2027-Q1."""
+    run, expected, flags = _run("tc2")
     d = sealed.seal(run, tmp_path / "q4", flags)
     nxt = sealed.with_opening_from(run.config, d, "2027-Q1")
     nh3 = next(b for b in nxt.blocks if b.id == "nh3_storage")
     opening = {e.batch_id: e for e in nh3.opening_ledger}  # type: ignore[union-attr]
-    assert set(opening) == {"N-2026-09", "N-2026-10", "N-2026-11"}
-    assert math.isclose(opening["N-2026-11"].rfnbo_kg, 455797.916667, rel_tol=1e-9)
-    assert opening["N-2026-11"].production_month == "2026-11"
-    assert math.isclose(opening["N-2026-10"].ghg_gCO2e_per_MJ, 14.0924731182796, rel_tol=1e-9)
-    assert math.isclose(nh3.opening_inventory_kg, 575297.916667, rel_tol=1e-12)  # type: ignore[union-attr]
+    lines = expected["nh3_ledger"]["lines"]
+    assert set(opening) == {b for b, x in lines.items() if x["carried_kg"] > 1e-9}
+    for bid, e in opening.items():
+        assert math.isclose(e.rfnbo_kg, lines[bid]["carried_kg"], rel_tol=1e-9), bid
+        assert math.isclose(e.ghg_gCO2e_per_MJ, lines[bid]["ghg"], rel_tol=1e-9), bid
+        assert e.production_month == lines[bid]["month"] and e.origin == "produced", bid
+    assert all(e.ghg_gCO2e_per_MJ <= 28.2 + 1e-9 for e in opening.values())
+    assert math.isclose(
+        nh3.opening_inventory_kg, expected["nh3_ledger"]["physical_kg"], rel_tol=1e-12
+    )  # type: ignore[union-attr]
     with pytest.raises(sealed.SealError, match="cannot open"):
         sealed.with_opening_from(run.config, d, "2027-Q2")
 
@@ -191,9 +198,9 @@ def test_cli_run_and_verify(tmp_path: Path, capsys: pytest.CaptureFixture[str]) 
             "--source",
             str(ROOT / "examples" / "test_workbook_source.json"),
             "--data",
-            str(ROOT / "tests" / "golden" / "workbooks" / CASES["tc1"]),
+            str(ROOT / "tests" / "golden" / "workbooks" / CASES["tc2"]),
             "--decisions",
-            str(ROOT / "tests" / "golden" / "tc1.decisions.json"),
+            str(ROOT / "tests" / "golden" / "tc2.decisions.json"),
             "--quarter",
             "2026-Q4",
             "--out",

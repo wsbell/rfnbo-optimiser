@@ -46,8 +46,9 @@ def test_tc1_c1_reaches_the_electrolyser_through_nh3() -> None:
 def test_consignment_and_batch_views() -> None:
     run, _, _ = _run("tc1")
     cv = V.consignment_view(run, "C2")
-    assert [a["id"] for a in cv["aggregated"]] == ["C2-2026-09", "C2-2026-10"]
-    assert all(x["passed"] for x in cv["checks"])
+    assert [a["id"] for a in cv["aggregated"]] == ["C2-2026-10"]
+    # §12: October NH₃ (14.09) plus the 8 adder misses the 20 target; nothing averages it down.
+    assert [x["check"] for x in cv["checks"] if not x["passed"]] == ["consignment_target"]
     bv = V.batch_view(run, "N-2026-12")
     assert {u["batch"] for u in bv["upstream"]} == {
         "E-2026-12-01",
@@ -56,7 +57,13 @@ def test_consignment_and_batch_views() -> None:
         "E-2026-12-06",
         "E-2026-12-07",
     }
-    assert {d["kind"] for d in bv["downstream"]} == {"write_off"}
+    # December NH₃ makes two parts (§12): from the 1.17 H₂ and from the 17.83 H₂.
+    assert [(d["kind"], d["to"]) for d in bv["downstream"]] == [
+        ("output", "N-2026-12.1"),
+        ("output", "N-2026-12.2"),
+    ]
+    part = V.batch_view(run, "N-2026-12.2")
+    assert {d["kind"] for d in part["downstream"]} == {"write_off"}
     opening = V.batch_view(run, "N-2026-09")
     assert opening["kind"] == "opening" and opening["rfnbo_kg"] == 300000.0
     agg = next(d for d in opening["downstream"] if d["kind"] == "aggregation")

@@ -30,31 +30,29 @@ def _pipeline(case: str) -> OptimisationResult:
 @pytest.mark.parametrize("case", ["tc1", "tc2"])
 def test_every_check_passes(case: str) -> None:
     res = _pipeline(case)
-    assert res.feasible
+    assert res.feasible is (case == "tc2")
     assert res.optimised.run.failures == []
 
 
-def test_tc1_keeps_h2_rather_than_nh3_that_is_written_off() -> None:
-    """Objective 2 values carried RFNBO by its final-product yield (decided 2026-10-17). In
-    test case 1 the December NH₃ batch is written off in full (spot sale), so the workbook's
-    feed into it gains nothing; the optimiser fills H₂ storage with RFNBO up to its measured
-    inventory instead. Everything else matches the workbook."""
+def test_tc1_consignments_cannot_be_met_without_averaging() -> None:
+    """§12: test case 1's workbook met C1 (limit 15 − 3) and C2 (limit 20 − 8) by averaging
+    September NH₃ (6 gCO₂e/MJ) with Q4 NH₃ (14.09). Without averaging only the 300,000 kg of
+    September NH₃ is at or below 12, short of either volume, so neither is met; the optimiser
+    reports both and optimises the rest, carrying at least the workbook's value."""
     ref, _, _ = _run("tc1")
-    want, got = objectives(ref), _pipeline("tc1").optimised.objectives
-    run = _pipeline("tc1").optimised.run
-    assert got.consignments_met and want.consignments_met
-    h2 = run.ledger("h2_storage")
-    assert math.isclose(h2.carried_kg, h2.physical_kg, rel_tol=1e-9)
-    w = run.storage_weights["h2_storage"].weight
-    assert w is not None and math.isclose(w, 2429900 * 18.6 / (432522.2 * 120), rel_tol=1e-9)
-    gain = (h2.physical_kg - ref.ledger("h2_storage").carried_kg) * 120 * w
-    assert math.isclose(got.carried_value_MJ, want.carried_value_MJ + gain, rel_tol=1e-9)
-    assert got.key() > want.key()
+    res = _pipeline("tc1")
+    assert [(s.consignment, s.achievable_kg) for s in res.shortfalls] == [
+        ("C1", 300000.0),
+        ("C2", 300000.0),
+    ]
+    assert all("only 300,000.0 kg is at or below 12" in s.reason for s in res.shortfalls)
+    run = res.optimised.run
+    assert run.consignments == []
     nh3 = run.ledger("nh3_storage")
-    assert math.isclose(nh3.carried_kg, ref.ledger("nh3_storage").carried_kg, rel_tol=1e-9)
-    assert math.isclose(
-        got.carried_ghg["nh3_storage"] or 0, want.carried_ghg["nh3_storage"] or 0, rel_tol=1e-6
-    )
+    assert math.isclose(nh3.carried_kg, nh3.physical_kg, rel_tol=1e-9)
+    want, got = objectives(ref), res.optimised.objectives
+    assert not want.consignments_met
+    assert got.carried_value_MJ >= want.carried_value_MJ * (1 - 1e-9)
 
 
 def test_tc2_beats_the_regenerated_workbook() -> None:
@@ -68,18 +66,16 @@ def test_tc2_beats_the_regenerated_workbook() -> None:
     assert got.carried_value_MJ > want.carried_value_MJ
 
 
-def test_noncompliant_rfnbo_is_blended_into_compliant_nh3() -> None:
-    """§2.5: H₂ above 28.2 is still RFNBO, fed downstream and saved by blending."""
+def test_noncompliant_rfnbo_is_not_fed_downstream() -> None:
+    """§12 decision 2: H₂ above 28.2 is still RFNBO but cannot be saved by blending, so the
+    optimiser feeds none of it; every NH₃ part it makes complies."""
     run = _pipeline("tc2").optimised.run
     fed = {a.source for a in run.decisions.feed}
-    assert any(not run.batches[b].compliant for b in fed if b in run.batches)
+    assert fed and all(run.batches[b].compliant for b in fed if b in run.batches)
     nh3 = [b for b in run.batches.values() if b.unit == "nh3_synthesis" and b.rfnbo_kg > 0]
-    assert nh3 and all(b.compliant for b in nh3)
+    assert nh3 and all(p.compliant for b in nh3 for p in b.parts)
+    assert any(len(b.parts) > 1 for b in nh3)  # one part per source GHG
     assert any(b.rfnbo_share < 1 for b in nh3)  # short feed, pro-rated
-    # December NH₃ would be written off in full (spot sale), so it gets no RFNBO feed: the H₂
-    # stays in storage, worth its downstream yield, up to measured inventory.
-    dec = run.batches["nh3_synthesis-2026-12"]
-    assert dec.rfnbo_kg == 0
     h2 = run.ledger("h2_storage")
     assert math.isclose(h2.carried_kg, h2.physical_kg, rel_tol=1e-9)
 
@@ -105,10 +101,11 @@ def test_stage_b_reaches_the_stage_a_bound() -> None:
 
 
 @pytest.mark.parametrize(
-    ("case", "volume", "shipped"), [("tc1", 400000.0, 11.0231182795699), ("tc2", 25000.0, 9.0)]
+    ("case", "volume", "shipped"), [("tc1", 400000.0, 17.0924731182796), ("tc2", 25000.0, 9.0)]
 )
 def test_minimise_mode_finds_the_lowest_ghg(case: str, volume: float, shipped: float) -> None:
-    """Workbook variant V1: one volume for Customer A, no target."""
+    """Workbook variant V1: one volume for Customer A, no target. In test case 1 the 100,000 kg
+    beyond September's stock is Q4 NH₃ at 14.09, which sets the shipped GHG (§12)."""
     ref, _, _ = _run(case)
     batching, _ = _batched(case)
     res = optimise(
@@ -128,7 +125,7 @@ def test_minimise_mode_finds_the_lowest_ghg(case: str, volume: float, shipped: f
 
 def test_infeasible_target_reports_the_binding_constraint() -> None:
     """Workbook variant V2: C1 target cut to 8.0. Nothing is below 8 − 3 = 5 gCO₂e/MJ, so
-    C1 gets 0 kg; C2 is still met."""
+    C1 gets 0 kg; C2 cannot be met without averaging either (§12)."""
     ref, _, _ = _run("tc1")
     batching, _ = _batched("tc1")
     cons = [
@@ -137,10 +134,11 @@ def test_infeasible_target_reports_the_binding_constraint() -> None:
     ]
     res = optimise(ref.config, ref.frame, cons, batching=batching)
     assert not res.feasible
-    (short,) = res.shortfalls
+    short, c2 = res.shortfalls
     assert short.consignment == "C1" and short.achievable_kg == 0.0
     assert "no compliant stock at or below 5" in short.reason
-    assert [c.id for c in res.optimised.run.consignments] == ["C2"]
+    assert c2.consignment == "C2" and c2.achievable_kg == 300000.0
+    assert res.optimised.run.consignments == []
     assert res.optimised.run.failures == []
 
 

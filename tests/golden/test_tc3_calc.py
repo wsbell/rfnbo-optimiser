@@ -159,7 +159,7 @@ def test_consignments_and_objectives() -> None:
             by_month[month] = by_month.get(month, 0.0) + a.kg
         for month, kg in w["parts_by_month"].items():
             approx(by_month.get(month, 0.0), kg, f"{cid} {month}")
-        approx(c.weighted_ghg_gCO2e_per_MJ, w["weighted_ghg"], f"{cid} weighted")
+        approx(c.max_ghg_gCO2e_per_MJ, w["highest_ghg"], f"{cid} highest part")
         approx(c.shipped_ghg_gCO2e_per_MJ, w["shipped_ghg"], f"{cid} shipped")
     o = x["objectives"]
     approx(run.carried_value_MJ, o["carried_value_MJ"], "carried value")
@@ -305,8 +305,9 @@ def _app_inputs(data: Any, d: Any, result: dict[str, Any]) -> tuple[Any, Decisio
 
 @pytest.mark.parametrize("case", ["v1_hourly", "v2_shortfall", "v2_all_to_electrolyser"])
 def test_reference_cases_reproduce_in_the_app(case: str) -> None:
-    """Hourly batches (2,209 electrolyser batches), a part-RFNBO batch whose non-compliant H₂
-    goes through the pass-through, and non-compliant LH₂ written off at quarter end."""
+    """Hourly batches (2,209 electrolyser batches), a 0% electrolyser batch giving its
+    renewable to the liquefier, and non-compliant LH₂ written off at quarter end. In V2 CB misses
+    its target: December CH₂ is above its limit and is not averaged down (§12)."""
     from tests.golden import tc3_reference as R
 
     if case == "v1_hourly":
@@ -319,7 +320,8 @@ def test_reference_cases_reproduce_in_the_app(case: str) -> None:
     cfg, _, _ = _inputs()
     frame, decisions = _app_inputs(data, d, want)
     run = calculate(cfg, frame, decisions)
-    assert run.failures == [], [str(f) for f in run.failures][:5]
+    missed = [] if case == "v1_hourly" else [("consignment_target", "CB")]
+    assert [(f.name, f.subject) for f in run.failures] == missed, [str(f) for f in run.failures]
     for batches in want["units"].values():
         for bid, w in batches.items():
             b = run.batches[bid]

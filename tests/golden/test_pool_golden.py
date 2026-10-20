@@ -85,13 +85,14 @@ def test_hourly_variant() -> None:
 
 
 def test_shortfall_gives_the_liquefier_just_enough_to_comply() -> None:
-    """December renewable 2,500 kWh per interval: the liquefier takes exactly the least it
+    """December renewable 2,500 kWh per interval: the liquefier takes the whole intervals it
     needs to comply, from the end of December; the electrolyser isolates what it gave up and
     makes at least the hand calculation's RFNBO."""
     _, _, res, run = _case("v2_shortfall")
     v2 = _variants()["v2_shortfall"]
     (liq,) = [b for b in _by_unit(run, "liquefier") if b.month == "2026-12"]
-    approx(liq.renewable_matched_kWh, v2["least_liquefier_renewable_kWh"], "liquefier renewable")
+    assert liq.renewable_matched_kWh >= v2["least_liquefier_renewable_kWh"]
+    approx(liq.renewable_matched_kWh, v2["liquefier_renewable_kWh"], "liquefier renewable")
     (comp,) = [b for b in _by_unit(run, "compressor") if b.month == "2026-12"]
     assert comp.renewable_matched_kWh == 0  # complies on grid power
     dec = [b for b in _by_unit(run, "electrolyser") if b.month == "2026-12"]

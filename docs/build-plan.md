@@ -690,11 +690,26 @@ Consequences:
   work on parts. A batch is compliant when every part is.
 - **Optimiser.** A source can feed a batch compliantly only if its own part would comply:
   g_j ≤ (T − A − own ÷ E) × E ÷ C, the limit stage A already computes, now per batch rather than
-  on a blend. Stage A values a batch only when its GHG is at or below the downstream limit (no μ
-  search); stage B has no blend rows (each feed variable is allowed or not); stage C allocates
-  only parts at or below each consignment's limit.
+  on a blend, and back-propagated through units in series (T is the downstream product's own
+  limit). Stage A scores a batching by the RFNBO in batches at or below that limit; μ only
+  shapes candidate batchings (lower GHG), it no longer values a blend. Stage B has no blend rows
+  (each feed variable is allowed or not); stage C allocates only parts at or below each
+  consignment's limit. When a consignment cannot be met, stage A runs again with the
+  consignment's limit (target − adder) as a cap on the products filling its storage, and the
+  pool split repairs conditioning units to that cap; the result is kept if it meets more
+  consignments, or the same number with better objectives. The pool split takes renewable from
+  the electrolyser in whole intervals (a part-dark interval would raise the GHG of the batch the
+  conditioning unit's part is set by). The baseline fills consignments first in, first out among
+  the parts within each consignment's limit.
 - **Test cases.** Test cases 1 and 2 (the original workbooks) blend hydrogen sub-batches of
-  different GHG into NH₃ batches: their fixtures are regenerated under these rules with the
-  workbook values kept under `superseded`. Test case 3's base case is unchanged (every
-  electrolyser batch has the same GHG); its shortfall variant and test case 4 are rebuilt.
+  different GHG into NH₃ batches: their fixtures are regenerated under these rules
+  (`export_workbook.py --no-averaging`) with the workbook values kept under `superseded`. Test
+  case 1's consignments were met only by averaging September NH₃ (6) with October's (14.09):
+  without it only the 300,000 kg of September NH₃ is at or below their 12 gCO₂e/MJ limit, so
+  neither C1 nor C2 can be met. Test case 2's are met from September NH₃. Test case 3's base
+  case is unchanged (every electrolyser batch has the same GHG); in its shortfall variant the
+  hand calculation gives the liquefier whole intervals and cannot meet CB (December CH₂, 8.33,
+  is above CB's limit), while the optimiser meets CB by also giving the compressor renewable.
+  In test case 4 POS-C's part would be above 28.2 in either unit, so all 6,000 kg of it is
+  written off; the workbook has a Parts sheet and per-part ledgers.
 

@@ -42,7 +42,8 @@ uv run rfnbo validate examples/test_plant.json
   `ingest.py` (CSV/Excel → raw series), `quality.py` (grid alignment, quality flags, `Frame`).
 - `src/rfnbo/model/entities.py`: decision sets (batches, feed, renewable split, consignments,
   aggregated batches, write-offs) as JSON-serialisable pydantic models.
-- `src/rfnbo/calc/`: `batch.py`, `ledger.py`, `consign.py`, `purchase.py` (PoS register and
+- `src/rfnbo/calc/`: `batch.py` (a downstream batch's RFNBO is split into parts, one per source
+  GHG and origin, never averaged: build plan §12), `ledger.py` (lines per part), `consign.py`, `purchase.py` (PoS register and
   supplier reconciliation), `check.py` (named rule checks), `calculator.py`
   (`calculate(config, frame, decisions) -> RunResult`).
 - `src/rfnbo/model/pos.py`: PoS records from CSV or JSON, and the rules a record must meet
@@ -66,9 +67,10 @@ uv run rfnbo validate examples/test_plant.json
   state and actions with no UI imports (tested in `tests/integration/test_data_project.py`);
   `app.py` lays it out and serves the results browser on the folder's `runs/`.
 - `src/rfnbo/optimise/batching.py`: stage A. Exact DP per unit and month over 15-minute
-  intervals (hourly windows from the switch date for electrolytic units), Lagrangian value
-  against the downstream blend limit, μ search on feedable RFNBO. Proposals only: re-run
-  everything through the calculator.
+  intervals (hourly windows from the switch date for electrolytic units), scored by the RFNBO
+  in batches at or below the downstream per-batch limit (§12, back-propagated through units in
+  series; `caps` tighten it to a consignment's limit), μ shaping the candidates. Proposals
+  only: re-run everything through the calculator.
 - `src/rfnbo/optimise/pool.py`: stage A with a renewable pool shared by the electrolyser and
   conditioning units: alternates the DP with a per-interval split until stable.
 - `src/rfnbo/optimise/allocate.py`: stage B (feed LP per downstream unit; compliance is linear
@@ -77,7 +79,8 @@ uv run rfnbo validate examples/test_plant.json
   a split output's assignment and PoS credentials for suppliers' deliveries into units
   (`storage_credits` fills deliveries into storages afterwards); `stages` orders units in series.
   `pipeline.py` runs A → B → C with B↔C feedback and relaxation when a consignment cannot be
-  met; `baseline.py` is one batch per month, FIFO; `lp.py` wraps HiGHS with fixed, recorded
+  met, then stage A again with the unmet consignments' limits as caps; `baseline.py` is one
+  batch per month, FIFO; `lp.py` wraps HiGHS with fixed, recorded
   options (`solver_info()` goes into every sealed run).
 - `src/rfnbo/report/`: `tables.py` builds every report table from a calculated run (never
   from solver output); `excel.py` and `csv_export.py` write them; `build.py` reports a sealed
@@ -92,5 +95,6 @@ uv run rfnbo validate examples/test_plant.json
   the independent check, `export_tc3.py` writes `tc3.*.json`; `tc3.plant.json` is test plant 3
   (the calculator reproduces it in `test_tc3_calc.py`). Test case 4 (purchased RFNBO):
   `build_tc4_workbook.py`, `tc4_reference.py`, `export_tc4.py` and `tc4.*` the same way, tested in
-  `test_tc4_workbook.py` and `test_tc4_calc.py`. `benchmark_networks.py` times the
+  `test_tc4_workbook.py` and `test_tc4_calc.py`. Test cases 1 and 2 are exported with
+  `--no-averaging` (build plan §12; test case 2 also with `--rule-2-5`). `benchmark_networks.py` times the
   optimiser on test plant 3 and a five-unit plant (`--profile` for where the time goes).

@@ -154,8 +154,8 @@ def feed_source_rfnbo(run: RunResult) -> Iterator[CheckResult]:
         tgt = run.batches[a.target]
         store = run.feed_storage(a.source, a.target)
         feeds = {f.target for f in run.config.flows_out_of(store)}
-        src = run.batches.get(a.source)
-        rfnbo = src.rfnbo_kg if src is not None else (run.line(store, a.source) or _NONE).in_kg
+        src = run.parts.get(a.source)
+        rfnbo = src.kg if src is not None else (run.line(store, a.source) or _NONE).in_kg
         yield _r(
             "feed_source_rfnbo",
             MASS_BALANCE,
@@ -264,7 +264,8 @@ def pos_within_delivery(run: RunResult) -> Iterator[CheckResult]:
 
 @check
 def output_split(run: RunResult) -> Iterator[CheckResult]:
-    """A split output's parts add up to the batch's RFNBO, each within its metered flow."""
+    """A split output: each batch part's RFNBO is assigned in full to the output flows, and the
+    parts together stay within each flow's metered quantity."""
     cfg = run.config
     given: dict[tuple[str, str], float] = defaultdict(float)
     for o in run.decisions.output_allocations:
@@ -276,13 +277,15 @@ def output_split(run: RunResult) -> Iterator[CheckResult]:
         problems = []
         total = 0.0
         for f in flows:
-            kg = given[b.id, f.id]
+            kg = sum(given[p.id, f.id] for p in b.parts)
             total += kg
             metered = float(run.frame.series[f.series or ""][b.start_index : b.end_index].sum())
             if not at_most(kg, metered):
                 problems.append(f"{f.id} {kg:.6f} kg > metered {metered:.6f} kg")
-        if not close(total, b.rfnbo_kg):
-            problems.append(f"parts {total:.6f} kg ≠ RFNBO {b.rfnbo_kg:.6f} kg")
+        for p in b.parts:
+            got = sum(given[p.id, f.id] for f in flows)
+            if not close(got, p.kg):
+                problems.append(f"{p.id}: assigned {got:.6f} kg ≠ RFNBO {p.kg:.6f} kg")
         yield _r(
             "output_split",
             SCOPE_SPLIT,
@@ -440,7 +443,7 @@ def aggregated_purchased_apart(run: RunResult) -> Iterator[CheckResult]:
     RFNBO dispatched in the same month, never with RFNBO the plant processed (decision 8)."""
     for c in run.consignments:
         for a in c.aggregated:
-            kinds = {p.origin == "purchased" for p in a.parts}
+            kinds = {p.purchased for p in a.parts}
             yield _r(
                 "aggregated_purchased_apart",
                 SCOPE_POS,

@@ -95,10 +95,16 @@ def test_test_case_3_is_matched() -> None:
 
 
 def test_shortfall_variant_is_beaten() -> None:
+    """The hand calculation cannot meet CB without averaging (§12): December CH₂ is above its
+    limit. The optimiser batches again with CB's limit as a cap on CH₂, gives the compressor
+    renewable in December too, and meets both consignments."""
     res = _optimised("v2_shortfall")
     assert res.feasible and res.optimised.run.failures == []
-    want = _expected()["variants"]["v2_shortfall"]["carried_value_MJ"]
-    assert res.optimised.objectives.carried_value_MJ >= want * (1 - 1e-9)
+    v2 = _expected()["variants"]["v2_shortfall"]
+    assert not v2["cb_met"]
+    assert [c.id for c in res.optimised.run.consignments] == ["CA", "CB"]
+    comp = next(b for b in res.optimised.run.batches.values() if b.id == "compressor-2026-12")
+    assert comp.renewable_matched_kWh > 0
 
 
 def test_infeasible_target_on_one_product() -> None:
@@ -224,7 +230,7 @@ def _series_plant() -> PlantConfig:
 
 def _series_frame() -> Frame:
     """Three days in October 2026. On the second day, 06:00–12:00 local, renewable covers only
-    40% of the electrolyser: non-compliant RFNBO H₂ that the compressor can partly blend."""
+    40% of the electrolyser: non-compliant RFNBO H₂, which no blend can save (§12)."""
     start = dt.datetime(2026, 9, 30, 22, 0, tzinfo=dt.UTC)
     n = 288
     idx = tuple(start + i * dt.timedelta(minutes=15) for i in range(n))
@@ -276,8 +282,12 @@ def test_units_in_series_meet_every_check() -> None:
     assert comp and all((b.ghg_gCO2e_per_MJ or 0) <= limit + 1e-6 for b in comp)
     nh3 = [b for b in run.batches.values() if b.unit == "nh3"]
     assert all(b.compliant for b in nh3 if b.rfnbo_kg > 0)
-    # Some non-compliant H₂ is saved by blending into the compressor (§2.5).
+    # Without averaging (§12) the dark hours' H₂ is kept apart and not fed: merged into one
+    # batch it would leave NH₃ above C1's limit (26 − 3), so stage A batches again below it.
     fed = {a.source for a in run.decisions.feed if run.batches[a.target].unit == "comp"}
-    assert any(not run.batches[b].compliant for b in fed)
-    assert run.consignment("C1").shipped_ghg_gCO2e_per_MJ is not None
+    assert fed and all(run.batches[b].compliant for b in fed)
+    assert any(not b.compliant for b in run.batches.values() if b.unit == "el")
+    assert any("stage A again with caps {'nh3': 23.0}: kept" in line for line in res.log)
+    shipped = run.consignment("C1").shipped_ghg_gCO2e_per_MJ
+    assert shipped is not None and shipped <= 26.0 + 1e-9
     assert res.value_bound().upper_MJ >= res.optimised.objectives.carried_value_MJ - 1e-6

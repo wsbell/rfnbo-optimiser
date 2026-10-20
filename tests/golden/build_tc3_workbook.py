@@ -261,9 +261,10 @@ def readme(wb: Workbook) -> None:
         (
             "V2 — renewable shortfall: December renewable cut to 2,500 kWh per interval and no "
             "LH₂ spot sale. Every kWh for the liquefier is a kWh the electrolyser loses. "
-            "Non-compliant RFNBO cannot be carried, so the liquefier gets just enough renewable "
-            "for December LH₂ to comply; giving it all to the electrolyser would leave December "
-            "LH₂ non-compliant and written off.",
+            "Non-compliant RFNBO cannot be carried, so the liquefier gets enough renewable (whole "
+            "intervals) for December LH₂ to comply; giving it all to the electrolyser would leave "
+            "December LH₂ non-compliant and written off. December CH₂ gets no renewable and is "
+            "above CB's limit; without averaging (§12) CB cannot be met.",
             False,
         ),
         (
@@ -711,7 +712,7 @@ def consignments(wb: Workbook) -> None:
             "Aggregated batch: Oct 2026 (kg)",
             "Aggregated batch: Nov 2026 (kg)",
             "Aggregated batch: Dec 2026 (kg)",
-            "Weighted GHG before shipping (gCO₂e/MJ)",
+            "Highest part GHG before shipping (gCO₂e/MJ)",
             "Shipped GHG (gCO₂e/MJ)",
             "Meets target?",
             "≤ 28.2 gCO₂e/MJ?",
@@ -742,9 +743,10 @@ def consignments(wb: Workbook) -> None:
             s.put(f"J{r}", f"=MIN(F{r},{bs}!$O$2)", fill=DECISION)
             s.put(f"K{r}", f"=MIN(F{r}-J{r},{bs}!$O$3)", fill=DECISION)
         s.put(f"L{r}", f"=F{r}-J{r}-K{r}", fill=DECISION)
+        # No consignment average (§12 decision 4): the highest part sets the GHG.
         s.put(
             f"M{r}",
-            f"=(J{r}*{bs}!$Q$2+K{r}*{bs}!$Q$3+L{r}*{bs}!$Q$4)/(J{r}+K{r}+L{r})",
+            f"=MAX(IF(J{r}>0,{bs}!$Q$2,0),IF(K{r}>0,{bs}!$Q$3,0),IF(L{r}>0,{bs}!$Q$4,0))",
         )
         s.put(f"N{r}", f"=M{r}+H{r}", fill=KEY)
         s.put(f"O{r}", f"=N{r}<=G{r}+0.000000001", fmt="General")
@@ -776,6 +778,8 @@ def consignments(wb: Workbook) -> None:
         "does not bind. That leaves the lowest-GHG LH₂ (Oct/Dec) for storage. CB: all CH₂ has "
         "the same GHG, so the oldest month first.",
         "Distribution adders are added after shipping only.",
+        "No averaging (build plan §12): every part of a consignment, plus the adder, must meet "
+        "the target and the threshold, so the consignment's GHG is its highest part's.",
     ]
     for j, text in enumerate(notes):
         s.note(f"A{12 + j}", text)
@@ -1005,26 +1009,27 @@ def variants(wb: Workbook) -> None:
         ),
         (
             34,
-            "Answer: the liquefier gets just enough renewable to comply",
+            "Answer: the liquefier gets whole intervals of renewable, enough to comply",
             None,
             "",
         ),
         (
             35,
             "0% electrolyser intervals at the end of December",
-            "=IF(INT(B25/2500)*2500+1500>=B25,INT(B25/2500),INT(B25/2500)+1)",
+            "=ROUNDUP(B25/2500,0)",
             "Their renewable goes to the liquefier",
         ),
         (
             36,
-            "Electrolyser renewable in the one part interval (kWh)",
-            "=20/50*2500",
-            "Makes exactly 20 kg RFNBO: that interval's compressor flow",
+            "Electrolyser renewable in a part interval (kWh)",
+            0,
+            "None (§12): kept apart, a part interval's RFNBO is non-compliant; in the main batch "
+            "it raises the GHG that the liquefier's part is set by",
         ),
         (
             37,
             "Renewable to the liquefier (kWh)",
-            "=B35*2500+(2500-B36)",
+            "=B35*2500",
             "≥ the least needed (row 25)",
         ),
         (38, "December electrolyser RFNBO H₂ (kg)", "=(B19-B37)/2500*50", ""),
@@ -1034,7 +1039,7 @@ def variants(wb: Workbook) -> None:
             f"=B23*B21/B22+(B20-B37)*{P(4)}/(B22*{lhv})+{P(6)}",
             "Compliant",
         ),
-        (40, "100% electrolyser intervals in December", "=B18-B35-1", ""),
+        (40, "100% electrolyser intervals in December", "=B18-B35", ""),
         (
             41,
             "December liquefier RFNBO feed (kg)",
@@ -1042,24 +1047,14 @@ def variants(wb: Workbook) -> None:
             "LH₂ storage is not full and December's yield (B22/B21) beats the buffer weight, "
             "so the liquefier takes all the RFNBO it can",
         ),
-        (
-            42,
-            "December compressor RFNBO feed (kg)",
-            "=B40*20+20",
-            "Includes the part interval's 20 kg",
-        ),
-        (
-            43,
-            "GHG of the part-interval batch (gCO₂e/MJ)",
-            f"=(500*{P(3)}+(2500-B36)*{P(4)})/(50*{lhv})+{P(5)}",
-            "Non-compliant H₂ (§2.5), blended into CH₂",
-        ),
+        (42, "December compressor RFNBO feed (kg)", "=B40*20", ""),
+        (43, "CB limit for aggregated batches (gCO₂e/MJ)", "=Consignments!I3", ""),
         (
             44,
             "December CH₂ GHG (gCO₂e/MJ)",
-            f'=(B40*20*B23+20*B43)/B42+SUMIF({D},"2026-12",{rng("Q")})*{P(4)}'
+            f'=B23+SUMIF({D},"2026-12",{rng("Q")})*{P(4)}'
             f'/(SUMIF({D},"2026-12",{rng("S")})*{lhv})+{P(7)}',
-            "No renewable for the compressor in December",
+            "No renewable for the compressor in December: compliant, but above CB's limit",
         ),
         (
             45,
@@ -1076,6 +1071,13 @@ def variants(wb: Workbook) -> None:
             "Key answer",
         ),
         (49, "Better than the rejected alternative?", "=B48>B32", "Expected: TRUE"),
+        (
+            50,
+            "CB met?",
+            "=B44<=B43+0.000000001",
+            "Expected: FALSE. October and November CH₂ hold 117,200 kg; the other 2,800 kg is "
+            "December CH₂, which no longer averages down (§12)",
+        ),
         (
             51,
             "V3 — Infeasible target on one product",
@@ -1121,7 +1123,7 @@ def variants(wb: Workbook) -> None:
         s.note(f"C{row}", note)
     for row in (3, 4, 5, 18, 35, 40, 59):
         s.ws[f"B{row}"].number_format = "#,##0"
-    for row in (49, 55, 57):
+    for row in (49, 50, 55, 57):
         s.ws[f"B{row}"].number_format = "General"
 
 

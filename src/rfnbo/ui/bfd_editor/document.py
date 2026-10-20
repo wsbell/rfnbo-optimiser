@@ -148,6 +148,9 @@ class EditorDocument:
             for b in data["blocks"]:  # only pass-through storages say so, keeping files short
                 if b.get("pass_through") is False:
                     del b["pass_through"]
+                for e in b.get("opening_ledger", []):  # and only purchased entries say so
+                    if e.get("origin") == "produced":
+                        del e["origin"]
         ordered = {k: data[k] for k in _TOP_ORDER if k in data}
         ordered.update({k: v for k, v in data.items() if k not in ordered})
         return json.dumps(ordered, indent=2, ensure_ascii=False) + "\n"

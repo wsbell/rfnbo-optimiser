@@ -1,6 +1,7 @@
 """Batch lineage: where every kg of every ledger batch came from and went.
 
-Edges run downstream: batch → downstream batch (feed), batch → aggregated batch,
+Edges run downstream: batch part → downstream batch (feed), batch → its parts (output, when a
+batch has several), part → aggregated batch,
 aggregated batch → consignment, batch → quarter-end write-off or carry-forward. A PoS is a node
 too (§11.1 rule 6): PoS → unit batch (feed, credentials allocated to a supplier's delivery),
 and PoS → write-off for credentials not allocated by quarter end. Credentials allocated into a
@@ -16,7 +17,7 @@ from typing import TYPE_CHECKING, Any, Literal
 if TYPE_CHECKING:
     from rfnbo.calc.calculator import RunResult
 
-EdgeKind = Literal["feed", "aggregation", "consignment", "write_off", "carried"]
+EdgeKind = Literal["feed", "output", "aggregation", "consignment", "write_off", "carried"]
 
 
 @dataclass(frozen=True)
@@ -41,6 +42,8 @@ def pos_write_off_node(quarter: str) -> str:
 
 def edges(run: RunResult) -> list[Edge]:
     out = [Edge(a.source, a.target, "feed", a.kg) for a in run.decisions.feed]
+    for b in run.batches.values():  # a batch with several parts (build plan §12)
+        out += [Edge(b.id, p.id, "output", p.kg) for p in b.parts if p.id != b.id]
     for p in run.purchases:
         to_unit: dict[str, float] = {}
         for a in p.allocations:
@@ -105,6 +108,18 @@ def graph(run: RunResult) -> dict[str, Any]:
                 "compliant": b.compliant,
             }
         )
+        nodes += [
+            {
+                "id": p.id,
+                "kind": "part",
+                "batch": b.id,
+                "ghg": p.ghg_gCO2e_per_MJ,
+                "compliant": p.compliant,
+                "purchased": p.purchased,
+            }
+            for p in b.parts
+            if p.id != b.id
+        ]
     for c in run.consignments:
         nodes += [
             {"id": a.id, "kind": "aggregated_batch", "month": ",".join(a.months)}

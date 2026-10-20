@@ -96,9 +96,9 @@ def test_tc2_beats_the_workbook_batching() -> None:
     assert isinstance(unit, ProcessingUnit)
     us = batching.unit_series(cfg, frame, unit)
     down = batching.downstream(cfg, frame, unit)
-    threshold = cfg.settings.rfnbo_threshold_gCO2e_per_MJ
+    limit = batching.product_limit(cfg, frame, unit)
     reference = batching.score_of(
-        us, [(b.start_index, b.end_index) for b in electrolyser(workbook)], down, threshold
+        us, [(b.start_index, b.end_index) for b in electrolyser(workbook)], down, limit
     )
     ours = res.units[0].score
     assert ours.feedable_MJ > reference.feedable_MJ * 1.04

@@ -102,6 +102,9 @@ class OpeningLedgerEntry(_Model):
     # None when the source record does not state it; never assumed.
     rfnbo_share: float | None = Field(default=None, ge=0, le=1)
     production_month: str = Field(pattern=r"^\d{4}-(0[1-9]|1[0-2])$")
+    # Purchased RFNBO keeps its origin across quarters: it is never aggregated with RFNBO the
+    # plant produced (build plan §12 decision 5).
+    origin: Literal["produced", "purchased"] = "produced"
 
 
 class StorageUnit(_Block):

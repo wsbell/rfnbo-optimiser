@@ -141,7 +141,7 @@ def consignment_view(run: RunResult, consignment_id: str) -> dict[str, Any]:
             "months": ", ".join(a.months),
             "kg": a.kg,
             "MJ": a.energy_MJ,
-            "ghg": a.ghg_gCO2e_per_MJ,
+            "ghg": a.max_ghg_gCO2e_per_MJ,
             "parts": [
                 {
                     "batch": p.batch,
@@ -197,6 +197,7 @@ def batch_view(run: RunResult, batch_id: str) -> dict[str, Any]:
     b = run.batches[batch_id]
     rec = json_log.batch_record(run, b, "", [e for e in all_edges if e.source == batch_id])
     again = json_log.recompute_ghg(rec)
+    parts_again = json_log.recompute_parts(rec)
     return {
         "kind": b.kind,
         "id": b.id,
@@ -215,12 +216,19 @@ def batch_view(run: RunResult, batch_id: str) -> dict[str, Any]:
             for f in b.feed
         ],
         "downstream": downstream,
+        "parts": rec["parts"],
         "recomputed_ghg": again,
-        "recompute_ok": (again is None and b.ghg_gCO2e_per_MJ is None)
-        or (
-            again is not None
-            and b.ghg_gCO2e_per_MJ is not None
-            and close(again, b.ghg_gCO2e_per_MJ, rel=1e-9)
+        "recompute_ok": all(
+            p.id in parts_again and close(parts_again[p.id], p.ghg_gCO2e_per_MJ, rel=1e-9)
+            for p in b.parts
+        )
+        and (
+            (again is None and b.ghg_gCO2e_per_MJ is None)
+            or (
+                again is not None
+                and b.ghg_gCO2e_per_MJ is not None
+                and close(again, b.ghg_gCO2e_per_MJ, rel=1e-9)
+            )
         ),
     }
 
@@ -394,7 +402,7 @@ def trace_paths(run: RunResult, consignment_id: str) -> list[list[str]]:
     """Every chain consignment → … → produced batch, for testing the drill-down."""
     by_target: dict[str, list[str]] = {}
     for e in lineage.edges(run):
-        if e.kind in ("feed", "aggregation", "consignment"):
+        if e.kind in ("feed", "output", "aggregation", "consignment"):
             by_target.setdefault(e.target, []).append(e.source)
     paths: list[list[str]] = []
 

@@ -16,6 +16,7 @@ from typing import Any
 
 import openpyxl
 
+from tests.golden.build_tc4_workbook import LEDGER_ORDER, PARTS, total_row
 from tests.golden.export_tc3 import decision_set, labelled, num, rows, table, write
 
 HERE = Path(__file__).parent
@@ -88,12 +89,43 @@ def export(path: Path) -> tuple[dict[str, Any], dict[str, Any]]:
             "write_off_kg": num(lab["Write-off (kg)"]),
             "carried_kg": num(lab["RFNBO H₂ carried to Q1 2027 (kg)"]),
         }
+    write_offs = []
     for storage, sheet in (("lh2_storage", "LH2_Ledger"), ("ch2_storage", "CH2_Ledger")):
         lab = labelled(wb, sheet)
+        lines = table(wb, sheet, ledger_keys, n=total_row(sheet) - 2)
+        assert list(lines) == LEDGER_ORDER[sheet], sheet
         ledgers[storage] = {
-            "lines": table(wb, sheet, ledger_keys),
+            "lines": lines,
             "measured_kg": num(lab["Measured physical inventory at quarter end (kg)"]),
         }
+        write_offs += [
+            {"storage": storage, "batch": pid, "kg": x["write_off_kg"]}
+            for pid, x in lines.items()
+            if x["write_off_kg"] and x["write_off_kg"] > 1e-9
+        ]
+    # One line per part (§12): test case 3's reader looks at three batch rows only.
+    decisions["write_offs"] = [
+        w for w in decisions["write_offs"] if w["storage"] not in ("lh2_storage", "ch2_storage")
+    ] + write_offs
+    part_keys = [
+        "unit",
+        "batch",
+        "month",
+        "origin",
+        "source",
+        "source_ghg",
+        "rfnbo_feed_kg",
+        "feed_consumed_kg",
+        "share",
+        "batch_product_kg",
+        "rfnbo_kg",
+        "own_emissions_g",
+        "adder",
+        "ghg",
+        "compliant",
+    ]
+    parts = table(wb, "Parts", part_keys, n=len(PARTS))
+    rejected = {r[0]: {"ghg": num(r[14]), "compliant": r[15]} for r in rows(wb, "Parts")[12:14]}
     pos_keys = [
         "supplier",
         "product",
@@ -118,7 +150,7 @@ def export(path: Path) -> tuple[dict[str, Any], dict[str, Any]]:
         "written_off_kg": num(lab["PoS quantity written off, not allocated (kg)"]),
     }
     cons = {
-        r[0]: {"weighted_ghg": num(r[12]), "shipped_ghg": num(r[13])}
+        r[0]: {"highest_ghg": num(r[12]), "shipped_ghg": num(r[13])}
         for r in rows(wb, "Consignments")[1:3]
     }
     obj = labelled(wb, "Objectives")
@@ -164,6 +196,8 @@ def export(path: Path) -> tuple[dict[str, Any], dict[str, Any]]:
         "source": path.name,
         "liquefier_batches": table(wb, "L_Batches", u_keys),
         "compressor_batches": table(wb, "C_Batches", u_keys),
+        "parts": parts,
+        "rejected_parts": rejected,
         "ledgers": ledgers,
         "pos": pos,
         "supplier": supplier,

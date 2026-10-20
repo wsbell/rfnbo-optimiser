@@ -104,8 +104,15 @@ def batch_register(run: RunResult, unit: ProcessingUnit) -> Table:
     cols += [
         _c("adder_g", "Fixed adder emissions", "gCO2e"),
         _c("adder", "Fixed adder", "gCO2e/MJ"),
-        _c("ghg", "Batch GHG", "gCO2e/MJ"),
-        _c("compliant", "≤ threshold", kind="bool"),
+        _c("ghg", "Batch GHG" + (" (one part only)" if downstream else ""), "gCO2e/MJ"),
+    ]
+    if downstream:
+        cols += [
+            _c("parts", "Parts", kind="integer"),
+            _c("max_ghg", "Highest part GHG", "gCO2e/MJ"),
+        ]
+    cols += [
+        _c("compliant", "≤ threshold" + (" (every part)" if downstream else ""), kind="bool"),
         _c("rfnbo_kg", f"RFNBO {unit.product}", "kg"),
         _c("rfnbo_MJ", f"RFNBO {unit.product} energy", "MJ"),
     ]
@@ -134,6 +141,8 @@ def batch_register(run: RunResult, unit: ProcessingUnit) -> Table:
             "adder_g": b.adder_emissions_g,
             "adder": b.adder_gCO2e_per_MJ,
             "ghg": b.ghg_gCO2e_per_MJ,
+            "parts": len(b.parts),
+            "max_ghg": b.max_ghg_gCO2e_per_MJ,
             "compliant": b.compliant,
             "rfnbo_kg": b.rfnbo_kg,
             "rfnbo_MJ": b.rfnbo_MJ,
@@ -149,7 +158,58 @@ def batch_register(run: RunResult, unit: ProcessingUnit) -> Table:
         tuple(cols),
         rows,
         "GHG = (own emissions + feed emissions) / energy + adder; downstream units "
-        "pro-rate own emissions to the RFNBO share.",
+        "pro-rate own emissions to the RFNBO share. A downstream batch fed from sources of "
+        "different GHG has one part per source GHG and origin (Batch parts), never averaged.",
+    )
+
+
+def batch_parts(run: RunResult) -> Table:
+    """Every part of every downstream batch (build plan §12)."""
+    cols = (
+        _c("part", "Part", kind="text"),
+        _c("batch", "Batch", kind="text"),
+        _c("unit", "Unit", kind="text"),
+        _c("month", "Production month", kind="text"),
+        _c("origin", "Origin", kind="text"),
+        _c("sources", "Sources", kind="text"),
+        _c("share", "Share of the batch's product"),
+        _c("kg", "RFNBO", "kg"),
+        _c("energy_MJ", "RFNBO energy", "MJ"),
+        _c("feed_g", "Feed emissions", "gCO2e"),
+        _c("own_g", "Own emissions pro-rated", "gCO2e"),
+        _c("adder_g", "Fixed adder emissions", "gCO2e"),
+        _c("ghg", "Part GHG", "gCO2e/MJ"),
+        _c("compliant", "≤ threshold", kind="bool"),
+    )
+    rows = [
+        {
+            "part": p.id,
+            "batch": p.batch,
+            "unit": run.batches[p.batch].unit_name,
+            "month": p.month,
+            "origin": "purchased" if p.purchased else "produced",
+            "sources": ", ".join(p.sources),
+            "share": p.share,
+            "kg": p.kg,
+            "energy_MJ": p.energy_MJ,
+            "feed_g": p.feed_emissions_g,
+            "own_g": p.own_emissions_g,
+            "adder_g": p.adder_emissions_g,
+            "ghg": p.ghg_gCO2e_per_MJ,
+            "compliant": p.compliant,
+        }
+        for b in sorted(run.batches.values(), key=lambda b: (b.unit, b.start))
+        if b.kind == "downstream"
+        for p in b.parts
+    ]
+    return Table(
+        "Batch parts",
+        "Downstream batch parts: one per source GHG and origin",
+        cols,
+        rows,
+        "Batches are never averaged (build plan §12): each part keeps its source's GHG, "
+        "GHG = (feed emissions + own emissions pro-rated + adder emissions) / part energy, which "
+        "is g × C / E + own / E + adder. Purchased parts are never aggregated with own parts.",
     )
 
 
@@ -261,7 +321,7 @@ def consignment_summary(run: RunResult) -> Table:
         _c("volume_kg", "Volume", "kg"),
         _c("energy_MJ", "Energy", "MJ"),
         _c("target", "Target", "gCO2e/MJ"),
-        _c("weighted_ghg", "Weighted GHG before shipping", "gCO2e/MJ"),
+        _c("highest_ghg", "Highest part GHG before shipping", "gCO2e/MJ"),
         _c("adder", "Distribution adder", "gCO2e/MJ"),
         _c("shipped_ghg", "Shipped GHG", "gCO2e/MJ"),
         _c("margin_target", "Margin to target", "gCO2e/MJ"),
@@ -282,7 +342,7 @@ def consignment_summary(run: RunResult) -> Table:
                 "volume_kg": c.volume_kg,
                 "energy_MJ": c.energy_MJ,
                 "target": target,
-                "weighted_ghg": c.weighted_ghg_gCO2e_per_MJ,
+                "highest_ghg": c.max_ghg_gCO2e_per_MJ,
                 "adder": c.distribution_adder_gCO2e_per_MJ,
                 "shipped_ghg": shipped,
                 "margin_target": None if shipped is None or target is None else target - shipped,
@@ -300,7 +360,8 @@ def consignment_summary(run: RunResult) -> Table:
         "Consignment report",
         cols,
         rows,
-        "Shipped GHG = energy-weighted GHG of the aggregated batches + distribution adder.",
+        "Parts are never averaged: shipped GHG is the highest part's GHG + distribution adder, "
+        "and every part must meet the target and the threshold.",
     )
 
 
@@ -948,6 +1009,8 @@ def all_tables(
         tables.append(baseline_comparison(run, baseline))
     for unit in unit_order(run.config):
         tables.append(batch_register(run, unit))
+    if any(b.kind == "downstream" and b.parts for b in run.batches.values()):
+        tables.append(batch_parts(run))
     for unit in unit_order(run.config):
         if not unit.electricity_adds_to_lhv and any(
             a.target in run.batches and run.batches[a.target].unit == unit.id

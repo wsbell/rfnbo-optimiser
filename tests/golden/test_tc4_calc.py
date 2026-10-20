@@ -100,7 +100,13 @@ def test_conditioning_batches_with_purchased_feed(unit: str) -> None:
         approx(b.rfnbo_feed_kg, want["rfnbo_feed_kg"], f"{bid} RFNBO feed")
         approx(b.rfnbo_share, want["rfnbo_share"], f"{bid} share")
         approx(b.rfnbo_kg, want["rfnbo_kg"], f"{bid} RFNBO")
-        approx(b.ghg_gCO2e_per_MJ, want["ghg"], f"{bid} GHG")
+        approx(b.max_ghg_gCO2e_per_MJ, want["ghg"], f"{bid} highest part GHG")
+        parts = _expected()["parts"]
+        assert {p.id for p in b.parts} == {pid for pid, x in parts.items() if x["batch"] == bid}
+        for part in b.parts:
+            approx(part.kg, parts[part.id]["rfnbo_kg"], part.id)
+            approx(part.ghg_gCO2e_per_MJ, parts[part.id]["ghg"], f"{part.id} GHG")
+            assert part.purchased is (parts[part.id]["origin"] == "purchased"), part.id
         credits = sum(f.kg for f in b.feed if f.origin == "pos")
         approx(credits, want["pos_feed_kg"], f"{bid} credentials") if credits else None
         assert b.compliant
@@ -115,7 +121,7 @@ def test_pos_register_ledgers_and_objectives() -> None:
     approx(sup.metered_kg, x["supplier"]["metered_kg"], "metered")
     approx(sup.pos_kg, x["supplier"]["pos_kg"], "PoS")
     approx(sup.allocated_kg, x["supplier"]["allocated_kg"], "allocated")
-    assert abs(sup.non_rfnbo_kg) < 1e-6
+    approx(sup.non_rfnbo_kg, x["supplier"]["non_rfnbo_kg"], "non-RFNBO delivery")
     for storage in ("h2_buffer", "pt_compressor"):
         approx(run.ledger(storage).carried_kg + 1, x["ledgers"][storage]["carried_kg"] + 1, storage)
     for storage in ("lh2_storage", "ch2_storage"):
@@ -129,32 +135,39 @@ def test_pos_register_ledgers_and_objectives() -> None:
     approx(run.storage_weights["h2_buffer"].weight, x["objectives"]["weights"]["h2_buffer"], "w")
 
 
-def test_consignment_drills_down_to_the_pos(tmp_path: Path) -> None:
+def test_credentials_trace_to_their_parts(tmp_path: Path) -> None:
+    """Credentials make their own parts (§12): December LH₂'s purchased part traces to POS-B;
+    CA ships only the plant's own LH₂ (the purchased part is above its limit); POS-C is written
+    off in full."""
     run = _run()
     paths = V.trace_paths(run, "CA")
-    ends = {p[-1] for p in paths}
-    assert {"POS-B", "POS-C"} <= ends and "E-2026-12" in ends
-    assert ["CA", "CA-2026-12", "L-2026-12", "POS-B"] in paths
+    assert ["CA", "CA-2026-11", "L-2026-11", "E-2026-11"] in paths
+    assert not {"POS-A", "POS-B", "POS-C"} & {p[-1] for p in paths}
     view = V.batch_view(run, "L-2026-12")
     credits = [u for u in view["upstream"] if u["origin"] == "pos"]
-    assert {u["batch"] for u in credits} == {"POS-B", "POS-C"}
+    assert {u["batch"] for u in credits} == {"POS-B"}
     assert {u["via"] for u in credits} == {"f_sup_liq"}
     assert view["recompute_ok"]
+    part = next(p for p in run.batches["L-2026-12"].parts if p.purchased)
+    assert part.id == "L-2026-12.2" and part.sources == ("POS-B",)
     iv = V.interval_view(run, "L-2026-12")
     assert iv.consistent
     pv = V.pos_view(run, "POS-C")
-    assert pv["allocated_kg"] == pytest.approx(2200) and pv["written_off_kg"] == pytest.approx(3800)
-    assert {d["to"] for d in pv["downstream"]} >= {"C-2026-11", "L-2026-12"}
+    assert pv["allocated_kg"] == pytest.approx(0) and pv["written_off_kg"] == pytest.approx(6000)
+    pb = V.pos_view(run, "POS-B")
+    assert {d["to"] for d in pb["downstream"]} >= {"C-2026-11", "L-2026-12"}
     graph = lineage.graph(run)
     assert {n["id"] for n in graph["nodes"] if n["kind"] == "pos"} == {"POS-A", "POS-B", "POS-C"}
     wo = [e for e in lineage.edges(run) if e.kind == "write_off" and e.source == "POS-C"]
-    assert len(wo) == 1 and wo[0].kg == pytest.approx(3800)
+    assert len(wo) == 1 and wo[0].kg == pytest.approx(6000)
     rec = json_log.batch_record(run, run.batches["C-2026-11"], "tc4", [])
-    assert json_log.recompute_ghg(rec) == pytest.approx(run.batches["C-2026-11"].ghg_gCO2e_per_MJ)
+    assert json_log.recompute_parts(rec) == pytest.approx(
+        {p.id: p.ghg_gCO2e_per_MJ for p in run.batches["C-2026-11"].parts}
+    )
     out = sealed.seal(run, tmp_path / "run")
     assert sealed.verify(out) == []
     reg = sealed.load_record(out)["results"]["purchases"]["register"]
-    assert [p["written_off_kg"] for p in reg] == pytest.approx([0, 0, 3800])
+    assert [p["written_off_kg"] for p in reg] == pytest.approx([0, 0, 6000])
 
 
 # ---- each new rule fails when broken ---------------------------------------------------------
@@ -186,7 +199,8 @@ def test_allocation_to_another_suppliers_delivery_fails() -> None:
 def test_allocation_beyond_metered_delivery_fails() -> None:
     d = _decisions()
     extra = PoSAllocation(pos="POS-C", flow="f_sup_liq", batch="L-2026-11", kg=10.0)
-    run = _with(pos_allocations=[*d.pos_allocations, extra])
+    # The extra credential splits L-2026-11 into parts (§12): leave the consignments out.
+    run = _with(pos_allocations=[*d.pos_allocations, extra], consignments=[], aggregated_batches=[])
     assert [s for s in _failed(run, "pos_within_delivery")] == [
         f"f_sup_liq {run.batches['L-2026-11'].start.isoformat()}"
     ]
@@ -261,6 +275,14 @@ def test_credentials_into_storage_are_ledger_batches() -> None:
     cfg, frame = _storage_plant()
     d = _decisions()
     q0, q1 = frame.index[0], frame.end
+    pe = ProofOfSustainability(
+        id="POS-E",
+        supplier="H2 Trailers BV",
+        product="H2",
+        dispatch_date=dt.date(2026, 11, 5),
+        quantity_kg=1000.0,
+        ghg_gCO2e_per_MJ=2.0,
+    )
     pd = ProofOfSustainability(
         id="POS-D",
         supplier="CH2 Co",
@@ -271,10 +293,11 @@ def test_credentials_into_storage_are_ledger_batches() -> None:
     )
     allocs = [
         *d.pos_allocations,
-        PoSAllocation(pos="POS-C", flow="f_sup_buf", start=q0, end=q1, kg=400.0),
+        PoSAllocation(pos="POS-E", flow="f_sup_buf", start=q0, end=q1, kg=400.0),
         PoSAllocation(pos="POS-D", flow="f_ch2sup", start=q0, end=q1, kg=960.0),
     ]
-    # POS-C in the buffer feeds December's liquefier batch in place of 400 kg of E-2026-12.
+    # POS-E in the buffer feeds December's liquefier batch in place of 400 kg of E-2026-12 (a
+    # compliant credential: POS-C's part would not comply, §12).
     feed = [
         (
             a.model_copy(update={"kg": a.kg - 400.0})
@@ -283,7 +306,7 @@ def test_credentials_into_storage_are_ledger_batches() -> None:
         )
         for a in d.feed
     ]
-    feed.append(FeedAllocation(source="POS-C", target="L-2026-12", kg=400.0))
+    feed.append(FeedAllocation(source="POS-E", target="L-2026-12", kg=400.0))
     cb = ConsignmentSpec(
         id="CB2",
         output="consignment_b",
@@ -297,7 +320,7 @@ def test_credentials_into_storage_are_ledger_batches() -> None:
     ]
     dec = d.model_copy(
         update={
-            "pos": [*d.pos, pd],
+            "pos": [*d.pos, pe, pd],
             "pos_allocations": allocs,
             "feed": feed,
             "consignments": [*d.consignments, cb],
@@ -306,14 +329,14 @@ def test_credentials_into_storage_are_ledger_batches() -> None:
     )
     run = calculate(cfg, frame, dec)
     assert run.failures == [], [str(f) for f in run.failures][:5]
-    buf = run.line("h2_buffer", "POS-C")
+    buf = run.line("h2_buffer", "POS-E")
     assert buf is not None and buf.origin == "purchased" and buf.month == "2026-11"
     assert buf.out_feed_kg == pytest.approx(400.0)
     line = run.line("ch2_storage", "POS-D")
     assert line is not None and line.month == "2026-10" and line.carried_kg == pytest.approx(60)
-    assert run.pos("POS-C").unallocated_kg == pytest.approx(3400)
+    assert run.pos("POS-E").unallocated_kg == pytest.approx(600)
     assert {r.storage: r.delivered_kg for r in run.reconciliation}["ch2_storage"] == 960
-    f = next(f for f in run.batches["L-2026-12"].feed if f.source_batch == "POS-C")
+    f = next(f for f in run.batches["L-2026-12"].feed if f.source_batch == "POS-E")
     assert f.origin == "pos" and f.flow is None and run.feed_via(f, "L-2026-12") == "h2_buffer"
     # Passed-through RFNBO is never aggregated with RFNBO the plant processed.
     mixed = AggregatedBatchSpec(
@@ -369,11 +392,11 @@ def test_optimiser_matches_the_hand_calculation() -> None:
     o, x = res.optimised, _expected()
     assert res.feasible and o.run.failures == []
     approx(o.objectives.carried_value_MJ, x["objectives"]["carried_value_MJ"], "carried value")
-    assert o.objectives.carried_emissions_g <= x["objectives"]["carried_emissions_g"] + 1
+    assert o.objectives.carried_emissions_g <= x["objectives"]["carried_emissions_g"] * (1 + 1e-6)
     approx(o.objectives.purchased_emissions_g, x["objectives"]["purchased_emissions_g"], "PoS")
     for p in o.run.purchases:
         assert abs(p.allocated_kg - x["pos"][p.id]["allocated_kg"]) < 1e-3, p.id
-    approx(o.objectives.pos_written_off_kg, 3800, "PoS written off")
+    approx(o.objectives.pos_written_off_kg, 6000, "PoS written off")
     vb = res.value_bound()  # loose here: the buffer and the LH₂ it would become both count
     assert vb.upper_MJ >= o.objectives.carried_value_MJ - 1e-6
     assert res.baseline.run.failures == []

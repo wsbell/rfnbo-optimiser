@@ -115,7 +115,7 @@ def _set_fields(page: Any, raw: dict[str, Any], prefix: str = "field-") -> None:
         testid = prefix + key
         if isinstance(value, bool):
             _check(page, testid, value)
-        elif key in ("quantity_unit", "unit", "distribution_block"):
+        elif key in ("quantity_unit", "unit", "distribution_block", "origin"):
             _choose(page, testid, value)
         else:
             _fill(page, testid, value)

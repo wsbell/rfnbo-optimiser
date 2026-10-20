@@ -10,6 +10,7 @@ date order. Write-offs: the §2.7 rule. Reported next to every optimised result.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Sequence
 
 from rfnbo.calc import calculate
@@ -173,23 +174,39 @@ def baseline_decisions(
     aggregated: list[AggregatedBatchSpec] = []
     left_line: dict[str, float] = {}
     for c in sorted(consignments, key=lambda c: (c.ship_date, c.id)):
-        _, _, store = consignment_route(cfg, c.output)
+        _, dist, store = consignment_route(cfg, c.output)
+        # First in, first out among the parts that can meet the target: each part plus the
+        # distribution adder must meet it, as nothing is averaged (§12).
+        limit = (
+            math.inf
+            if c.target_gCO2e_per_MJ is None
+            else c.target_gCO2e_per_MJ - dist.fixed_adder_gCO2e_per_MJ
+        )
         stock = sorted(
-            (x for x in run.ledger(store.id).lines if x.compliant), key=lambda x: (x.month, x.batch)
+            (
+                x
+                for x in run.ledger(store.id).lines
+                if x.compliant and x.ghg_gCO2e_per_MJ <= limit + 1e-9
+            ),
+            key=lambda x: (x.month, x.batch),
         )
         need = c.volume_kg
-        by_month: dict[str, list[Part]] = {}
+        by_month: dict[tuple[str, bool], list[Part]] = {}
         for x in stock:
             avail = left_line.setdefault(x.batch, x.in_kg - x.out_feed_kg)
             take = min(avail, need)
             if take > 1e-9:
-                by_month.setdefault(x.month, []).append(Part(batch=x.batch, kg=take))
+                by_month.setdefault((x.month, x.purchased), []).append(Part(batch=x.batch, kg=take))
                 left_line[x.batch] -= take
                 need -= take
             if need <= 1e-9:
                 break
         aggregated += [
-            AggregatedBatchSpec(id=f"{c.id}-{m}", consignment=c.id, parts=parts)
-            for m, parts in sorted(by_month.items())
+            AggregatedBatchSpec(
+                id=f"{c.id}-{m}" + ("-purchased" if purchased else ""),
+                consignment=c.id,
+                parts=parts,
+            )
+            for (m, purchased), parts in sorted(by_month.items())
         ]
     return decisions.model_copy(update={"aggregated_batches": aggregated})

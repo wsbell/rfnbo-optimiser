@@ -1,7 +1,8 @@
-"""Aggregated batches and shipped consignment GHG (§2.6).
+"""Aggregated batches and shipped consignment GHG (§2.6, revised by §12).
 
-Aggregated batch GHG = energy-weighted average of its sub-batches. Shipped consignment GHG =
-energy-weighted average of its aggregated batches + the customer's distribution adder.
+Batches are never averaged (decided 2026-10-20): every part of a consignment keeps its own GHG,
+and each part's GHG plus the customer's distribution adder must meet the target and the
+threshold. A consignment's shipped GHG is reported as its highest part's.
 """
 
 from __future__ import annotations
@@ -25,7 +26,8 @@ class AggregatedPart:
     energy_MJ: float
     ghg_gCO2e_per_MJ: float
     compliant: bool
-    origin: str = "produced"  # or "opening", or "purchased" (a PoS passed through storage)
+    origin: str = "produced"  # ledger origin: "produced", "opening" or "purchased" (a PoS)
+    purchased: bool = False  # purchased RFNBO, passed through or processed
 
 
 @dataclass(frozen=True)
@@ -47,8 +49,9 @@ class AggregatedBatchResult:
         return sum(p.energy_MJ for p in self.parts)
 
     @property
-    def ghg_gCO2e_per_MJ(self) -> float:
-        return sum(p.energy_MJ * p.ghg_gCO2e_per_MJ for p in self.parts) / self.energy_MJ
+    def max_ghg_gCO2e_per_MJ(self) -> float:
+        """The highest part GHG: parts are never averaged."""
+        return max(p.ghg_gCO2e_per_MJ for p in self.parts)
 
 
 @dataclass(frozen=True)
@@ -75,15 +78,14 @@ class ConsignmentResult:
         return sum(a.energy_MJ for a in self.aggregated)
 
     @property
-    def weighted_ghg_gCO2e_per_MJ(self) -> float | None:
-        mj = self.energy_MJ
-        if mj <= 0:
-            return None
-        return sum(a.energy_MJ * a.ghg_gCO2e_per_MJ for a in self.aggregated) / mj
+    def max_ghg_gCO2e_per_MJ(self) -> float | None:
+        """The highest part GHG before distribution (parts are never averaged)."""
+        return max((a.max_ghg_gCO2e_per_MJ for a in self.aggregated if a.parts), default=None)
 
     @property
     def shipped_ghg_gCO2e_per_MJ(self) -> float | None:
-        w = self.weighted_ghg_gCO2e_per_MJ
+        """The highest part's GHG as shipped: every part must meet the target and threshold."""
+        w = self.max_ghg_gCO2e_per_MJ
         return None if w is None else w + self.distribution_adder_gCO2e_per_MJ
 
 
@@ -153,6 +155,7 @@ def _consignment(
                     ghg_gCO2e_per_MJ=line.ghg_gCO2e_per_MJ,
                     compliant=line.compliant,
                     origin=line.origin,
+                    purchased=line.purchased,
                 )
             )
         results.append(AggregatedBatchResult(agg.id, spec.id, tuple(parts)))

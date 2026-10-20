@@ -1,6 +1,7 @@
 {
  "source": "RFNBO_optimiser_test_Q4_2026.xlsx",
  "rule_2_5_applied": false,
+ "no_averaging_applied": true,
  "intervals": 8836,
  "h2_batches": {
   "E-2026-10-01": {
@@ -162,8 +163,19 @@
    "electricity_emissions_g": 163900000,
    "rfnbo_kg": 819500,
    "rfnbo_MJ": 15242700,
-   "ghg": 14.0924731182796,
-   "compliant": true
+   "ghg": 14.092473118279573,
+   "compliant": true,
+   "parts": {
+    "N-2026-10": {
+     "ghg": 14.092473118279573,
+     "kg": 819500.0,
+     "share": 1.0,
+     "compliant": true,
+     "sources": [
+      "E-2026-10-01"
+     ]
+    }
+   }
   },
   "N-2026-11": {
    "month": "2026-11",
@@ -178,8 +190,19 @@
    "electricity_emissions_g": 158400000,
    "rfnbo_kg": 792000,
    "rfnbo_MJ": 14731200,
-   "ghg": 14.0924731182796,
-   "compliant": true
+   "ghg": 14.092473118279573,
+   "compliant": true,
+   "parts": {
+    "N-2026-11": {
+     "ghg": 14.092473118279573,
+     "kg": 792000.0,
+     "share": 1.0,
+     "compliant": true,
+     "sources": [
+      "E-2026-11-01"
+     ]
+    }
+   }
   },
   "N-2026-12": {
    "month": "2026-12",
@@ -194,8 +217,31 @@
    "electricity_emissions_g": 163680000,
    "rfnbo_kg": 818400,
    "rfnbo_MJ": 15222240,
-   "ghg": 14.660063696276,
-   "compliant": true
+   "ghg": null,
+   "compliant": false,
+   "parts": {
+    "N-2026-12.1": {
+     "ghg": 14.092473118279573,
+     "kg": 794130.3370786518,
+     "share": 0.970344986655244,
+     "compliant": true,
+     "sources": [
+      "E-2026-12-01",
+      "E-2026-12-03",
+      "E-2026-12-05",
+      "E-2026-12-07"
+     ]
+    },
+    "N-2026-12.2": {
+     "ghg": 33.23225806451609,
+     "kg": 24269.662921348314,
+     "share": 0.029655013344756006,
+     "compliant": false,
+     "sources": [
+      "E-2026-12-06"
+     ]
+    }
+   }
   }
  },
  "h2_ledger": {
@@ -218,46 +264,55 @@
  },
  "nh3_ledger": {
   "lines": {
-   "N-2026-12": {
-    "month": "2026-12",
-    "ghg": 14.660063696276,
-    "in_kg": 818400,
-    "out_consignment_kg": 0,
-    "closing_before_kg": 818400,
-    "write_off_kg": 818400,
-    "carried_kg": 0
-   },
-   "N-2026-11": {
-    "month": "2026-11",
-    "ghg": 14.0924731182796,
-    "in_kg": 792000,
-    "out_consignment_kg": 0,
-    "closing_before_kg": 792000,
-    "write_off_kg": 336202.083333,
-    "carried_kg": 455797.916667
-   },
-   "N-2026-10": {
-    "month": "2026-10",
-    "ghg": 14.0924731182796,
-    "in_kg": 819500,
-    "out_consignment_kg": 741429.710337497,
-    "closing_before_kg": 78070.2896625033,
-    "write_off_kg": 0,
-    "carried_kg": 78070.2896625033
-   },
    "N-2026-09": {
     "month": "2026-09",
     "ghg": 6,
     "in_kg": 300000,
-    "out_consignment_kg": 258570.289662503,
-    "closing_before_kg": 41429.7103374967,
-    "write_off_kg": 0,
-    "carried_kg": 41429.7103374967
+    "out_consignment_kg": 300000.0,
+    "closing_before_kg": 0.0,
+    "write_off_kg": 0.0,
+    "carried_kg": 0.0
+   },
+   "N-2026-10": {
+    "month": "2026-10",
+    "ghg": 14.092473118279573,
+    "in_kg": 819500.0,
+    "out_consignment_kg": 700000.0,
+    "closing_before_kg": 119500.0,
+    "write_off_kg": 0.0,
+    "carried_kg": 119500.0
+   },
+   "N-2026-11": {
+    "month": "2026-11",
+    "ghg": 14.092473118279573,
+    "in_kg": 792000.0,
+    "out_consignment_kg": 0.0,
+    "closing_before_kg": 792000.0,
+    "write_off_kg": 336202.08333299996,
+    "carried_kg": 455797.91666700004
+   },
+   "N-2026-12.1": {
+    "month": "2026-12",
+    "ghg": 14.092473118279573,
+    "in_kg": 794130.3370786518,
+    "out_consignment_kg": 0.0,
+    "closing_before_kg": 794130.3370786518,
+    "write_off_kg": 794130.3370786518,
+    "carried_kg": 0.0
+   },
+   "N-2026-12.2": {
+    "month": "2026-12",
+    "ghg": 33.23225806451609,
+    "in_kg": 24269.662921348314,
+    "out_consignment_kg": 0.0,
+    "closing_before_kg": 24269.662921348314,
+    "write_off_kg": 24269.662921348314,
+    "carried_kg": 0.0
    }
   },
   "physical_kg": 575297.916667,
   "write_off_kg": 1154602.083333,
-  "carried_ghg": 13.5096988590806
+  "carried_ghg": 14.092473118279573
  },
  "nh3_reconciliation": {
   "opening_physical_kg": 350000,
@@ -275,22 +330,21 @@
    "target": 15,
    "distribution_adder": 3,
    "parts": {
-    "N-2026-09": 103428.115865001,
-    "N-2026-10": 296571.884134999
+    "N-2026-09": 300000.0,
+    "N-2026-10": 100000.0
    },
-   "weighted_ghg": 12,
-   "shipped_ghg": 15
+   "shipped_ghg": 17.09247311827957,
+   "highest_ghg": 14.092473118279573
   },
   "C2": {
    "volume_kg": 600000,
    "target": 20,
    "distribution_adder": 8,
    "parts": {
-    "N-2026-09": 155142.173797502,
-    "N-2026-10": 444857.826202498
+    "N-2026-10": 600000.0
    },
-   "weighted_ghg": 12,
-   "shipped_ghg": 20
+   "shipped_ghg": 22.09247311827957,
+   "highest_ghg": 14.092473118279573
   }
  },
  "variant_minimise": {
@@ -298,7 +352,82 @@
   "distribution_adder": 3,
   "sep_kg": 300000,
   "q4_kg": 100000,
-  "shipped_ghg": 11.0231182795699
+  "shipped_ghg": 17.09247311827957,
+  "parts": {
+   "N-2026-09": 300000,
+   "N-2026-10": 100000.0
+  }
  },
- "superseded": {}
+ "superseded": {
+  "nh3_ghg": {
+   "N-2026-10": 14.0924731182796,
+   "N-2026-11": 14.0924731182796,
+   "N-2026-12": 14.660063696276
+  },
+  "nh3_ledger": {
+   "lines": {
+    "N-2026-12": {
+     "month": "2026-12",
+     "ghg": 14.660063696276,
+     "in_kg": 818400,
+     "out_consignment_kg": 0,
+     "closing_before_kg": 818400,
+     "write_off_kg": 818400,
+     "carried_kg": 0
+    },
+    "N-2026-11": {
+     "month": "2026-11",
+     "ghg": 14.0924731182796,
+     "in_kg": 792000,
+     "out_consignment_kg": 0,
+     "closing_before_kg": 792000,
+     "write_off_kg": 336202.083333,
+     "carried_kg": 455797.916667
+    },
+    "N-2026-10": {
+     "month": "2026-10",
+     "ghg": 14.0924731182796,
+     "in_kg": 819500,
+     "out_consignment_kg": 741429.710337497,
+     "closing_before_kg": 78070.2896625033,
+     "write_off_kg": 0,
+     "carried_kg": 78070.2896625033
+    },
+    "N-2026-09": {
+     "month": "2026-09",
+     "ghg": 6,
+     "in_kg": 300000,
+     "out_consignment_kg": 258570.289662503,
+     "closing_before_kg": 41429.7103374967,
+     "write_off_kg": 0,
+     "carried_kg": 41429.7103374967
+    }
+   },
+   "write_off_kg": 1154602.083333,
+   "carried_ghg": 13.5096988590806
+  },
+  "consignments": {
+   "C1": {
+    "parts": {
+     "N-2026-09": 103428.115865001,
+     "N-2026-10": 296571.884134999
+    },
+    "weighted_ghg": 12
+   },
+   "C2": {
+    "parts": {
+     "N-2026-09": 155142.173797502,
+     "N-2026-10": 444857.826202498
+    },
+    "weighted_ghg": 12
+   }
+  },
+  "variant_minimise": {
+   "volume_kg": 400000,
+   "distribution_adder": 3,
+   "sep_kg": 300000,
+   "q4_kg": 100000,
+   "shipped_ghg": 11.0231182795699
+  }
+ }
 }

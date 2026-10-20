@@ -145,6 +145,7 @@ def _ledgers(run: RunResult) -> list[dict[str, Any]]:
                         "closing_before_kg": x.closing_before_kg,
                         "write_off_kg": x.write_off_kg,
                         "carried_kg": x.carried_kg,
+                        "purchased": x.purchased,
                     }
                     for x in led.lines
                 ],
@@ -185,7 +186,7 @@ def _consignments(run: RunResult) -> list[dict[str, Any]]:
                 "volume_kg": c.volume_kg,
                 "allocated_kg": c.allocated_kg,
                 "energy_MJ": c.energy_MJ,
-                "weighted_ghg": c.weighted_ghg_gCO2e_per_MJ,
+                "max_part_ghg": c.max_ghg_gCO2e_per_MJ,
                 "distribution_adder": c.distribution_adder_gCO2e_per_MJ,
                 "shipped_ghg": shipped,
                 "target": c.target_gCO2e_per_MJ,
@@ -204,7 +205,7 @@ def _consignments(run: RunResult) -> list[dict[str, Any]]:
                         "months": list(a.months),
                         "kg": a.kg,
                         "energy_MJ": a.energy_MJ,
-                        "ghg": a.ghg_gCO2e_per_MJ,
+                        "max_part_ghg": a.max_ghg_gCO2e_per_MJ,
                         "parts": [
                             {
                                 "batch": p.batch,
@@ -213,6 +214,7 @@ def _consignments(run: RunResult) -> list[dict[str, Any]]:
                                 "energy_MJ": p.energy_MJ,
                                 "ghg": p.ghg_gCO2e_per_MJ,
                                 "compliant": p.compliant,
+                                "purchased": p.purchased,
                             }
                             for p in a.parts
                         ],
@@ -442,7 +444,10 @@ def verify(run_dir: str | Path) -> list[str]:
 
 
 def carried_ledger(run_dir: str | Path) -> dict[str, list[OpeningLedgerEntry]]:
-    """Closing ledger of a sealed run, as opening entries for the next quarter (§2.7)."""
+    """Closing ledger of a sealed run, as opening entries for the next quarter (§2.7).
+
+    Non-compliant RFNBO is never carried (decided 2026-10-17), so a floating-point residue left
+    on a non-compliant line (within the checks' tolerance) does not open the next quarter."""
     rec = load_record(run_dir)
     if not rec["results"]["summary"]["passed"]:
         raise SealError(f"{run_dir}: sealed run has failed checks; it cannot open a quarter")
@@ -455,9 +460,10 @@ def carried_ledger(run_dir: str | Path) -> dict[str, list[OpeningLedgerEntry]]:
                 ghg_gCO2e_per_MJ=x["ghg"],
                 rfnbo_share=x["rfnbo_share"],
                 production_month=x["month"],
+                origin="purchased" if x.get("purchased") else "produced",
             )
             for x in led["lines"]
-            if x["carried_kg"] > 0
+            if x["compliant"] and x["carried_kg"] > 0
         ]
     return out
 

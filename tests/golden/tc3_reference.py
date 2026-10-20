@@ -16,9 +16,13 @@ Rules applied (§10.2 and §10.3 decisions):
   A batch above the threshold is still RFNBO (§2.5).
 - Split output (rule 4): each output flow receives at most its metered quantity of the batch's
   RFNBO; the parts add up to the batch's RFNBO.
-- Conditioning units (rule 2): share = RFNBO feed ÷ feed consumed (same LHV, so by kg); GHG =
-  (feed emissions + share × own emissions) ÷ RFNBO product energy + adder. Losses (rule 3) make
-  the RFNBO product energy smaller than the RFNBO feed energy, so they raise GHG.
+- Conditioning units (rule 2): share = RFNBO feed ÷ feed consumed (same LHV, so by kg). Batches
+  are never averaged (build plan §12, decided 2026-10-20): the RFNBO output is split into parts,
+  one per source GHG, each with GHG = (its feed emissions + its share × own emissions) ÷ its
+  product energy + adder. Losses (rule 3) make the RFNBO product energy smaller than the RFNBO
+  feed energy, so they raise GHG. A part from a non-compliant source stays non-compliant.
+- Consignments: no average either. Each part, plus the distribution adder, must meet the target
+  and the threshold; the shipped GHG reported is the highest part's.
 - Storage ledgers close at quarter end by the §2.7 rule. Non-compliant RFNBO cannot be carried
   into the next quarter, so all of it is written off (decided 2026-10-17); beyond that, the
   excess over measured inventory is written off, highest GHG first, newest month first on ties
@@ -32,6 +36,7 @@ Rules applied (§10.2 and §10.3 decisions):
 from __future__ import annotations
 
 import datetime as dt
+import math
 from dataclasses import dataclass, field
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -293,12 +298,12 @@ def hourly_decisions(data: Data) -> Decisions:
 def v2_decisions(data: Data, all_to_electrolyser: bool = False) -> Decisions:
     """V2: December renewable 2,500 kWh per interval, no LH₂ spot sale.
 
-    Non-compliant RFNBO cannot be carried (decided 2026-10-17), so the liquefier gets just
-    enough renewable for its December batch to comply. That renewable comes from the last
-    intervals of December, which become a 0% electrolyser batch, plus one 40% interval whose
-    20 kg of RFNBO exactly fills that interval's metered flow to the compressor (so none of it
-    reaches the liquefier's feed). LH₂ storage is not full, and December's liquefier yield
-    (0.98) beats the buffer's weight (0.977), so the liquefier takes all the RFNBO it can.
+    Non-compliant RFNBO cannot be carried (decided 2026-10-17), so the liquefier gets enough
+    renewable for its December batch to comply: the whole last intervals of December, which
+    become a 0% electrolyser batch. A part interval would be no better: kept apart its RFNBO is
+    non-compliant, and in the main batch it raises the GHG the liquefier's part is set by (no
+    averaging, §12). LH₂ storage is not full, and December's liquefier yield (0.98) beats the
+    buffer's weight (0.977), so the liquefier takes all the RFNBO it can.
 
     ``all_to_electrolyser`` is the rejected alternative: December LH₂ is non-compliant and is
     written off."""
@@ -312,24 +317,19 @@ def v2_decisions(data: Data, all_to_electrolyser: bool = False) -> Decisions:
     carry = data.s["buffer_inv_kg"][-1]
     if not all_to_electrolyser:
         carry = 0.0
-        a_l = v2_min_liquefier_kWh(data)
-        dark = int(a_l // V2_DEC_RENEWABLE_KWH)
-        partial_e = 20.0 / 50.0 * 2500.0  # 1,000 kWh: 20 kg RFNBO, the compressor flow
-        if dark * 2500.0 + (2500.0 - partial_e) < a_l:
-            dark += 1
-        p = last - dark - 1
-        d.renewable["electrolyser"][p] = partial_e
-        d.renewable["liquefier"][p] = V2_DEC_RENEWABLE_KWH - partial_e
-        for i in range(p + 1, last):
+        dark = math.ceil(v2_min_liquefier_kWh(data) / V2_DEC_RENEWABLE_KWH)
+        p = last - dark
+        for i in range(p, last):
             d.renewable["electrolyser"][i] = 0.0
             d.renewable["liquefier"][i] = V2_DEC_RENEWABLE_KWH
         d.batches["electrolyser"] = [b for b in d.batches["electrolyser"] if b[1] < first] + [
             ("E-2026-12-01", first, p),
-            ("E-2026-12-02", p, p + 1),
-            ("E-2026-12-03", p + 1, last),
+            ("E-2026-12-02", p, last),
         ]
     d.outputs, d.feed = {}, {}
     route(data, d, buffer_carry_kg=carry)
+    # December CH₂ (8.33 gCO₂e/MJ: no renewable for the compressor) is above CB's limit, and
+    # without averaging (§12) it cannot be blended down: CB is not met.
     d.parts["CB"] = {"C-2026-10": 59600.0, "C-2026-11": 57600.0, "C-2026-12": 2800.0}
     return d
 
@@ -360,6 +360,42 @@ def v3_decisions(data: Data) -> Decisions:
 
 def _ghg_key(ghg: float) -> float:
     return round(ghg, 9)
+
+
+def split_parts(
+    bid: str,
+    sources: dict[str, tuple[float, float, bool]],  # source -> (kg, GHG, purchased)
+    consumed_kg: float,
+    product_kg: float,
+    own_g: float,
+    adder: float,
+) -> dict[str, dict[str, Any]]:
+    """The parts of a conditioning batch (§12): one per origin and source GHG, ascending GHG,
+    named ``bid`` when there is one and ``bid.1``, ``bid.2``, … otherwise. Same LHV in and out."""
+    groups: dict[tuple[float, bool], list[str]] = {}
+    for src, (kg, g, purchased) in sources.items():
+        if kg > 0:
+            groups.setdefault((_ghg_key(g), purchased), []).append(src)
+    keys = sorted(groups, key=lambda k: (k[0], k[1]))
+    out: dict[str, dict[str, Any]] = {}
+    for n, key in enumerate(keys, 1):
+        srcs = groups[key]
+        kg = sum(sources[s][0] for s in srcs)
+        em = sum(sources[s][0] * LHV_MJ_PER_KG * sources[s][1] for s in srcs)
+        share = kg / consumed_kg
+        rf = share * product_kg
+        ghg = (em + share * own_g) / (rf * LHV_MJ_PER_KG) + adder
+        out[bid if len(keys) == 1 else f"{bid}.{n}"] = {
+            "sources": srcs,
+            "purchased": key[1],
+            "feed_kg": kg,
+            "feed_emissions_g": em,
+            "share": share,
+            "rfnbo_kg": rf,
+            "ghg": ghg,
+            "compliant": ghg <= THRESHOLD + 1e-9,
+        }
+    return out
 
 
 def _close(storage: str, lines: dict[str, dict[str, Any]], physical: float) -> None:
@@ -429,9 +465,18 @@ def run(data: Data, d: Decisions) -> dict[str, Any]:
             matched = min(alloc, elec)
             own_g = (elec - matched) * EF_GRID
             rf_kg = share * product
-            ghg = (
-                (feed_em + share * own_g) / (rf_kg * LHV_MJ_PER_KG) + ADDER[unit] if rf_kg else None
+            parts = split_parts(
+                bid,
+                {
+                    src: (kg, units["electrolyser"][src]["ghg"], False)
+                    for src, kg in sources.items()
+                },
+                consumed,
+                product,
+                own_g,
+                ADDER[unit],
             )
+            ghg = next(iter(parts.values()))["ghg"] if len(parts) == 1 else None
             units[unit][bid] = {
                 "month": data.month[i0],
                 "start": i0,
@@ -452,7 +497,8 @@ def run(data: Data, d: Decisions) -> dict[str, Any]:
                 "rfnbo_kg": rf_kg,
                 "energy_MJ": rf_kg * LHV_MJ_PER_KG,
                 "ghg": ghg,
-                "compliant": ghg is not None and ghg <= THRESHOLD + 1e-9,
+                "parts": parts,
+                "compliant": bool(parts) and all(x["compliant"] for x in parts.values()),
             }
     # Ledgers
     ledgers: dict[str, dict[str, Any]] = {}
@@ -476,17 +522,16 @@ def run(data: Data, d: Decisions) -> dict[str, Any]:
     for unit, storage in PRODUCT_STORAGE.items():
         cid = by_storage[storage]
         lines = {}
-        for bid, b in units[unit].items():
-            if not b["rfnbo_kg"]:
-                continue
-            out = d.parts.get(cid, {}).get(bid, 0.0)
-            lines[bid] = {
-                "month": b["month"],
-                "ghg": b["ghg"],
-                "in_kg": b["rfnbo_kg"],
-                "out_kg": out,
-                "closing_kg": b["rfnbo_kg"] - out,
-            }
+        for b in units[unit].values():
+            for pid, x in b["parts"].items():
+                out = d.parts.get(cid, {}).get(pid, 0.0)
+                lines[pid] = {
+                    "month": b["month"],
+                    "ghg": x["ghg"],
+                    "in_kg": x["rfnbo_kg"],
+                    "out_kg": out,
+                    "closing_kg": x["rfnbo_kg"] - out,
+                }
         physical = s["lh2_inv_kg" if storage == "lh2_storage" else "ch2_inv_kg"][-1]
         _close(storage, lines, physical)
         ledgers[storage] = {"lines": lines, "physical_kg": physical}
@@ -517,8 +562,8 @@ def run(data: Data, d: Decisions) -> dict[str, Any]:
             cons[cid] = {"volume_kg": c["volume_kg"], "allocated_kg": 0.0, "met": False}
             cons[cid]["target"] = target
             continue
-        weighted = sum(v * lines[b]["ghg"] for b, v in parts.items()) / kg
-        shipped = weighted + c["adder"]
+        highest = max(lines[b]["ghg"] for b, v in parts.items() if v > 0)
+        shipped = highest + c["adder"]
         by_month: dict[str, float] = {}
         for b, v in parts.items():
             by_month[lines[b]["month"]] = by_month.get(lines[b]["month"], 0.0) + v
@@ -529,7 +574,7 @@ def run(data: Data, d: Decisions) -> dict[str, Any]:
             "adder": c["adder"],
             "parts": dict(parts),
             "by_month": by_month,
-            "weighted_ghg": weighted,
+            "highest_ghg": highest,
             "shipped_ghg": shipped,
             "parts_compliant": all(lines[b]["ghg"] <= THRESHOLD + 1e-9 for b in parts),
             "met": abs(kg - c["volume_kg"]) <= 1e-6 * c["volume_kg"]
