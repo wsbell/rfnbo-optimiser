@@ -586,4 +586,11 @@ def run(root: Path, port: int = 8082, show: bool = True) -> None:
     def data_page() -> None:
         DataPage(root).build()
 
-    ui.run(port=port, show=show, reload=False, title="RFNBO data", show_welcome_message=False)
+    # Open the Data screen itself; "/" is the results browser for the folder's runs.
+    ui.run(
+        port=port,
+        show="/data" if show else False,
+        reload=False,
+        title="RFNBO data",
+        show_welcome_message=False,
+    )
