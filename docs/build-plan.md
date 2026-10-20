@@ -79,9 +79,9 @@ Matched renewable electricity has EF = 0. Feed batches carry their own GHG.
 ### 2.5 Compliant and non-compliant RFNBO
 - An RFNBO sub-batch is RFNBO whatever its GHG. It is **compliant** at ≤ 28.2 gCO₂e/MJ (70%
   saving vs 94 gCO₂e/MJ) and **non-compliant** above.
-- Non-compliant RFNBO enters the ledger and can be fed downstream. Blended with low-GHG RFNBO in
-  the same downstream batch it can be "saved": the downstream batch is compliant if its own GHG
-  is ≤ 28.2.
+- Non-compliant RFNBO enters the ledger and can be fed downstream, but it stays non-compliant:
+  ~~blended with low-GHG RFNBO in the same downstream batch it can be "saved"~~ (superseded
+  2026-10-20, §12: batches are never averaged, so nothing is saved by blending).
 - Non-compliant sub-batches can never be aggregated into a consignment.
 - 0% RFNBO share → no RFNBO.
 
@@ -89,9 +89,10 @@ Matched renewable electricity has EF = 0. Feed batches carry their own GHG.
 - A consignment is one or more aggregated batches. An aggregated batch holds compliant
   sub-batches from one calendar month. A consignment can hold aggregated batches from different
   months. Splits and merges are allowed with full lineage.
-- Aggregated batch GHG = energy-weighted average of its sub-batches.
-- Shipped consignment GHG = energy-weighted average of its aggregated batches + customer
-  distribution adder. Must be ≤ consignment target and ≤ 28.2.
+- ~~Aggregated batch GHG = energy-weighted average of its sub-batches. Shipped consignment GHG
+  = energy-weighted average of its aggregated batches + customer distribution adder.~~
+  Superseded 2026-10-20 (§12): every part of a consignment keeps its own GHG; each part's GHG
+  plus the distribution adder must be ≤ the consignment target and ≤ 28.2.
 
 ### 2.7 Mass balance
 - Each storage unit keeps an RFNBO ledger per calendar quarter, checked at quarter end only.
@@ -652,3 +653,48 @@ reports list them (Data corrections). The PoS form applies the §11.1 rules on e
 Typing whole 15-minute series by hand (8,836 intervals a quarter) is not offered; series come
 from files and are corrected in the UI. Phase 17 does not depend on the network phases and
 can be done at any time; the PoS form arrives with phase 16.
+
+---
+
+## 12. No averaging across batches (phase 18)
+
+Decided 2026-10-20, from the certification-scheme rules (ISCC EU 203 v4.1 §4.2, EU 205-1 v1.4;
+other recognised schemes word the same rules differently):
+
+> "if batches with different GHG emissions figures are physically mixed, the batches have to be
+> kept separate in the quantity bookkeeping. Creating an average of the GHG emissions of
+> different batches is not allowed." (ISCC EU 203 §4.2) Processing adjusts a batch's size by a
+> conversion factor; its characteristics stay assigned to it.
+
+> "all individual values considered in the average must meet the 70% GHG savings threshold."
+> (ISCC EU 205-1, calculation period: at most one calendar month; monthly until 2029, hourly
+> from 2030 for electrolysis)
+
+| # | Question | Decision |
+| --- | --- | --- |
+| 1 | A unit batch fed by RFNBO from several sources (own batches, PoS) | The batch's RFNBO output is split into **parts**, one per source GHG: each part keeps its source's GHG, adjusted by the unit's yield, own emissions and adder; parts are never averaged. Purchased RFNBO is never a part of the same aggregated batch as the plant's own (replaces §11.1 decision 8's "becomes part of that unit batch") |
+| 2 | Saving non-compliant RFNBO by blending (§2.5) | Not allowed, for the plant's own RFNBO as well as purchased: a part from a non-compliant source stays non-compliant |
+| 3 | Averaging interval values into a monthly batch | Only values that each meet the threshold. Until 2029 the electrolyser's GHG is calculated per batch of at most a month, with renewable matched over the batch (temporal correlation is monthly), so a batch is one value; from 2030 electrolyser batches are single clock hours and are not averaged further. Averaging happened only downstream and in consignments, which decisions 1 and 4 remove |
+| 4 | Consignment GHG | No average: each part of a consignment, plus the distribution adder, must meet the target and the threshold. Reports show each part's shipped GHG and the highest |
+| 5 | Purchased RFNBO carried into the next quarter | Keeps its purchased origin in the opening ledger, so it is still aggregated only with purchased RFNBO |
+| 6 | Credentials to rescue a conditioning unit short of renewable | Not done: sources are not mixed (decision 2) |
+
+Consequences:
+
+- **Calculator.** A downstream batch's RFNBO output is a set of parts. For part j fed MJ_j of
+  RFNBO at g_j, with C the feed the batch consumed (MJ), E its product energy and own its own
+  emissions: share_j = MJ_j ÷ C, kg_j = share_j × product kg and
+  GHG_j = g_j × C ÷ E + own ÷ E + adder. Parts with the same origin and GHG (to 9 dp) are one
+  part (identical characteristics may be summarised). A single part keeps the batch's id; several
+  are `<batch>.1`, `<batch>.2`, … in ascending GHG. Ledgers, feed, consignments and write-offs
+  work on parts. A batch is compliant when every part is.
+- **Optimiser.** A source can feed a batch compliantly only if its own part would comply:
+  g_j ≤ (T − A − own ÷ E) × E ÷ C, the limit stage A already computes, now per batch rather than
+  on a blend. Stage A values a batch only when its GHG is at or below the downstream limit (no μ
+  search); stage B has no blend rows (each feed variable is allowed or not); stage C allocates
+  only parts at or below each consignment's limit.
+- **Test cases.** Test cases 1 and 2 (the original workbooks) blend hydrogen sub-batches of
+  different GHG into NH₃ batches: their fixtures are regenerated under these rules with the
+  workbook values kept under `superseded`. Test case 3's base case is unchanged (every
+  electrolyser batch has the same GHG); its shortfall variant and test case 4 are rebuilt.
+
