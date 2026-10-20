@@ -48,6 +48,10 @@ uv run rfnbo validate examples/test_plant.json
 - `src/rfnbo/model/pos.py`: PoS records from CSV or JSON, and the rules a record must meet
   before a run uses it (`rfnbo optimise --pos`). PoS records sit in the decision set like
   consignments; their allocation to suppliers' metered deliveries is a decision.
+- `src/rfnbo/project/`: project folders (`folder.py`: every input of a quarter as plain files,
+  `prepare()` aligns, corrects and checks the data), `corrections.py` (reasoned replacements,
+  recorded in sealed provenance), `run.py` (optimise and seal; shared by `rfnbo optimise
+  --project` and the Data screen).
 - `src/rfnbo/trace/`: `json_log.py` (per-batch records, `recompute_ghg`), `lineage.py`
   (edges and drill-down), `run.py` (seal, verify, open next quarter from a sealed run).
   Sealed outputs must stay byte-identical on re-run: no wall-clock, no unordered iteration.
@@ -58,6 +62,9 @@ uv run rfnbo validate examples/test_plant.json
 - `src/rfnbo/ui/results/`: the results browser (`rfnbo results`). `views.py` builds every page
   from a sealed run re-calculated by the calculator (no UI imports, fully unit-tested);
   `app.py` lays it out: runs → run → consignment → batch → 15-minute intervals.
+- `src/rfnbo/ui/data/`: the Data screen (`rfnbo data <folder>`). `workspace.py` holds all its
+  state and actions with no UI imports (tested in `tests/integration/test_data_project.py`);
+  `app.py` lays it out and serves the results browser on the folder's `runs/`.
 - `src/rfnbo/optimise/batching.py`: stage A. Exact DP per unit and month over 15-minute
   intervals (hourly windows from the switch date for electrolytic units), Lagrangian value
   against the downstream blend limit, μ search on feedable RFNBO. Proposals only: re-run

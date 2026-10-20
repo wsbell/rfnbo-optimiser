@@ -26,7 +26,7 @@ plant dispatch.
 | 14 | Optimiser stage B on networks | done (`rfnbo optimise` runs test plant 3 end to end and matches or beats test case 3; series plants supported) |
 | 15 | Stage C, reports and UI for several final products | done (product and split-output reports; drill-down through every step; test plant 3 in about 12 s) |
 | 16 | Purchased RFNBO with a proof of sustainability, allocated to unit inputs | done (supplier block, PoS register and checks; `rfnbo optimise --pos`; test case 4 matched) |
-| 17 | Plant data entry in the UI | planned (`docs/build-plan.md` §11.2) |
+| 17 | Plant data entry in the UI | done (`rfnbo data`: project folders, column mapping, corrections with reasons, forms, run; `rfnbo optimise --project`) |
 
 The full build plan, including the multi-step extension and the decisions it needs, is in
 `docs/build-plan.md`.
@@ -63,6 +63,7 @@ the workbook decisions, test case 2 1.49 million MJ more (5.9%).
 uv sync --extra ui            # the ui extra is only needed for the diagram editor
 uv run rfnbo edit examples/test_plant.json   # opens the block flow diagram editor
 uv run rfnbo results runs/                    # browse sealed runs down to 15-minute data
+uv run rfnbo data projects/q4-2026           # Data screen: set up, check, correct and run a quarter
 uv run pytest
 uv run rfnbo validate examples/test_plant.json
 

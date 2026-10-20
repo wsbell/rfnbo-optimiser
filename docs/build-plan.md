@@ -517,7 +517,7 @@ built on the network drill-down from phase 15.
 
 ## 11. Extension: purchased RFNBO and plant data entry (phases 16–17)
 
-Requested 2026-10-17. Phase 16 done 2026-10-19. §11.1's questions are all answered (2026-10-17) and logged in the scope
+Requested 2026-10-17. Phase 16 done 2026-10-19, phase 17 2026-10-20. §11.1's questions are all answered (2026-10-17) and logged in the scope
 doc.
 
 ### 11.1 Purchased RFNBO with a proof of sustainability (phase 16)
@@ -634,6 +634,20 @@ Today plant data comes in as CSV or Excel files with a JSON column mapping, thro
 - **Run.** Optimise from the UI; the sealed run opens in the results browser.
 - **Project folder.** The data files, mapping, corrections, consignments and PoS records are
   saved as plain files, so the CLI and the UI work on the same inputs.
+
+*Done 2026-10-20.* `rfnbo data <folder>` serves the Data screen at `/data`, with the results
+browser on the folder's `runs/`. A project folder holds `project.json` (plant config, quarter,
+data files and their column mapping, opening from a sealed run), `consignments.json`,
+`pos.csv`, `corrections.json`, `opening.json` and `data/` (uploads, never changed);
+`rfnbo optimise --project <folder>` runs the same files and gives the same run id. Columns
+whose header agrees with a series name are mapped automatically; a saved source spec can be
+imported. Corrections set one series to a value over [from, to) in plant time, each with a
+reason, never overlapping; a wall time the clock change makes ambiguous or skips is refused
+until its UTC offset is given. A missing interval stays an error unless every required series
+then has a value. Sealed runs record the corrections next to the original files' SHA-256, and
+reports list them (Data corrections). The PoS form applies the §11.1 rules on entry. Tests:
+`tests/integration/test_data_project.py` and the browser test `tests/e2e/test_data_e2e.py`
+(upload, map, correct, consignment, PoS, run, open in the results browser).
 
 Typing whole 15-minute series by hand (8,836 intervals a quarter) is not offered; series come
 from files and are corrected in the UI. Phase 17 does not depend on the network phases and
