@@ -672,10 +672,10 @@ other recognised schemes word the same rules differently):
 
 | # | Question | Decision |
 | --- | --- | --- |
-| 1 | A unit batch fed by RFNBO from several sources (own batches, PoS) | The batch's RFNBO output is split into **parts**, one per source GHG: each part keeps its source's GHG, adjusted by the unit's yield, own emissions and adder; parts are never averaged. Purchased RFNBO is never a part of the same aggregated batch as the plant's own (replaces §11.1 decision 8's "becomes part of that unit batch") |
+| 1 | A unit batch fed by RFNBO from several sources (own batches, PoS; revised in §12.1) | The batch's RFNBO output is split into **parts**, one per source GHG: each part keeps its source's GHG, adjusted by the unit's yield, own emissions and adder; parts are never averaged. Purchased RFNBO is never a part of the same aggregated batch as the plant's own (replaces §11.1 decision 8's "becomes part of that unit batch") |
 | 2 | Saving non-compliant RFNBO by blending (§2.5) | Not allowed, for the plant's own RFNBO as well as purchased: a part from a non-compliant source stays non-compliant |
-| 3 | Averaging interval values into a monthly batch | Only values that each meet the threshold. Until 2029 the electrolyser's GHG is calculated per batch of at most a month, with renewable matched over the batch (temporal correlation is monthly), so a batch is one value; from 2030 electrolyser batches are single clock hours and are not averaged further. Averaging happened only downstream and in consignments, which decisions 1 and 4 remove |
-| 4 | Consignment GHG | No average: each part of a consignment, plus the distribution adder, must meet the target and the threshold. Reports show each part's shipped GHG and the highest |
+| 3 | Averaging interval values into a monthly batch (revised in §12.1) | Only values that each meet the threshold. Until 2029 the electrolyser's GHG is calculated per batch of at most a month, with renewable matched over the batch (temporal correlation is monthly), so a batch is one value; from 2030 electrolyser batches are single clock hours and are not averaged further. Averaging happened only downstream and in consignments, which decisions 1 and 4 remove |
+| 4 | Consignment GHG (revised in §12.1: averaged within an aggregated batch) | No average: each part of a consignment, plus the distribution adder, must meet the target and the threshold. Reports show each part's shipped GHG and the highest |
 | 5 | Purchased RFNBO carried into the next quarter | Keeps its purchased origin in the opening ledger, so it is still aggregated only with purchased RFNBO |
 | 6 | Credentials to rescue a conditioning unit short of renewable | Not done: sources are not mixed (decision 2) |
 
@@ -713,3 +713,35 @@ Consequences:
   In test case 4 POS-C's part would be above 28.2 in either unit, so all 6,000 kg of it is
   written off; the workbook has a Parts sheet and per-part ledgers.
 
+### 12.1 Monthly averaging of compliant batches (phase 19; revises decisions 1, 3 and 4)
+
+Decided 2026-10-20, from ISCC EU 205-1: "The GHG values may be calculated as an average for the
+entire production of fuels occurring during a period of at most one calendar month … all
+individual values considered in the average must meet the 70% GHG savings threshold. Individual
+time interval values with emissions savings of less than 70% are not allowed to be considered
+for the monthly average."
+
+| # | Question | Decision |
+| --- | --- | --- |
+| 7 | Which batches may be averaged | Batches (or parts) of the **same source** and the **same production month**, each meeting the threshold on its own. The source is the plant's own production, or a single supplier: RFNBO from different suppliers is never averaged or aggregated together, at any stage |
+| 8 | Production month | Own RFNBO: the month of its final processing (the unit batch that made it). Purchased RFNBO: the PoS's dispatch month, whether passed through or processed by the plant |
+| 9 | Where averaging may happen | Anywhere, while decision 7 holds: H₂ (or any intermediate) may be averaged before it feeds a downstream unit, and the parts of a consignment's aggregated batch are averaged by energy. Non-compliant RFNBO never enters an average (decision 2 stands) |
+| 10 | Who decides | The optimiser: averaging is a decision (a pool label on feed, and the content of each aggregated batch), taken only where it is beneficial |
+
+Consequences:
+
+- **Decision set.** A feed allocation (and a PoS allocation into a unit) may carry a `pool`
+  label. Feed lines into one downstream batch with the same label make one part, at the
+  energy-weighted GHG of the lines; without a label each source GHG makes its own part, as in
+  §12. Named checks: every line in a pool has the same source and production month and meets the
+  threshold.
+- **Calculator.** Parts, ledger lines and opening ledger entries record their source (`own` or
+  the supplier); purchased opening entries name their supplier. An aggregated batch's GHG is the
+  energy-weighted average of its parts; it must hold one production month and one source and
+  only compliant parts. A consignment's shipped GHG is its highest aggregated batch's GHG plus
+  the distribution adder, so every aggregated batch meets the target and the threshold.
+- **Optimiser.** Stage A values a month's compliant batches as a blend against the downstream
+  limit (per month and source, never across months). Stage B may pool same-month, same-source
+  compliant lines into one downstream batch (one linear row per pool) where that feeds more than
+  separate parts could; stage C keeps one aggregated batch per consignment, month and source
+  with a linear row holding its average to the consignment's limit.
