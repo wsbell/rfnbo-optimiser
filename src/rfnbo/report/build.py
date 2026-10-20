@@ -30,7 +30,10 @@ def report_sealed(
     rec = sealed.load_record(run_dir)
     run = sealed.recalculate(run_dir)
     baseline = sealed.recalculate(baseline_dir) if baseline_dir else None
-    tables = all_tables(run, rec["run_id"], rec["provenance"]["quality_flags"], baseline)
+    prov = rec["provenance"]
+    tables = all_tables(
+        run, rec["run_id"], prov["quality_flags"], baseline, prov.get("corrections", ())
+    )
     out = Path(out)
     xlsx = write_xlsx(tables, out / f"report_{rec['run_id']}.xlsx")
     paths = write_csv(tables, out / f"csv_{rec['run_id']}") if with_csv else []

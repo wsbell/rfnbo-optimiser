@@ -8,6 +8,8 @@ rfnbo verify <run-dir>
 rfnbo batch --config C --source S --data D --quarter 2026-Q4 --out decisions.json
 rfnbo optimise --config C --source S --data D --quarter 2026-Q4
                --consignments requirements.json --out DIR [--pos pos.csv]
+rfnbo optimise --project DIR [--label NAME]
+rfnbo data DIR [--port 8082] [--no-browser]
 rfnbo report <run-dir> --out DIR [--baseline <run-dir>] [--csv]
 rfnbo results <dir> [--port 8081] [--no-browser]
 """
@@ -132,85 +134,73 @@ def _batch(args: argparse.Namespace) -> int:
 
 
 def _optimise(args: argparse.Namespace) -> int:
-    import json
-
     from pydantic import TypeAdapter
 
-    from rfnbo.model.entities import ConsignmentSpec
-    from rfnbo.optimise.pipeline import optimise
+    from rfnbo.model.entities import ConsignmentSpec, ProofOfSustainability
+    from rfnbo.optimise.pipeline import OptimisationResult, optimise
+    from rfnbo.project.run import Sealed, seal_optimisation
 
-    m = re.fullmatch(r"(\d{4})-Q([1-4])", args.quarter)
-    if not m:
-        print(f"--quarter must look like 2026-Q4, got {args.quarter!r}", file=sys.stderr)
-        return 2
-    cfg = load_config(args.config)
-    raw = ingest.load(args.data, ingest.load_source_spec(args.source))
-    frame, flags = quality.prepare(cfg, raw, int(m.group(1)), int(m.group(2)))
-    if quality.has_errors(flags):
-        for f in flags:
-            print(f"  {f}", file=sys.stderr)
-        return 1
-    consignments = TypeAdapter(list[ConsignmentSpec]).validate_json(
-        Path(args.consignments).read_text(encoding="utf-8")
-    )
-    records = []
-    if args.pos:
-        from rfnbo.model.pos import PoSError, load_pos, pos_rules
+    result: OptimisationResult
+    out: Sealed
+    records: list[ProofOfSustainability] = []
+    if args.project:
+        from rfnbo.project.folder import Project, ProjectError, prepare
+        from rfnbo.project.run import run_project
 
         try:
-            records = load_pos(args.pos)
-        except PoSError as exc:
-            print(f"{args.pos}: invalid PoS records\n{exc}", file=sys.stderr)
+            project = Project.load(args.project)
+            prep = prepare(project)
+            for f in prep.flags:
+                print(f"  {f}", file=sys.stderr)
+            result, out = run_project(project, args.label, prep)
+        except (ProjectError, ConfigError, ValueError) as exc:
+            print(f"{args.project}: {exc}", file=sys.stderr)
             return 1
-        issues = list(pos_rules(cfg, records, args.quarter))
-        if issues:
-            print(f"{args.pos}: {len(issues)} issue(s)", file=sys.stderr)
-            for issue in issues:
-                print(f"  {issue}", file=sys.stderr)
+        records = project.pos
+    else:
+        missing = [
+            name
+            for name in ("config", "source", "data", "quarter", "consignments", "out")
+            if not getattr(args, name)
+        ]
+        if missing:
+            print(f"give --project, or {', '.join('--' + m for m in missing)}", file=sys.stderr)
+            return 2
+        m = re.fullmatch(r"(\d{4})-Q([1-4])", args.quarter)
+        if not m:
+            print(f"--quarter must look like 2026-Q4, got {args.quarter!r}", file=sys.stderr)
+            return 2
+        cfg = load_config(args.config)
+        raw = ingest.load(args.data, ingest.load_source_spec(args.source))
+        frame, flags = quality.prepare(cfg, raw, int(m.group(1)), int(m.group(2)))
+        if quality.has_errors(flags):
+            for f in flags:
+                print(f"  {f}", file=sys.stderr)
             return 1
-    result = optimise(
-        cfg, frame, consignments, batch_materiality_MJ=args.batch_materiality_MJ, pos=records
-    )
+        consignments = TypeAdapter(list[ConsignmentSpec]).validate_json(
+            Path(args.consignments).read_text(encoding="utf-8")
+        )
+        if args.pos:
+            from rfnbo.model.pos import PoSError, load_pos, pos_rules
 
-    out = Path(args.out)
-    ids = {}
-    for name, outcome in (("optimised", result.optimised), ("baseline", result.baseline)):
-        d = sealed.seal(outcome.run, out / name, flags)
-        ids[name] = sealed.load_record(d)["run_id"]
-    bound = result.bound()
+            try:
+                records = load_pos(args.pos)
+            except PoSError as exc:
+                print(f"{args.pos}: invalid PoS records\n{exc}", file=sys.stderr)
+                return 1
+            issues = list(pos_rules(cfg, records, args.quarter))
+            if issues:
+                print(f"{args.pos}: {len(issues)} issue(s)", file=sys.stderr)
+                for issue in issues:
+                    print(f"  {issue}", file=sys.stderr)
+                return 1
+        result = optimise(
+            cfg, frame, consignments, batch_materiality_MJ=args.batch_materiality_MJ, pos=records
+        )
+        out = seal_optimisation(result, args.out, flags)
+
     vb = result.value_bound()
-    summary = {
-        "run_ids": ids,
-        "feasible": result.feasible,
-        "shortfalls": [
-            {"consignment": s.consignment, "reason": s.reason, "achievable_kg": s.achievable_kg}
-            for s in result.shortfalls
-        ],
-        "objectives": {
-            name: {
-                "consignments_met": o.objectives.consignments_met,
-                "carried_value_MJ": o.objectives.carried_value_MJ,
-                "final_rfnbo_kg": o.objectives.final_rfnbo_kg,
-                "carried_emissions_g": o.objectives.carried_emissions_g,
-                "carried_ghg": o.objectives.carried_ghg,
-                "batches": o.objectives.batches,
-                "pos_written_off_kg": o.objectives.pos_written_off_kg,
-                "failed_checks": len(o.run.failures),
-            }
-            for name, o in (("optimised", result.optimised), ("baseline", result.baseline))
-        },
-        "bound": None
-        if bound is None
-        else {"upper_kg": bound.upper_kg, "achieved_kg": bound.achieved_kg, "gap": bound.gap},
-        "value_bound": {
-            "upper_MJ": vb.upper_MJ,
-            "achieved_MJ": vb.achieved_MJ,
-            "gap": vb.gap,
-        },
-        "log": result.log,
-    }
-    (out / "comparison.json").write_text(json.dumps(summary, indent=1) + "\n", encoding="utf-8")
-
+    bound = result.bound()
     print(f"{'':>24} {'optimised':>18} {'baseline':>18}")
     o, b = result.optimised.objectives, result.baseline.objectives
     print(f"{'consignments met':>24} {o.consignments_met!s:>18} {b.consignments_met!s:>18}")
@@ -233,11 +223,11 @@ def _optimise(args: argparse.Namespace) -> int:
             f"  {s.consignment} not met: {s.reason}; achievable {s.achievable_kg:,.1f} kg",
             file=sys.stderr,
         )
-    from rfnbo.report.build import report_sealed
-
-    written = report_sealed(out / "optimised", out, baseline_dir=out / "baseline")
-    print(f"sealed to {out}/optimised and {out}/baseline; comparison in {out}/comparison.json")
-    print(f"report: {written.xlsx}")
+    print(
+        f"sealed to {out.out}/optimised and {out.out}/baseline; "
+        f"comparison in {out.out}/comparison.json"
+    )
+    print(f"report: {out.report}")
     if not result.feasible:
         return 3
     return 0 if result.optimised.run.passed else 1
@@ -266,6 +256,22 @@ def _results(args: argparse.Namespace) -> int:
         print("the results browser needs the ui extra: uv sync --extra ui", file=sys.stderr)
         return 1
     run(Path(args.root), port=args.port, show=not args.no_browser)
+    return 0
+
+
+def _data(args: argparse.Namespace) -> int:
+    import importlib
+
+    try:
+        page = importlib.import_module("rfnbo.ui.data.app")
+    except ImportError:
+        print(
+            "the Data screen needs the ui extra (uv sync --extra ui); its page is still being "
+            "built (phase 17): use rfnbo optimise --project meanwhile",
+            file=sys.stderr,
+        )
+        return 1
+    page.run(Path(args.project), port=args.port, show=not args.no_browser)
     return 0
 
 
@@ -316,16 +322,17 @@ def main(argv: list[str] | None = None) -> int:
     b.set_defaults(fn=_batch)
 
     o = sub.add_parser("optimise", help="optimise a quarter and seal it with its baseline")
-    o.add_argument("--config", required=True)
-    o.add_argument("--source", required=True)
-    o.add_argument("--data", required=True)
-    o.add_argument("--quarter", required=True)
     o.add_argument(
-        "--consignments",
-        required=True,
-        help="JSON list of consignments (target null = minimise mode)",
+        "--project",
+        help="a project folder (rfnbo data): every input from its files, sealed under runs/",
     )
-    o.add_argument("--out", required=True)
+    o.add_argument("--label", help="with --project: folder name under runs/")
+    o.add_argument("--config")
+    o.add_argument("--source")
+    o.add_argument("--data")
+    o.add_argument("--quarter")
+    o.add_argument("--consignments", help="JSON list of consignments (target null = minimise mode)")
+    o.add_argument("--out")
     o.add_argument(
         "--pos",
         help="proofs of sustainability for purchased RFNBO (CSV or JSON list); see rfnbo.model.pos",
@@ -350,6 +357,12 @@ def main(argv: list[str] | None = None) -> int:
     rs.add_argument("--port", type=int, default=8081)
     rs.add_argument("--no-browser", action="store_true")
     rs.set_defaults(fn=_results)
+
+    d = sub.add_parser("data", help="the Data screen: set up, check and run a project folder")
+    d.add_argument("project", help="project folder (created on first save if missing)")
+    d.add_argument("--port", type=int, default=8082)
+    d.add_argument("--no-browser", action="store_true")
+    d.set_defaults(fn=_data)
 
     e = sub.add_parser("edit", help="open the block flow diagram editor")
     e.add_argument("path", help="plant config JSON (created on first save if missing)")

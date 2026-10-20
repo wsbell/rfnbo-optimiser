@@ -302,6 +302,7 @@ def build(
     run: RunResult,
     source_sha256: Sequence[str] | None = None,
     flags: Sequence[dict[str, Any]] | None = None,
+    corrections: Sequence[dict[str, Any]] | None = None,
 ) -> tuple[bytes, bytes, bytes]:
     """Serialise a run: (run.json, batches.jsonl, frame.csv) bytes."""
     frame_bytes = frame_csv(run.frame)
@@ -335,6 +336,9 @@ def build(
                 source_sha256 if source_sha256 is not None else run.frame.source_sha256
             ),
             "quality_flags": list(flags or []),
+            # Data corrections applied over the original files (build plan §11.2); frame.csv
+            # holds the corrected data, source_files_sha256 the originals.
+            **({"corrections": list(corrections)} if corrections else {}),
         },
         "environment": environment(),
         "config": config_json,
@@ -365,10 +369,17 @@ def build(
     return pretty(record), batches_bytes, frame_bytes
 
 
-def seal(run: RunResult, out_dir: str | Path, flags: Sequence[QualityFlag] = ()) -> Path:
+def seal(
+    run: RunResult,
+    out_dir: str | Path,
+    flags: Sequence[QualityFlag] = (),
+    corrections: Sequence[dict[str, Any]] = (),
+) -> Path:
     """Write a sealed run directory. Refuses to overwrite a different sealed run."""
     out = Path(out_dir)
-    run_bytes, batches_bytes, frame_bytes = build(run, flags=[_flag_json(f) for f in flags])
+    run_bytes, batches_bytes, frame_bytes = build(
+        run, flags=[_flag_json(f) for f in flags], corrections=corrections
+    )
     files = {RUN_FILE: run_bytes, BATCHES_FILE: batches_bytes, FRAME_FILE: frame_bytes}
     if out.exists() and any(out.iterdir()):
         existing = {n: (out / n).read_bytes() for n in files if (out / n).exists()}
@@ -417,6 +428,7 @@ def verify(run_dir: str | Path) -> list[str]:
         run,
         source_sha256=rec["provenance"]["source_files_sha256"],
         flags=rec["provenance"]["quality_flags"],
+        corrections=rec["provenance"].get("corrections"),
     )
     if new_frame != frame_bytes:
         problems.append(f"{FRAME_FILE} does not reproduce")

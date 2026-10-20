@@ -90,3 +90,24 @@ def intervals(start: dt.datetime, end: dt.datetime) -> list[dt.datetime]:
 
 def quarter_intervals(year: int, quarter: int, tz: str) -> list[dt.datetime]:
     return intervals(*quarter_bounds(year, quarter, tz))
+
+
+def from_local(ts: dt.datetime, tz: str) -> dt.datetime:
+    """UTC for a time entered in the plant time zone. A time with an offset is taken as given.
+    A wall time that occurs twice (the autumn clock change) or never (spring) is refused, so
+    the user states the offset rather than the app guessing."""
+    if ts.tzinfo is not None:
+        return ts.astimezone(dt.UTC)
+    zone = ZoneInfo(tz)
+    found = {
+        c.astimezone(dt.UTC)
+        for c in (ts.replace(tzinfo=zone, fold=0), ts.replace(tzinfo=zone, fold=1))
+        if c.astimezone(dt.UTC).astimezone(zone).replace(tzinfo=None) == ts
+    }
+    if len(found) != 1:
+        what = "occurs twice" if found else "does not exist"
+        raise ValueError(
+            f"{ts.isoformat(sep=' ')} {what} in {tz} (clock change); give the UTC offset, "
+            "e.g. 2026-10-25 02:15+02:00"
+        )
+    return found.pop()

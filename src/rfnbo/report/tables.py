@@ -816,6 +816,29 @@ def calculation_log(run: RunResult, flags: Sequence[dict[str, Any]] = ()) -> Tab
     return Table("Calculation log", "Calculation log", cols, rows)
 
 
+def data_corrections(corrections: Sequence[dict[str, Any]]) -> Table:
+    """The corrections applied over the original data files, each with its reason."""
+    cols = (
+        _c("id", "Correction", kind="text"),
+        _c("series", "Series", kind="text"),
+        _c("start_utc", "From (UTC)", kind="text"),
+        _c("end_utc", "To, exclusive (UTC)", kind="text"),
+        _c("intervals", "Intervals", kind="integer"),
+        _c("value", "Value per interval"),
+        _c("missing_before", "Missing before", kind="integer"),
+        _c("original_sum", "Original total"),
+        _c("corrected_sum", "Corrected total"),
+        _c("reason", "Reason", kind="text"),
+    )
+    return Table(
+        "Data corrections",
+        "Corrections applied over the original data files",
+        cols,
+        [dict(c) for c in corrections],
+        "The original files are unchanged; their SHA-256 is in the sealed run's provenance.",
+    )
+
+
 def baseline_comparison(optimised: RunResult, baseline: RunResult) -> Table:
     from rfnbo.optimise.pipeline import objectives
 
@@ -916,6 +939,7 @@ def all_tables(
     run_id: str | None = None,
     flags: Sequence[dict[str, Any]] = (),
     baseline: RunResult | None = None,
+    corrections: Sequence[dict[str, Any]] = (),
 ) -> list[Table]:
     from rfnbo.calc.batch import unit_order
 
@@ -947,6 +971,7 @@ def all_tables(
         ledger_summary(run),
         ledger_lines(run),
         reconciliation(run),
+        *([data_corrections(corrections)] if corrections else []),
         calculation_log(run, flags),
     ]
     return tables
