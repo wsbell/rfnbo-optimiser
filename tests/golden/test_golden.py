@@ -1,8 +1,9 @@
 """Phase 4 acceptance: given the workbook decisions, reproduce the workbook values to 1e-6.
 
 Test case 2 predates the non-compliant RFNBO rule (§2.5); its fixtures were regenerated with
-``export_workbook.py --rule-2-5``. Both workbooks predate the no-averaging rule (§12): their
-fixtures were regenerated with ``--no-averaging``, which splits NH₃ batches into parts and
+``export_workbook.py --rule-2-5``. Both workbooks predate the averaging rules (§12, §12.1): their
+fixtures were regenerated with ``--rule-12``, which splits NH₃ batches into parts (compliant H₂
+of one month averaged, non-compliant H₂ apart) and
 re-derives the consignment allocations (see ``superseded`` in the expected files).
 """
 

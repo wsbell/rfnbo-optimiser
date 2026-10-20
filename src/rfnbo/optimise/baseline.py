@@ -175,38 +175,39 @@ def baseline_decisions(
     left_line: dict[str, float] = {}
     for c in sorted(consignments, key=lambda c: (c.ship_date, c.id)):
         _, dist, store = consignment_route(cfg, c.output)
-        # First in, first out among the parts that can meet the target: each part plus the
-        # distribution adder must meet it, as nothing is averaged (§12).
+        # First in, first out among compliant parts. One aggregated batch per production month
+        # and source, averaged by energy (§12.1): a part above the limit goes in only while the
+        # batch's running average stays at or below it.
         limit = (
             math.inf
             if c.target_gCO2e_per_MJ is None
             else c.target_gCO2e_per_MJ - dist.fixed_adder_gCO2e_per_MJ
         )
         stock = sorted(
-            (
-                x
-                for x in run.ledger(store.id).lines
-                if x.compliant and x.ghg_gCO2e_per_MJ <= limit + 1e-9
-            ),
+            (x for x in run.ledger(store.id).lines if x.compliant),
             key=lambda x: (x.month, x.batch),
         )
         need = c.volume_kg
-        by_month: dict[tuple[str, bool], list[Part]] = {}
+        groups: dict[tuple[str, str], list[Part]] = {}
+        room: dict[tuple[str, str], float] = {}  # Σ kg · (limit − GHG) taken so far
         for x in stock:
+            key = (x.month, x.source)
             avail = left_line.setdefault(x.batch, x.in_kg - x.out_feed_kg)
             take = min(avail, need)
+            over = x.ghg_gCO2e_per_MJ - limit
+            if over > 1e-9:
+                take = min(take, max(0.0, room.get(key, 0.0)) / over)
             if take > 1e-9:
-                by_month.setdefault((x.month, x.purchased), []).append(Part(batch=x.batch, kg=take))
+                groups.setdefault(key, []).append(Part(batch=x.batch, kg=take))
+                room[key] = room.get(key, 0.0) - take * over if math.isfinite(limit) else 0.0
                 left_line[x.batch] -= take
                 need -= take
             if need <= 1e-9:
                 break
         aggregated += [
             AggregatedBatchSpec(
-                id=f"{c.id}-{m}" + ("-purchased" if purchased else ""),
-                consignment=c.id,
-                parts=parts,
+                id=allocate.aggregated_id(c.id, m, source), consignment=c.id, parts=parts
             )
-            for (m, purchased), parts in sorted(by_month.items())
+            for (m, source), parts in sorted(groups.items())
         ]
     return decisions.model_copy(update={"aggregated_batches": aggregated})

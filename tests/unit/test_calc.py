@@ -401,11 +401,11 @@ def test_consignment_rules(cfg: PlantConfig) -> None:
         "aggregated_single_month",
         "aggregated_compliant_only",
         "consignment_target",
-        "consignment_threshold",  # §12 decision 4: each part, not an average, meets it
     }
-    # §12: no consignment average; the highest part sets the shipped GHG.
+    # The aggregated batch's GHG is still reported as its energy-weighted average (§12.1),
+    # although mixing months and a non-compliant part makes it invalid.
     shipped = mixed.consignment("C").shipped_ghg_gCO2e_per_MJ
-    assert shipped is not None and math.isclose(shipped, 30 + 3)
+    assert shipped is not None and math.isclose(shipped, (400 * 6 + 100 * 30) / 500 + 3)
 
 
 def test_feed_from_unknown_batch_is_an_error(cfg: PlantConfig) -> None:
@@ -433,3 +433,185 @@ def test_missing_data_is_never_filled(cfg: PlantConfig) -> None:
     cols = dict(ELECTROLYSER, electrolyser_water_kg=[500, float("nan"), 500, 500])
     with pytest.raises(CalculationError, match="missing values"):
         run(cfg, cols, batches=[*E_BATCHES, *N_BATCH])
+
+
+# ---- monthly averaging of compliant RFNBO (build plan §12.1) --------------------------------
+
+# E2 is compliant here: renewable covers 2,400 of its 2,500 kWh.
+COMPLIANT_E2 = dict(ELECTROLYSER, renewable_available_kWh=[2500, 2500, 2500, 2400])
+G1 = 3000 / 18000 + 1  # E1: water only
+G2 = (100 * 400 + 1000) / 6000 + 1  # E2: 100 kWh grid
+
+
+def test_compliant_same_month_feed_is_averaged_into_one_part(cfg: PlantConfig) -> None:
+    feed = [
+        {"source": "E1", "target": "N1", "kg": 120, "pool": "P"},
+        {"source": "E2", "target": "N1", "kg": 48, "pool": "P"},
+    ]
+    r = run(cfg, {**COMPLIANT_E2, **NH3}, batches=[*E_BATCHES, *N_BATCH], feed=feed)
+    n = r.batches["N1"]
+    (p,) = n.parts
+    g = (120 * G1 + 48 * G2) / 168  # energy-weighted (same LHV)
+    c_mj, e_mj, own = 170 * 120, 1000 * 18.6, 500 * 400
+    assert p.id == "N1" and p.pool == "P" and p.source == "own"
+    assert p.ghg_gCO2e_per_MJ == pytest.approx(g * c_mj / e_mj + own / e_mj + 2.0)
+    assert n.ghg_gCO2e_per_MJ == pytest.approx(p.ghg_gCO2e_per_MJ)
+    names = {c.name for c in r.checks}
+    assert {"feed_pool_same_source", "feed_pool_same_month", "feed_pool_compliant_only"} <= names
+    assert not [f for f in r.failures if f.name.startswith("feed_pool")]
+    # Without the label the same feed makes two parts, one per source GHG.
+    unpooled = [{k: v for k, v in a.items() if k != "pool"} for a in feed]
+    r2 = run(cfg, {**COMPLIANT_E2, **NH3}, batches=[*E_BATCHES, *N_BATCH], feed=unpooled)
+    assert [x.id for x in r2.batches["N1"].parts] == ["N1.1", "N1.2"]
+
+
+def test_noncompliant_feed_is_never_averaged(cfg: PlantConfig) -> None:
+    feed = [
+        {"source": "E1", "target": "N1", "kg": 150, "pool": "P"},
+        {"source": "E2", "target": "N1", "kg": 20, "pool": "P"},  # 101 gCO₂e/MJ
+    ]
+    r = run(cfg, {**ELECTROLYSER, **NH3}, batches=[*E_BATCHES, *N_BATCH], feed=feed)
+    assert [f.subject for f in r.failures if f.name == "feed_pool_compliant_only"] == ["N1 pool P"]
+
+
+def test_feed_from_two_months_is_never_averaged(cfg: PlantConfig) -> None:
+    start = dt.datetime(2026, 10, 31, 22, 0, tzinfo=UTC)  # 23:00 CET: 4 intervals in October
+    cols = {
+        "renewable_available_kWh": [2500] * 8,
+        "electrolyser_electricity_kWh": [2500] * 8,
+        "electrolyser_water_kg": [500] * 8,
+        "electrolyser_H2_kg": [50] * 8,
+        "nh3_synthesis_H2_kg": [0] * 7 + [300],
+        "nh3_synthesis_NH3_kg": [0] * 7 + [1700],
+        "nh3_synthesis_electricity_kWh": [0] * 7 + [500],
+    }
+    decisions = {
+        "batches": [
+            batch("E1", "electrolyser", 0, 4, start),
+            batch("E2", "electrolyser", 4, 8, start),
+            batch("N1", "nh3_synthesis", 0, 4, start),
+            batch("N2", "nh3_synthesis", 4, 8, start),
+        ],
+        "feed": [
+            {"source": "E1", "target": "N2", "kg": 150, "pool": "P"},
+            {"source": "E2", "target": "N2", "kg": 150, "pool": "P"},
+        ],
+    }
+    r = calculate(cfg, make_frame(cfg, cols, start=start), Decisions.model_validate(decisions))
+    (f,) = [f for f in r.failures if f.name == "feed_pool_same_month"]
+    assert f.subject == "N2 pool P" and "2026-10, 2026-11" in f.detail
+
+
+def _opening(entries: list[dict[str, Any]], cfg: PlantConfig) -> PlantConfig:
+    raw = cfg.model_dump(mode="json")
+    nh3s = next(b for b in raw["blocks"] if b["id"] == "nh3_storage")
+    nh3s["opening_ledger"] = entries
+    return PlantConfig.model_validate(raw)
+
+
+def _ship(c: PlantConfig, parts: list[dict[str, Any]], **extra: Any) -> RunResult:
+    cons = {
+        "id": "C",
+        "output": "consignment_a",
+        "volume_kg": sum(p["kg"] for p in parts),
+        "ship_date": "2026-11-15",
+        "target_gCO2e_per_MJ": 10.0,
+    }
+    return run(
+        c,
+        ELECTROLYSER,
+        batches=[*E_BATCHES, *N_BATCH],
+        consignments=[cons],
+        aggregated_batches=[{"id": "A", "consignment": "C", "parts": parts}],
+        **extra,
+    )
+
+
+def test_consignment_averages_compliant_parts_of_one_month(cfg: PlantConfig) -> None:
+    """Target 10 less adder 3: a limit of 7. OLD-C (12) alone misses it; 450 kg of OLD-A (6)
+    with 50 kg of OLD-C, both August, average 6.6 and meet it."""
+    entry = {"rfnbo_kg": 1000, "production_month": "2026-08"}
+    c = _opening(
+        [
+            {"batch_id": "OLD-A", "ghg_gCO2e_per_MJ": 6.0, **entry},
+            {"batch_id": "OLD-C", "ghg_gCO2e_per_MJ": 12.0, **entry},
+        ],
+        cfg,
+    )
+    wo = [{"storage": "h2_storage", "batch": "E2", "kg": 20}]  # non-compliant H₂
+    ok = _ship(c, [{"batch": "OLD-A", "kg": 450}, {"batch": "OLD-C", "kg": 50}], write_offs=wo)
+    assert ok.passed, ok.failures
+    assert ok.consignment("C").shipped_ghg_gCO2e_per_MJ == pytest.approx(6.6 + 3)
+    too_much = _ship(c, [{"batch": "OLD-A", "kg": 400}, {"batch": "OLD-C", "kg": 100}])
+    assert "consignment_target" in {f.name for f in too_much.failures}  # 7.2 + 3 > 10
+
+
+def test_two_suppliers_are_never_aggregated(cfg: PlantConfig) -> None:
+    entry = {"rfnbo_kg": 1000, "production_month": "2026-08", "origin": "purchased"}
+    c = _opening(
+        [
+            {"batch_id": "BUY-1", "ghg_gCO2e_per_MJ": 5.0, "supplier": "Gas A", **entry},
+            {"batch_id": "BUY-2", "ghg_gCO2e_per_MJ": 5.0, "supplier": "Gas B", **entry},
+        ],
+        cfg,
+    )
+    r = _ship(c, [{"batch": "BUY-1", "kg": 250}, {"batch": "BUY-2", "kg": 250}])
+    (f,) = [f for f in r.failures if f.name == "aggregated_same_source"]
+    assert f.subject == "A" and "Gas A, Gas B" in f.detail
+
+
+def test_purchased_opening_entry_names_its_supplier(cfg: PlantConfig) -> None:
+    entry = {"batch_id": "BUY", "rfnbo_kg": 1, "ghg_gCO2e_per_MJ": 5.0}
+    with pytest.raises(ValueError, match="names its supplier"):
+        _opening([{**entry, "production_month": "2026-08", "origin": "purchased"}], cfg)
+
+
+def test_stage_c_averages_one_month_to_meet_a_target(cfg: PlantConfig) -> None:
+    """Stage C ships compliant parts above the consignment's limit (7 = target 10 − adder 3)
+    when lower ones of the same month and source bring the average down (§12.1); RFNBO of
+    another month cannot help."""
+    from rfnbo.model.entities import ConsignmentSpec
+    from rfnbo.optimise import allocate
+
+    entry = {"rfnbo_kg": 300, "production_month": "2026-08"}
+    c = _opening(
+        [
+            {"batch_id": "OLD-A", "ghg_gCO2e_per_MJ": 6.0, **entry},
+            {"batch_id": "OLD-C", "ghg_gCO2e_per_MJ": 12.0, **entry},
+            {
+                "batch_id": "SEP",
+                "ghg_gCO2e_per_MJ": 1.0,
+                **{**entry, "production_month": "2026-09"},
+            },
+        ],
+        cfg,
+    )
+    base = run(c, ELECTROLYSER, batches=[*E_BATCHES, *N_BATCH])
+    spec = ConsignmentSpec(
+        id="C",
+        output="consignment_a",
+        volume_kg=640,
+        ship_date=dt.date(2026, 11, 15),
+        target_gCO2e_per_MJ=10.0,
+    )
+    plan = allocate.stage_c(c, base, [spec])
+    assert plan.feasible
+    by_id = {a.id: {p.batch: p.kg for p in a.parts} for a in plan.aggregated}
+    # August: 300 kg of OLD-A (1 below the limit) has room for up to 60 kg of OLD-C (5 above
+    # it); with SEP that is 660 kg, so 640 kg ships and OLD-C goes in as far as it can.
+    aug = by_id["C-2026-08"]
+    assert 0 < aug["OLD-C"] <= 60 + 1e-6
+    assert (aug["OLD-A"] * 6 + aug["OLD-C"] * 12) / (aug["OLD-A"] + aug["OLD-C"]) <= 7 + 1e-6
+    assert sum(aug.values()) + sum(by_id.get("C-2026-09", {}).values()) == pytest.approx(640)
+    shipped = calculate(
+        c,
+        base.frame,
+        base.decisions.model_copy(
+            update={"consignments": [spec], "aggregated_batches": plan.aggregated}
+        ),
+    )
+    assert not [f for f in shipped.failures if f.name.startswith(("consignment", "aggregated"))]
+    assert shipped.consignment("C").shipped_ghg_gCO2e_per_MJ <= 10.0 + 1e-6
+    too_much = spec.model_copy(update={"volume_kg": 700})
+    (short,) = allocate.stage_c(c, base, [too_much]).shortfalls
+    assert short.achievable_kg == pytest.approx(660, abs=1e-3)

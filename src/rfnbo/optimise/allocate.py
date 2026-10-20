@@ -37,11 +37,13 @@ storage's room (:func:`storage_credits`).
 from __future__ import annotations
 
 import datetime as dt
+import re
 from collections import defaultdict
-from collections.abc import Mapping, Sequence
+from collections.abc import Hashable, Mapping, Sequence
 from dataclasses import dataclass, field
 
 from rfnbo.calc.batch import (
+    OWN,
     BatchPart,
     BatchResult,
     output_storage,
@@ -65,7 +67,7 @@ from rfnbo.model.entities import (
     ProofOfSustainability,
     WriteOff,
 )
-from rfnbo.optimise.batching import downstream_of
+from rfnbo.optimise.batching import blend_capacity, downstream_of
 from rfnbo.optimise.lp import INF, LinearProgram
 
 MARGIN = 1e-7  # gCO2e/MJ kept below every limit, so solver tolerance never breaks a check
@@ -98,6 +100,45 @@ def part_ghg(t: BatchResult, g: float) -> float:
 def part_ok(t: BatchResult, g: float, limit: float) -> bool:
     """Whether feeding a source at ``g`` into ``t`` gives a part within ``limit``."""
     return t.energy_MJ > 0 and part_ghg(t, g) <= limit - MARGIN
+
+
+@dataclass(frozen=True)
+class PoolMember:
+    key: Hashable
+    lhv_MJ_per_kg: float
+    ghg_gCO2e_per_MJ: float
+    month: str
+    source: str
+
+
+def pooled_feed(
+    lp: LinearProgram, t: BatchResult, members: Sequence[PoolMember], limit: float
+) -> dict[Hashable, tuple[int, str]]:
+    """Pooled feed into ``t`` (§12.1): for each production month and source, one variable per
+    compliant member and one row holding the pool's energy-weighted part GHG to ``limit``.
+
+    A pool is made only where it can help: some member is within the limit alone and some is
+    not (all within needs no pool; all above cannot average below it). Returns member key →
+    (variable, pool label)."""
+    out: dict[Hashable, tuple[int, str]] = {}
+    if t.energy_MJ <= 0:
+        return out
+    groups: dict[tuple[str, str], list[PoolMember]] = defaultdict(list)
+    for m in members:
+        groups[m.month, m.source].append(m)
+    cap = limit - MARGIN
+    for (month, source), ms in sorted(groups.items()):
+        pg = [part_ghg(t, m.ghg_gCO2e_per_MJ) for m in ms]
+        if not (any(g <= cap for g in pg) and any(g > cap for g in pg)):
+            continue
+        label = f"{t.id}|{month}|{source}"
+        cols = []
+        for m, g in zip(ms, pg, strict=True):
+            j = lp.var()
+            out[m.key] = (j, label)
+            cols.append((j, m.lhv_MJ_per_kg * (g - cap)))
+        lp.row([j for j, _ in cols], [c for _, c in cols], upper=0.0)
+    return out
 
 
 def feed_storage(cfg: PlantConfig, unit: ProcessingUnit) -> StorageUnit | None:
@@ -145,10 +186,26 @@ def stage_b(
         for t in targets:
             if t.feed_consumed_MJ > 0 and part_ok(t, s.ghg_gCO2e_per_MJ, limit_t):
                 x[s.batch, t.id] = lp.var()
-    if not x:
+    # Pooled feed (§12.1): compliant lines of one month and source averaged into one part.
+    pool_of: dict[int, str] = {}
+    z: dict[tuple[str, str], int] = {}
+    for t in targets:
+        if t.feed_consumed_MJ <= 0:
+            continue
+        members = [
+            PoolMember(s.batch, s.lhv_MJ_per_kg, s.ghg_gCO2e_per_MJ, s.month, s.source)
+            for s in sources
+            if s.compliant
+        ]
+        for key, (j, label) in pooled_feed(lp, t, members, limit_t).items():
+            assert isinstance(key, str)
+            z[key, t.id] = j
+            pool_of[j] = label
+    if not x and not z:
         return FeedPlan(unit.id, [], 0.0, "no feed")
+    feed_vars = [*x.items(), *z.items()]
     by_source: dict[str, list[int]] = defaultdict(list)
-    for (sb, _), j in x.items():
+    for (sb, _), j in feed_vars:
         by_source[sb].append(j)
     src = {s.batch: s for s in sources}
 
@@ -164,14 +221,14 @@ def stage_b(
     rfnbo_coef: dict[int, float] = {}
     emissions_coef: dict[int, float] = {}
     for t in targets:
-        cols = [j for (sb, tb), j in x.items() if tb == t.id]
+        cols = [j for (sb, tb), j in feed_vars if tb == t.id]
         if not cols:
             continue
-        lhv = [src[sb].lhv_MJ_per_kg for (sb, tb) in x if tb == t.id]
+        lhv = [src[sb].lhv_MJ_per_kg for (sb, tb), _ in feed_vars if tb == t.id]
         lp.row(cols, lhv, upper=t.feed_consumed_MJ)
         own_per_mj = t.own_emissions_g / t.feed_consumed_MJ
         out_per_mj = t.energy_MJ / t.feed_consumed_MJ
-        for (sb, tb), j in x.items():
+        for (sb, tb), j in feed_vars:
             if tb != t.id:
                 continue
             mj = src[sb].lhv_MJ_per_kg
@@ -188,7 +245,7 @@ def stage_b(
         w_down = run.storage_weights[output_storage(cfg, unit.id).id].weight
         if w_up is None or w_down is None:
             raise ValueError(f"stage B {unit.id}: storage weight unknown; set a fallback")
-        unit_of = {j: tb for (_, tb), j in x.items()}
+        unit_of = {j: tb for (_, tb), j in feed_vars}
         cost1 = {
             j: c * unit.lhv_MJ_per_kg * w_down * kept_share.get(unit_of[j], 1.0)
             for j, c in rfnbo_coef.items()
@@ -216,7 +273,7 @@ def stage_b(
     cost2: dict[int, float] = {
         kj: src[sb].lhv_MJ_per_kg * src[sb].ghg_gCO2e_per_MJ for sb, kj in k.items()
     }
-    for (_, tb), j in x.items():
+    for (_, tb), j in feed_vars:
         cost2[j] = cost2.get(j, 0.0) + weights.get(tb, 0.0) * emissions_coef[j]
     lp.set_cost(cost2)
     second = lp.solve()
@@ -228,24 +285,29 @@ def stage_b(
         )
         # 3. Same-month feed where it makes no difference.
         months = {t.id: t.month for t in targets}
-        lp.set_cost(
-            {
-                j: abs(_month_number(src[sb].month) - _month_number(months[tb]))
-                for (sb, tb), j in x.items()
-            }
-        )
+        cost3: dict[int, float] = {
+            j: abs(_month_number(src[sb].month) - _month_number(months[tb]))
+            for (sb, tb), j in feed_vars
+        }
+        lp.set_cost(cost3)
         third = lp.solve()
         final = third if third.optimal else second
+        if third.optimal and pool_of:
+            # 4. Pool only where it is beneficial: the least pooled feed.
+            lp.row(list(cost3), list(cost3.values()), upper=third.objective + 1e-6)
+            lp.set_cost(dict.fromkeys(pool_of, 1.0))
+            fourth = lp.solve()
+            final = fourth if fourth.optimal else third
     else:
         final = best
 
     feed = [
-        FeedAllocation(source=sb, target=tb, kg=float(final.x[j]))
-        for (sb, tb), j in x.items()
+        FeedAllocation(source=sb, target=tb, kg=float(final.x[j]), pool=pool_of.get(j))
+        for (sb, tb), j in feed_vars
         if final.x[j] > DROP_KG
     ]
-    feed.sort(key=lambda a: (a.target, a.source))
-    rfnbo = sum(rfnbo_coef[j] * final.x[j] for j in x.values() if final.x[j] > DROP_KG)
+    feed.sort(key=lambda a: (a.target, a.source, a.pool or ""))
+    rfnbo = sum(rfnbo_coef[j] * final.x[j] for _, j in feed_vars if final.x[j] > DROP_KG)
     return FeedPlan(unit.id, feed, rfnbo, final.status)
 
 
@@ -412,16 +474,66 @@ def stage_b_network(
         line, b = sources[key]
         return line.month if line is not None else (b.month if b else "")
 
+    def source(key: tuple[str, str]) -> str:
+        line, b = sources[key]
+        return line.source if line is not None else (b.source if b else OWN)
+
     lhv = {sid: storage_lhv(cfg, sid) for sid in stores}
+
+    def lhv_of(key: tuple[str, str]) -> float:
+        return lhv[key[0]]
+
     limits = {u.id: ghg_limit(cfg, frame, u) for u in units}
     x: dict[tuple[tuple[str, str], str], int] = {}
     for key in sources:
         for t in targets:
             if key[0] in fed_by[t.unit] and part_ok(t, ghg(key), limits[t.unit]):
                 x[key, t.id] = lp.var()
+    # Pooled feed (§12.1): compliant storage lines, and credentials, of one production month
+    # and one source averaged into one part of a target batch.
+    left = pos_left(run, {t.id for t in targets})
+    threshold = cfg.settings.rfnbo_threshold_gCO2e_per_MJ
+    pool_of: dict[int, str] = {}
+    zs: dict[tuple[tuple[str, str], str], int] = {}
+    zp: dict[tuple[str, str, str], int] = {}
+    zp_lhv: dict[int, float] = {}
+    pos_ghg: dict[str, float] = {}
+    pos_month: dict[str, str] = {}
+    for t in targets:
+        members = [
+            PoolMember(("s", key), lhv_of(key), ghg(key), month(key), source(key))
+            for key in sources
+            if key[0] in fed_by[t.unit] and compliant(key)
+        ]
+        for f, sup in supply_flows_into(cfg, t.unit):
+            metered = float(frame.series[f.series or ""][t.start_index : t.end_index].sum())
+            for pp in usable_pos(run, sup):
+                if metered <= 0 or left.get(pp.id, 0.0) <= DROP_KG:
+                    continue
+                if not meets_threshold(pp.ghg_gCO2e_per_MJ, threshold):
+                    continue
+                members.append(
+                    PoolMember(
+                        ("p", pp.id, f.id),
+                        sup.lhv_MJ_per_kg,
+                        pp.ghg_gCO2e_per_MJ,
+                        _month_of(pp.dispatch_date),
+                        pp.supplier,
+                    )
+                )
+                pos_ghg[pp.id] = pp.ghg_gCO2e_per_MJ
+                pos_month[pp.id] = _month_of(pp.dispatch_date)
+        for mkey, (j, label) in pooled_feed(lp, t, members, limits[t.unit]).items():
+            assert isinstance(mkey, tuple)
+            pool_of[j] = label
+            if mkey[0] == "s":
+                zs[mkey[1], t.id] = j
+            else:
+                zp[mkey[1], mkey[2], t.id] = j
+                zp_lhv[j] = next(m.lhv_MJ_per_kg for m in members if m.key == mkey)
     k = {key: lp.var() for key in sources if compliant(key)}
     by_source: dict[tuple[str, str], list[int]] = defaultdict(list)
-    for (key, _), j in x.items():
+    for (key, _), j in [*x.items(), *zs.items()]:
         by_source[key].append(j)
     flow_into = {(f.target, f.source): f.id for f in cfg.flows if f.target in stores}
     for key, (src_line, src_batch) in sources.items():
@@ -442,15 +554,14 @@ def stage_b_network(
     # Purchased RFNBO: credentials into the stage's batches through suppliers' deliveries,
     # within each batch's metered delivery and each PoS's quantity left.
     pv: dict[tuple[str, str, str], int] = {}  # (PoS, flow, batch) -> var
-    pv_lhv: dict[int, float] = {}
-    pos_ghg: dict[str, float] = {}
-    pos_month: dict[str, str] = {}
-    left = pos_left(run, {t.id for t in targets})
+    pv_lhv: dict[int, float] = dict(zp_lhv)
     by_pos: dict[str, list[int]] = defaultdict(list)
+    for (pid, _, _), j in zp.items():
+        by_pos[pid].append(j)
     for t in targets:
         for f, sup in supply_flows_into(cfg, t.unit):
             metered = float(frame.series[f.series or ""][t.start_index : t.end_index].sum())
-            cols_f = []
+            cols_f = [j for (_, fid, tb), j in zp.items() if fid == f.id and tb == t.id]
             for pp in usable_pos(run, sup):
                 if metered <= 0 or left.get(pp.id, 0.0) <= DROP_KG:
                     continue
@@ -473,8 +584,12 @@ def stage_b_network(
     unit_of: dict[int, str] = {}
     for t in targets:
         # (energy per kg, GHG of the source, var) for storage feed and credentials alike
-        cols = [(lhv[key[0]], ghg(key), j) for (key, tb), j in x.items() if tb == t.id]
-        cols += [(pv_lhv[j], pos_ghg[k[0]], j) for k, j in pv.items() if k[2] == t.id]
+        cols = [
+            (lhv[key[0]], ghg(key), j) for (key, tb), j in [*x.items(), *zs.items()] if tb == t.id
+        ]
+        cols += [
+            (pv_lhv[j], pos_ghg[k[0]], j) for k, j in [*pv.items(), *zp.items()] if k[2] == t.id
+        ]
         if not cols:
             continue
         lp.row([j for _, _, j in cols], [lv for lv, _, _ in cols], upper=t.feed_consumed_MJ)
@@ -484,9 +599,9 @@ def stage_b_network(
             rfnbo_coef[j] = lv * t.product_kg / t.feed_consumed_MJ
             emissions_coef[j] = lv * (g + own_per_mj + t.adder_gCO2e_per_MJ * out_per_mj)
             unit_of[j] = t.id
-    if not x and not pv:
+    if not x and not pv and not pool_of:
         return NetworkPlan(ids, [], [], 0.0, "no feed")
-    credit_vars = set(pv.values())
+    credit_vars = set(pv.values()) | set(zp.values())
 
     weight = {sid: run.storage_weights[sid].weight for sid in stores}
     carry_value = {kj: lhv[key[0]] * (weight[key[0]] or 0.0) for key, kj in k.items()}
@@ -537,8 +652,8 @@ def stage_b_network(
             upper=third.objective + abs(third.objective) * KEEP + 1e-3,
         )
         # 4. Least purchased emissions: the lowest-GHG credentials where they tie.
-        if pv:
-            cost_p = {j: pv_lhv[j] * pos_ghg[k[0]] for k, j in pv.items()}
+        if pv or zp:
+            cost_p = {j: pv_lhv[j] * pos_ghg[k[0]] for k, j in [*pv.items(), *zp.items()]}
             lp.set_cost(cost_p)
             purchased = lp.solve()
             if purchased.optimal:
@@ -553,33 +668,40 @@ def stage_b_network(
         months = {t.id: t.month for t in targets}
         cost_m: dict[int, float] = {
             j: abs(_month_number(month(key)) - _month_number(months[tb]))
-            for (key, tb), j in x.items()
+            for (key, tb), j in [*x.items(), *zs.items()]
         }
         cost_m.update(
             {
                 j: abs(_month_number(pos_month[k[0]]) - _month_number(months[k[2]]))
-                for k, j in pv.items()
+                for k, j in [*pv.items(), *zp.items()]
             }
         )
         lp.set_cost(cost_m)
         fourth = lp.solve()
         if fourth.optimal:
             final = fourth
+            if pool_of:
+                # 6. Pool only where it is beneficial: the least pooled feed.
+                lp.row(list(cost_m), list(cost_m.values()), upper=fourth.objective + 1e-6)
+                lp.set_cost(dict.fromkeys(pool_of, 1.0))
+                sixth = lp.solve()
+                if sixth.optimal:
+                    final = sixth
 
     feed = [
-        FeedAllocation(source=key[1], target=tb, kg=float(final.x[j]))
-        for (key, tb), j in x.items()
+        FeedAllocation(source=key[1], target=tb, kg=float(final.x[j]), pool=pool_of.get(j))
+        for (key, tb), j in [*x.items(), *zs.items()]
         if final.x[j] > DROP_KG
     ]
-    feed.sort(key=lambda a: (a.target, a.source))
+    feed.sort(key=lambda a: (a.target, a.source, a.pool or ""))
     outputs = [
         OutputAllocation(batch=bid, flow=fid, kg=float(final.x[j]))
         for (bid, fid), j in sorted(o.items())
         if final.x[j] > DROP_KG
     ]
     credits = [
-        PoSAllocation(pos=pid, flow=fid, batch=tb, kg=float(final.x[j]))
-        for (pid, fid, tb), j in sorted(pv.items())
+        PoSAllocation(pos=pid, flow=fid, batch=tb, kg=float(final.x[j]), pool=pool_of.get(j))
+        for (pid, fid, tb), j in sorted([*pv.items(), *zp.items()])
         if final.x[j] > DROP_KG
     ]
     rfnbo = sum(rfnbo_coef[j] * final.x[j] for j in rfnbo_coef if final.x[j] > DROP_KG)
@@ -607,7 +729,11 @@ def _lines_for(ledger: LedgerResult) -> list[LedgerLine]:
 def stage_c(
     cfg: PlantConfig, run: RunResult, consignments: Sequence[ConsignmentSpec]
 ) -> ConsignmentPlan:
-    """Allocate compliant ledger batches to consignments, keeping the lowest GHG carried."""
+    """Allocate compliant ledger batches to consignments, keeping the lowest GHG carried.
+
+    One aggregated batch per consignment, production month and source (§12.1): its parts'
+    energy-weighted GHG is held to the consignment's limit by one linear row, so compliant
+    parts above the limit may ship with lower ones of the same month and source."""
     threshold = cfg.settings.rfnbo_threshold_gCO2e_per_MJ
     by_store: dict[str, list[ConsignmentSpec]] = defaultdict(list)
     adder: dict[str, float] = {}
@@ -634,8 +760,7 @@ def stage_c(
         for line in lines:
             if line.compliant:
                 for c in cons:
-                    if line.ghg_gCO2e_per_MJ <= limits[c.id]:
-                        y[line.batch, c.id] = lp.var()
+                    y[line.batch, c.id] = lp.var()
         # Only compliant RFNBO can be carried forward; non-compliant is written off.
         k = {line.batch: lp.var() for line in lines if line.compliant}
         for line in lines:
@@ -648,6 +773,18 @@ def stage_c(
         for c in cons:
             cols = [y[line.batch, c.id] for line in lines if (line.batch, c.id) in y]
             lp.row(cols, [1.0] * len(cols), lower=c.volume_kg, upper=c.volume_kg)
+            # Each aggregated batch's average at or below the limit: Σ MJ · (g − limit) ≤ 0.
+            groups: dict[tuple[str, str], list[LedgerLine]] = defaultdict(list)
+            for line in lines:
+                if (line.batch, c.id) in y:
+                    groups[line.month, line.source].append(line)
+            for group in groups.values():
+                if any(x.ghg_gCO2e_per_MJ > limits[c.id] for x in group):
+                    lp.row(
+                        [y[x.batch, c.id] for x in group],
+                        [x.lhv_MJ_per_kg * (x.ghg_gCO2e_per_MJ - limits[c.id]) for x in group],
+                        upper=0.0,
+                    )
         remaining = sum(line.in_kg - line.out_feed_kg for line in lines if line.compliant) - sum(
             c.volume_kg for c in cons
         )
@@ -680,23 +817,30 @@ def stage_c(
             shortfalls += diagnose(cfg, run, store_id, cons, limits)
             continue
         for c in cons:
-            # One production month and one origin per aggregated batch (§2.6, §12).
-            groups: dict[tuple[str, bool], list[Part]] = defaultdict(list)
+            # One production month and one source per aggregated batch (§2.6, §12.1).
+            chosen: dict[tuple[str, str], list[Part]] = defaultdict(list)
             for line in lines:
                 j = y.get((line.batch, c.id))
                 if j is not None and sol.x[j] > DROP_KG:
-                    groups[line.month, line.purchased].append(
+                    chosen[line.month, line.source].append(
                         Part(batch=line.batch, kg=float(sol.x[j]))
                     )
-            for m, purchased in sorted(groups):
+            for m, source in sorted(chosen):
                 aggregated.append(
                     AggregatedBatchSpec(
-                        id=f"{c.id}-{m}" + ("-purchased" if purchased else ""),
+                        id=aggregated_id(c.id, m, source),
                         consignment=c.id,
-                        parts=groups[m, purchased],
+                        parts=chosen[m, source],
                     )
                 )
     return ConsignmentPlan(aggregated, not shortfalls, shortfalls)
+
+
+def aggregated_id(consignment: str, month: str, source: str) -> str:
+    """``<consignment>-<month>``, plus the supplier for purchased RFNBO."""
+    if source == OWN:
+        return f"{consignment}-{month}"
+    return f"{consignment}-{month}-" + re.sub(r"[^A-Za-z0-9]+", "-", source).strip("-")
 
 
 def diagnose(
@@ -716,9 +860,17 @@ def diagnose(
     lowest = min((x.ghg_gCO2e_per_MJ for x in compliant), default=INF)
     alone: list[Shortfall] = []
     together: list[Shortfall] = []
+    groups: dict[tuple[str, str], list[LedgerLine]] = defaultdict(list)
+    for x in compliant:
+        groups[x.month, x.source].append(x)
     for c in cons:
-        # Parts are never averaged (§12): only parts at or below the limit count.
-        best = sum(x.in_kg - x.out_feed_kg for x in compliant if x.ghg_gCO2e_per_MJ <= limits[c.id])
+        # Averaged within each production month and source only (§12.1).
+        best = sum(
+            blend_capacity(
+                [x.in_kg - x.out_feed_kg for x in g], [x.ghg_gCO2e_per_MJ for x in g], limits[c.id]
+            )
+            for g in groups.values()
+        )
         limit = limits[c.id] + MARGIN
         if best + 1e-6 >= c.volume_kg:
             together.append(

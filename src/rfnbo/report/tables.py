@@ -171,6 +171,8 @@ def batch_parts(run: RunResult) -> Table:
         _c("unit", "Unit", kind="text"),
         _c("month", "Production month", kind="text"),
         _c("origin", "Origin", kind="text"),
+        _c("source", "Source", kind="text"),
+        _c("pool", "Pool (averaged)", kind="text"),
         _c("sources", "Sources", kind="text"),
         _c("share", "Share of the batch's product"),
         _c("kg", "RFNBO", "kg"),
@@ -188,6 +190,8 @@ def batch_parts(run: RunResult) -> Table:
             "unit": run.batches[p.batch].unit_name,
             "month": p.month,
             "origin": "purchased" if p.purchased else "produced",
+            "source": p.source,
+            "pool": p.pool or "",
             "sources": ", ".join(p.sources),
             "share": p.share,
             "kg": p.kg,
@@ -204,12 +208,13 @@ def batch_parts(run: RunResult) -> Table:
     ]
     return Table(
         "Batch parts",
-        "Downstream batch parts: one per source GHG and origin",
+        "Downstream batch parts: one per pool, or per source GHG and origin",
         cols,
         rows,
-        "Batches are never averaged (build plan §12): each part keeps its source's GHG, "
-        "GHG = (feed emissions + own emissions pro-rated + adder emissions) / part energy, which "
-        "is g × C / E + own / E + adder. Purchased parts are never aggregated with own parts.",
+        "A part keeps its feed's GHG (build plan §12): GHG = (feed emissions + own emissions "
+        "pro-rated + adder emissions) / part energy = g × C / E + own / E + adder. Feed of one "
+        "source and production month, each compliant, may be averaged into one part (a pool, "
+        "§12.1); non-compliant feed never is, and sources (own, or each supplier) never mix.",
     )
 
 
@@ -321,7 +326,7 @@ def consignment_summary(run: RunResult) -> Table:
         _c("volume_kg", "Volume", "kg"),
         _c("energy_MJ", "Energy", "MJ"),
         _c("target", "Target", "gCO2e/MJ"),
-        _c("highest_ghg", "Highest part GHG before shipping", "gCO2e/MJ"),
+        _c("highest_ghg", "Highest aggregated batch GHG before shipping", "gCO2e/MJ"),
         _c("adder", "Distribution adder", "gCO2e/MJ"),
         _c("shipped_ghg", "Shipped GHG", "gCO2e/MJ"),
         _c("margin_target", "Margin to target", "gCO2e/MJ"),
@@ -360,8 +365,9 @@ def consignment_summary(run: RunResult) -> Table:
         "Consignment report",
         cols,
         rows,
-        "Parts are never averaged: shipped GHG is the highest part's GHG + distribution adder, "
-        "and every part must meet the target and the threshold.",
+        "An aggregated batch holds one production month and one source and is averaged by energy "
+        "over its compliant parts (§12.1); months and sources are never averaged together: "
+        "shipped GHG is the highest aggregated batch's GHG + distribution adder.",
     )
 
 
@@ -370,7 +376,9 @@ def consignment_parts(run: RunResult) -> Table:
         _c("consignment", "Consignment", kind="text"),
         _c("product", "Product", kind="text"),
         _c("aggregated", "Aggregated batch", kind="text"),
+        _c("aggregated_ghg", "Aggregated batch GHG (average)", "gCO2e/MJ"),
         _c("month", "Production month", kind="text"),
+        _c("source", "Source", kind="text"),
         _c("batch", "Batch", kind="text"),
         _c("kg", "Quantity", "kg"),
         _c("MJ", "Energy", "MJ"),
@@ -383,7 +391,9 @@ def consignment_parts(run: RunResult) -> Table:
             "consignment": c.id,
             "product": c.product,
             "aggregated": a.id,
+            "aggregated_ghg": a.ghg_gCO2e_per_MJ,
             "month": p.month,
+            "source": p.source,
             "batch": p.batch,
             "kg": p.kg,
             "MJ": p.energy_MJ,

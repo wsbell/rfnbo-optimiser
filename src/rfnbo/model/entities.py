@@ -41,6 +41,9 @@ class FeedAllocation(_Model):
     source: str
     target: str
     kg: float = Field(gt=0)
+    # Feed lines into one target with the same label are averaged into one part (build plan
+    # §12.1): same source and production month, each compliant.
+    pool: str | None = Field(default=None, min_length=1)
 
 
 class OutputAllocation(_Model):
@@ -95,6 +98,7 @@ class PoSAllocation(_Model):
     batch: str | None = None
     start: AwareDatetime | None = None
     end: AwareDatetime | None = None
+    pool: str | None = Field(default=None, min_length=1)  # averaged into one part (§12.1)
 
     @field_validator("start", "end")
     @classmethod

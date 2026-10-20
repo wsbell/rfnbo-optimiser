@@ -141,7 +141,7 @@ def consignment_view(run: RunResult, consignment_id: str) -> dict[str, Any]:
             "months": ", ".join(a.months),
             "kg": a.kg,
             "MJ": a.energy_MJ,
-            "ghg": a.max_ghg_gCO2e_per_MJ,
+            "ghg": a.ghg_gCO2e_per_MJ,  # energy-weighted average (§12.1)
             "parts": [
                 {
                     "batch": p.batch,

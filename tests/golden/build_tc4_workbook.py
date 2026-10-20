@@ -819,7 +819,7 @@ def consignments(wb: Workbook) -> None:
             "Aggregated batch: Oct 2026 (kg)",
             "Aggregated batch: Nov 2026 (kg)",
             "Aggregated batch: Dec 2026 (kg)",
-            "Highest part GHG before shipping (gCO₂e/MJ)",
+            "Highest aggregated batch GHG before shipping (gCO₂e/MJ)",
             "Shipped GHG (gCO₂e/MJ)",
             "Meets target?",
             "≤ 28.2 gCO₂e/MJ?",
@@ -893,9 +893,11 @@ def consignments(wb: Workbook) -> None:
         s.put(f"G{r}", f"=F{r}<={P(8)}+0.000000001", fmt="General")
     s.note(
         "A12",
-        "No averaging (§12): each part of a consignment plus the adder must meet the target, so "
-        "the consignment's GHG is its highest part's. The parts made from credentials (CH₂ 3.5 "
-        "and 12.5, LH₂ 12.7) are above CA's and CB's limits; each consignment takes its "
+        "Averaging (§12.1): an aggregated batch holds one production month and one source (own, "
+        "or one supplier), at the energy-weighted average of its parts; the consignment's GHG is "
+        "its highest aggregated batch's. The parts made from credentials (CH₂ 3.5 and 12.5, LH₂ "
+        "12.7) are purchased, so they could only form aggregated batches of their own, each above "
+        "CA's and CB's limits; each consignment takes its "
         "highest-GHG own parts within the limit first, then the oldest month, so the lowest-GHG "
         "product stays in storage.",
     )

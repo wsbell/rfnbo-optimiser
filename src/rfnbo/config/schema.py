@@ -105,6 +105,23 @@ class OpeningLedgerEntry(_Model):
     # Purchased RFNBO keeps its origin across quarters: it is never aggregated with RFNBO the
     # plant produced (build plan §12 decision 5).
     origin: Literal["produced", "purchased"] = "produced"
+    # Purchased RFNBO names its supplier: RFNBO from different suppliers is never averaged or
+    # aggregated together (build plan §12.1 decision 7).
+    supplier: str | None = Field(default=None, min_length=1)
+
+    @field_validator("supplier", mode="before")
+    @classmethod
+    def _blank_supplier(cls, v: object) -> object:
+        return v or None
+
+    @model_validator(mode="after")
+    def _supplier(self) -> OpeningLedgerEntry:
+        if (self.origin == "purchased") != (self.supplier is not None):
+            raise ValueError(
+                f"opening ledger {self.batch_id}: purchased RFNBO names its supplier; "
+                "RFNBO the plant produced does not"
+            )
+        return self
 
 
 class StorageUnit(_Block):

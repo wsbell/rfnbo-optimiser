@@ -116,6 +116,7 @@ def graph(run: RunResult) -> dict[str, Any]:
                 "ghg": p.ghg_gCO2e_per_MJ,
                 "compliant": p.compliant,
                 "purchased": p.purchased,
+                "source": p.source,
             }
             for p in b.parts
             if p.id != b.id

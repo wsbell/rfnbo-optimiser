@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
+from rfnbo.calc.batch import FeedLine
 from rfnbo.calc.ledger import priority_key
 from rfnbo.calc.tolerance import ABS_KG, at_most, close, meets_threshold
 from rfnbo.config.schema import InputBlock, ProcessingUnit, RfnboSupply, StorageUnit
@@ -38,6 +39,10 @@ SCOPE_PASS = "Build plan §10.2 rule 5: pass-through storage closes at zero (dec
 SCOPE_AGGREGATION = "Scope document: consignment aggregation (one production month)"
 SCOPE_POS = "Build plan §11.1: purchased RFNBO with a proof of sustainability (decided 2026-10-17)"
 SCOPE_CONSIGNMENT = "Scope document: consignment requirements"
+AVERAGING = (
+    "ISCC EU 205-1 (monthly average of compliant values) and ISCC EU 203 §4.2; build plan §12.1 "
+    "(decided 2026-10-20)"
+)
 
 
 @dataclass(frozen=True)
@@ -162,6 +167,61 @@ def feed_source_rfnbo(run: RunResult) -> Iterator[CheckResult]:
             f"{a.source}->{a.target}",
             rfnbo > 0 and tgt.unit in feeds,
             f"{a.kg} kg; source RFNBO {rfnbo:.6g} kg in {store}",
+        )
+
+
+def _pools(run: RunResult) -> Iterator[tuple[str, str, list[FeedLine]]]:
+    for b in run.batches.values():
+        pools: dict[str, list[FeedLine]] = defaultdict(list)
+        for f in b.feed:
+            if f.pool:
+                pools[f.pool].append(f)
+        for label, lines in sorted(pools.items()):
+            yield b.id, label, lines
+
+
+@check
+def feed_pool_same_source(run: RunResult) -> Iterator[CheckResult]:
+    """Feed averaged into one part comes from one source: the plant's own production, or one
+    supplier (§12.1 decision 7)."""
+    for bid, label, lines in _pools(run):
+        sources = sorted({f.source for f in lines})
+        yield _r(
+            "feed_pool_same_source",
+            AVERAGING,
+            f"{bid} pool {label}",
+            len(sources) == 1,
+            f"source(s) {', '.join(sources)}",
+        )
+
+
+@check
+def feed_pool_same_month(run: RunResult) -> Iterator[CheckResult]:
+    """Feed averaged into one part has one production month (§12.1 decision 8): the month of
+    final processing for the plant's own RFNBO, the dispatch month for purchased RFNBO."""
+    for bid, label, lines in _pools(run):
+        months = sorted({f.month for f in lines})
+        yield _r(
+            "feed_pool_same_month",
+            AVERAGING,
+            f"{bid} pool {label}",
+            len(months) == 1,
+            f"production month(s) {', '.join(months)}",
+        )
+
+
+@check
+def feed_pool_compliant_only(run: RunResult) -> Iterator[CheckResult]:
+    """Every value in an average meets the threshold on its own, per MJ of its own product
+    (§12.1 decision 11): non-compliant RFNBO is never averaged."""
+    for bid, label, lines in _pools(run):
+        bad = sorted(f.source_batch for f in lines if not f.compliant)
+        yield _r(
+            "feed_pool_compliant_only",
+            AVERAGING,
+            f"{bid} pool {label}",
+            not bad,
+            f"non-compliant: {bad}" if bad else "every line ≤ threshold",
         )
 
 
@@ -438,20 +498,18 @@ def aggregated_single_month(run: RunResult) -> Iterator[CheckResult]:
 
 
 @check
-def aggregated_purchased_apart(run: RunResult) -> Iterator[CheckResult]:
-    """RFNBO bought and passed through storage unprocessed is aggregated only with other such
-    RFNBO dispatched in the same month, never with RFNBO the plant processed (decision 8)."""
+def aggregated_same_source(run: RunResult) -> Iterator[CheckResult]:
+    """An aggregated batch holds one source: the plant's own production, or one supplier.
+    Purchased RFNBO is never aggregated with the plant's own, nor one supplier's with
+    another's (§12.1 decision 7)."""
     for c in run.consignments:
         for a in c.aggregated:
-            kinds = {p.purchased for p in a.parts}
             yield _r(
-                "aggregated_purchased_apart",
-                SCOPE_POS,
+                "aggregated_same_source",
+                AVERAGING,
                 a.id,
-                len(kinds) == 1,
-                "mixes purchased and processed RFNBO"
-                if len(kinds) > 1
-                else ("purchased RFNBO only" if True in kinds else "processed RFNBO only"),
+                len(a.sources) == 1,
+                f"source(s) {', '.join(a.sources)}",
             )
 
 

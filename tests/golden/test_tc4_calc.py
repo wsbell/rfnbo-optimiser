@@ -87,7 +87,7 @@ def test_every_check_passes() -> None:
         "pos_within_quantity",
         "pos_product",
         "pos_within_delivery",
-        "aggregated_purchased_apart",
+        "aggregated_same_source",
     } <= names
 
 
@@ -349,7 +349,7 @@ def test_credentials_into_storage_are_ledger_batches() -> None:
         frame,
         dec.model_copy(update={"aggregated_batches": [*d.aggregated_batches, mixed]}),
     )
-    assert _failed(bad, "aggregated_purchased_apart") == ["CB2-mixed"]
+    assert _failed(bad, "aggregated_same_source") == ["CB2-mixed"]
 
 
 def test_deliveries_into_storage_balance_its_meter() -> None:

@@ -595,7 +595,7 @@ the liquefier. What was built:
   which can be fed on, consigned or carried. PoS register and supplier reconciliation in
   `calc/purchase.py`. Named checks `pos_compliant`, `pos_in_quarter`, `pos_within_quantity`,
   `pos_product`, `pos_within_delivery` (per flow and batch or range; ranges may not overlap) and
-  `aggregated_purchased_apart` (passed-through RFNBO is aggregated only with other passed-through
+  `aggregated_same_source` (passed-through RFNBO is aggregated only with other passed-through
   RFNBO, by dispatch month).
 - Lineage: each PoS is a node; PoS → batch (feed) and PoS → `write-off:pos:<quarter>` for what was
   not allocated. Records show each feed line's origin; the results browser has a PoS register and
@@ -703,7 +703,7 @@ Consequences:
   the parts within each consignment's limit.
 - **Test cases.** Test cases 1 and 2 (the original workbooks) blend hydrogen sub-batches of
   different GHG into NH₃ batches: their fixtures are regenerated under these rules
-  (`export_workbook.py --no-averaging`) with the workbook values kept under `superseded`. Test
+  (`export_workbook.py --rule-12`, which also applies §12.1) with the workbook values kept under `superseded`. Test
   case 1's consignments were met only by averaging September NH₃ (6) with October's (14.09):
   without it only the 300,000 kg of September NH₃ is at or below their 12 gCO₂e/MJ limit, so
   neither C1 nor C2 can be met. Test case 2's are met from September NH₃. Test case 3's base
@@ -746,3 +746,9 @@ Consequences:
   compliant lines into one downstream batch (one linear row per pool) where that feeds more than
   separate parts could; stage C keeps one aggregated batch per consignment, month and source
   with a linear row holding its average to the consignment's limit.
+- **Test cases.** The workbooks' NH₃ batches average all their H₂; under §12.1 the compliant H₂
+  of one month is averaged (a pool), and non-compliant H₂ stays apart. Test case 1's December
+  NH₃ is therefore one compliant part at the workbook's 14.66 gCO₂e/MJ again (§12 had split off
+  a non-compliant part from the 17.83 H₂); its consignments still cannot be met, as they average
+  September with October NH₃. Test case 2's NH₃ write-off is the workbook's again. Test cases 3
+  and 4 are unchanged: each month holds one part per source.

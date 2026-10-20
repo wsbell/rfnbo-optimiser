@@ -146,6 +146,7 @@ def _ledgers(run: RunResult) -> list[dict[str, Any]]:
                         "write_off_kg": x.write_off_kg,
                         "carried_kg": x.carried_kg,
                         "purchased": x.purchased,
+                        "source": x.source,
                     }
                     for x in led.lines
                 ],
@@ -186,7 +187,7 @@ def _consignments(run: RunResult) -> list[dict[str, Any]]:
                 "volume_kg": c.volume_kg,
                 "allocated_kg": c.allocated_kg,
                 "energy_MJ": c.energy_MJ,
-                "max_part_ghg": c.max_ghg_gCO2e_per_MJ,
+                "highest_aggregated_ghg": c.max_ghg_gCO2e_per_MJ,
                 "distribution_adder": c.distribution_adder_gCO2e_per_MJ,
                 "shipped_ghg": shipped,
                 "target": c.target_gCO2e_per_MJ,
@@ -205,7 +206,8 @@ def _consignments(run: RunResult) -> list[dict[str, Any]]:
                         "months": list(a.months),
                         "kg": a.kg,
                         "energy_MJ": a.energy_MJ,
-                        "max_part_ghg": a.max_ghg_gCO2e_per_MJ,
+                        "ghg": a.ghg_gCO2e_per_MJ,
+                        "sources": list(a.sources),
                         "parts": [
                             {
                                 "batch": p.batch,
@@ -215,6 +217,7 @@ def _consignments(run: RunResult) -> list[dict[str, Any]]:
                                 "ghg": p.ghg_gCO2e_per_MJ,
                                 "compliant": p.compliant,
                                 "purchased": p.purchased,
+                                "source": p.source,
                             }
                             for p in a.parts
                         ],
@@ -461,6 +464,7 @@ def carried_ledger(run_dir: str | Path) -> dict[str, list[OpeningLedgerEntry]]:
                 rfnbo_share=x["rfnbo_share"],
                 production_month=x["month"],
                 origin="purchased" if x.get("purchased") else "produced",
+                supplier=x["source"] if x.get("purchased") else None,
             )
             for x in led["lines"]
             if x["compliant"] and x["carried_kg"] > 0

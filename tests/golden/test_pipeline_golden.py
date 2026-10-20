@@ -80,6 +80,32 @@ def test_noncompliant_rfnbo_is_not_fed_downstream() -> None:
     assert math.isclose(h2.carried_kg, h2.physical_kg, rel_tol=1e-9)
 
 
+def test_compliant_same_month_h2_is_pooled_where_it_helps() -> None:
+    """§12.1: stage B averages compliant H₂ of one month before it feeds NH₃ where that feeds
+    more than separate parts could; every pool passes its checks, and the optimiser carries
+    more than it did without averaging (26,508,856 MJ in phase 18)."""
+    run = _pipeline("tc2").optimised.run
+    pooled = [a for a in run.decisions.feed if a.pool]
+    assert pooled
+    for a in pooled:
+        src = run.parts[a.source]
+        assert src.compliant and a.pool.endswith(f"|{src.month}|own")
+    names = {c.name for c in run.checks}
+    assert {"feed_pool_same_source", "feed_pool_same_month", "feed_pool_compliant_only"} <= names
+    assert _pipeline("tc2").optimised.objectives.carried_value_MJ > 26508856
+    # Test case 1: December's 17.83 gCO₂e/MJ H₂ is above NH₃'s feed limit alone (13.45) but
+    # compliant, so it is fed pooled with December's 1.17 H₂.
+    tc1 = _pipeline("tc1").optimised.run
+    (high,) = [
+        b
+        for b in tc1.batches.values()
+        if b.unit == "electrolyser" and b.compliant and (b.ghg_gCO2e_per_MJ or 0) > 13.45
+    ]
+    fed = [a for a in tc1.decisions.feed if a.source == high.id]
+    assert fed and all(a.pool for a in fed)
+    assert math.isclose(sum(a.kg for a in fed), high.rfnbo_kg, rel_tol=1e-6)
+
+
 @pytest.mark.parametrize("case", ["tc1", "tc2"])
 def test_optimised_is_at_least_as_good_as_the_baseline(case: str) -> None:
     res = _pipeline(case)

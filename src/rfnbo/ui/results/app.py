@@ -302,7 +302,7 @@ def consignment_page(run_id: str, consignment_id: str) -> None:
     with ui.row().classes("gap-4"):
         for label, value in (
             ("Volume (kg)", fmt(s["volume_kg"])),
-            ("Highest part GHG (gCO2e/MJ)", fmt(s["highest_ghg"], "gCO2e/MJ")),
+            ("Highest aggregated batch GHG (gCO2e/MJ)", fmt(s["highest_ghg"], "gCO2e/MJ")),
             ("Distribution adder", fmt(s["adder"], "gCO2e/MJ")),
             ("Shipped GHG", fmt(s["shipped_ghg"], "gCO2e/MJ")),
             ("Target", fmt(s["target"], "gCO2e/MJ")),

@@ -1,7 +1,7 @@
 """Phase 8 acceptance: reports regenerate the workbook tables.
 
 Test case 1 is compared with the workbook's own sheets, cell by cell, except where the
-no-averaging rule (§12) changes the workbook's values (NH₃ GHG, the NH₃ ledger and the
+averaging rules (§12, §12.1) change the workbook's values (NH₃ GHG, the NH₃ ledger and the
 consignments): those are compared with the regenerated fixture. Test case 2 is compared with its
 regenerated fixture (the workbook predates the §2.5 and §12 rules).
 """
@@ -341,16 +341,19 @@ def test_cli_report_from_a_sealed_run(tmp_path: Path, capsys: pytest.CaptureFixt
 
 
 def test_batch_parts_table_lists_every_downstream_part() -> None:
-    """§12: December NH₃ in test case 1 has a compliant part (from the 1.17 H₂) and a
-    non-compliant one (from the 17.83 H₂); the register shows the highest."""
-    _, expected, _ = _run("tc1")
-    rows = _by(_table("tc1", "Batch parts"), "part")
-    want = {pid: x for b in expected["nh3_batches"].values() for pid, x in b["parts"].items()}
-    assert set(rows) == set(want)
-    for pid, x in want.items():
-        same(rows[pid]["ghg"], x["ghg"], f"{pid} GHG")
-        same(rows[pid]["kg"], x["kg"], f"{pid} kg")
-        same(rows[pid]["compliant"], x["compliant"], f"{pid} compliant")
+    """§12.1: each NH₃ batch's compliant H₂ of one month is one averaged part; non-compliant H₂
+    (test case 2, §2.5) makes parts of its own. The register shows the highest part."""
+    for case in ("tc1", "tc2"):
+        _, expected, _ = _run(case)
+        rows = _by(_table(case, "Batch parts"), "part")
+        want = {pid: x for b in expected["nh3_batches"].values() for pid, x in b["parts"].items()}
+        assert set(rows) == set(want), case
+        for pid, x in want.items():
+            same(rows[pid]["ghg"], x["ghg"], f"{pid} GHG")
+            same(rows[pid]["kg"], x["kg"], f"{pid} kg")
+            same(rows[pid]["compliant"], x["compliant"], f"{pid} compliant")
     dec = _by(_table("tc1", "Batches NH3 synthesis"))["N-2026-12"]
-    assert dec["parts"] == 2 and dec["ghg"] is None and not dec["compliant"]
-    same(dec["max_ghg"], want["N-2026-12.2"]["ghg"], "highest part")
+    assert dec["parts"] == 1 and dec["compliant"]
+    same(dec["ghg"], 14.660063696276, "December NH₃ as in the workbook")
+    oct2 = _by(_table("tc2", "Batches NH3 synthesis"))["N-2026-10"]
+    assert oct2["parts"] == 2 and oct2["ghg"] is None and not oct2["compliant"]

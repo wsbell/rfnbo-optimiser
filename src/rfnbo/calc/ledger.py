@@ -20,9 +20,11 @@ from dataclasses import dataclass
 from typing import Literal
 
 from rfnbo.calc.batch import (
+    OWN,
     BatchPart,
     BatchResult,
     CalculationError,
+    dispatch_month,
     output_storages,
     storage_lhv,
     supply_flow,
@@ -47,6 +49,7 @@ class LedgerLine:
     out_consignment_kg: float
     write_off_kg: float
     purchased: bool = False  # purchased RFNBO, passed through or processed (§12 decisions 1, 5)
+    source: str = OWN  # own production, or the supplier (§12.1 decision 7)
 
     @property
     def closing_before_kg(self) -> float:
@@ -307,6 +310,7 @@ def compute_ledgers(
                     out_consignment_kg=cons_out[k],
                     write_off_kg=written[k],
                     purchased=e.origin == "purchased",
+                    source=e.supplier or OWN,
                 )
             )
         for b in parts.values():
@@ -326,6 +330,7 @@ def compute_ledgers(
                     rfnbo_share=b.share,
                     compliant=b.compliant,
                     purchased=b.purchased,
+                    source=b.source,
                     lhv_MJ_per_kg=lhv,
                     in_kg=in_kg,
                     out_feed_kg=feed_out[k],
@@ -342,7 +347,7 @@ def compute_ledgers(
                 LedgerLine(
                     batch=pos_id,
                     origin="purchased",
-                    month=f"{bp.dispatch_date.year:04d}-{bp.dispatch_date.month:02d}",
+                    month=dispatch_month(bp.dispatch_date),
                     ghg_gCO2e_per_MJ=bp.ghg_gCO2e_per_MJ,
                     rfnbo_share=1.0,
                     compliant=meets_threshold(bp.ghg_gCO2e_per_MJ, threshold),
@@ -352,6 +357,7 @@ def compute_ledgers(
                     out_consignment_kg=cons_out[k],
                     write_off_kg=written[k],
                     purchased=True,
+                    source=bp.supplier,
                 )
             )
         lines.sort(

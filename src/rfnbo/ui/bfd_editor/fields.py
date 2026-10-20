@@ -84,6 +84,7 @@ BLOCK_FIELDS: dict[str, tuple[FieldSpec | TableSpec, ...]] = {
                 FieldSpec("rfnbo_share", "RFNBO share", "number", hint="blank if unknown"),
                 FieldSpec("production_month", "Month (YYYY-MM)", "text"),
                 FieldSpec("origin", "Origin", "select", ("produced", "purchased")),
+                FieldSpec("supplier", "Supplier", "text", hint="purchased only"),
             ),
         ),
     ),

@@ -88,7 +88,10 @@ def batch_record(
                 "ghg_uom": "gCO2e/MJ",
                 "emissions_g": f.emissions_g,
                 "compliant": f.compliant,
+                "source": f.source,
+                "month": f.month,
             }
+            | ({"pool": f.pool} if f.pool else {})
             for f in b.feed
         ]
         rec["feed_consumed_kg"] = b.feed_consumed_kg
@@ -123,6 +126,7 @@ def batch_record(
             "part": p.id,
             "sources": list(p.sources),
             "purchased": p.purchased,
+            "source": p.source,
             "share": p.share,
             "qty": p.kg,
             "uom": "kg",
@@ -133,6 +137,7 @@ def batch_record(
             "ghg": p.ghg_gCO2e_per_MJ,
             "compliant": p.compliant,
         }
+        | ({"pool": p.pool} if p.pool else {})
         for p in b.parts
     ]
     rec.update(
@@ -186,7 +191,12 @@ def recompute_parts(rec: dict[str, Any]) -> dict[str, float]:
     energy = rec["output"]["energy_MJ"]
     out: dict[str, float] = {}
     for p in rec["parts"]:
-        lines = [f for f in rec["feed"] if f["batch"] in p["sources"]]
+        # A pool's lines (averaged, §12.1); otherwise the part's sources outside any pool.
+        lines = (
+            [f for f in rec["feed"] if f.get("pool") == p["pool"]]
+            if p.get("pool")
+            else [f for f in rec["feed"] if f["batch"] in p["sources"] and not f.get("pool")]
+        )
         share = sum(f["energy_MJ"] for f in lines) / rec["feed_consumed_MJ"]
         feed = sum(f["emissions_g"] for f in lines)
         mj = share * energy

@@ -57,13 +57,10 @@ def test_consignment_and_batch_views() -> None:
         "E-2026-12-06",
         "E-2026-12-07",
     }
-    # December NH₃ makes two parts (§12): from the 1.17 H₂ and from the 17.83 H₂.
-    assert [(d["kind"], d["to"]) for d in bv["downstream"]] == [
-        ("output", "N-2026-12.1"),
-        ("output", "N-2026-12.2"),
-    ]
-    part = V.batch_view(run, "N-2026-12.2")
-    assert {d["kind"] for d in part["downstream"]} == {"write_off"}
+    # December's compliant H₂ (1.17 and 17.83) is averaged into one NH₃ part (§12.1), which is
+    # written off in full (spot sale).
+    assert {d["kind"] for d in bv["downstream"]} == {"write_off"}
+    assert [p["part"] for p in bv["parts"]] == ["N-2026-12"]
     opening = V.batch_view(run, "N-2026-09")
     assert opening["kind"] == "opening" and opening["rfnbo_kg"] == 300000.0
     agg = next(d for d in opening["downstream"] if d["kind"] == "aggregation")

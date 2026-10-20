@@ -300,13 +300,21 @@ def segment(
     return out
 
 
-def value_fn(us: UnitSeries, mode: Literal["blend", "limit"], mu: float, limit: float) -> ValueFn:
-    """``blend``: RFNBO MJ less μ times its GHG above the limit (shapes lower-GHG batches);
-    ``limit``: a batch's RFNBO MJ when its own GHG is at most ``limit``, else nothing."""
+def value_fn(
+    us: UnitSeries,
+    mode: Literal["blend", "limit"],
+    mu: float,
+    limit: float,
+    threshold: float = math.inf,
+) -> ValueFn:
+    """``blend``: RFNBO MJ less μ times its GHG above the limit, the Lagrangian value of a
+    month's blend (§12.1), and nothing for a batch above ``threshold``, which never enters an
+    average; ``limit``: a batch's RFNBO MJ when its own GHG is at most ``limit``, else nothing."""
 
     def blend(starts: IntArray, end: int) -> FloatArray:
         rf, attributed, _ = us.metrics(starts, end)
-        return np.maximum(0.0, rf - mu * (attributed - limit * rf))
+        value = np.maximum(0.0, rf - mu * (attributed - limit * rf))
+        return np.where(attributed <= (threshold + 1e-9) * rf, value, 0.0)
 
     def at_limit(starts: IntArray, end: int) -> FloatArray:
         rf, attributed, _ = us.metrics(starts, end)
@@ -328,31 +336,79 @@ class Score:
         return (round(self.feedable_MJ, 3), -round(self.attributed_g, 0), -self.batches)
 
 
-def feedable_MJ(rf: FloatArray, attributed: FloatArray, limit: float, cap: float) -> float:
-    """RFNBO MJ a downstream unit can take: batches whose own GHG is at most ``limit`` (no
-    blending, §12), lowest GHG first, up to the feed cap."""
+def blend_capacity(amounts: Sequence[float], ghgs: Sequence[float], limit: float) -> float:
+    """Most of ``amounts`` whose amount-weighted GHG stays at or below ``limit``: everything at
+    or below it, then the lowest GHG above it while the room lasts (exact: a fractional
+    knapsack on room per unit)."""
+    pairs = sorted((g, a) for a, g in zip(amounts, ghgs, strict=True) if a > 0)
+    room = sum(a * (limit - g) for g, a in pairs if g <= limit + 1e-9)
+    total = sum(a for g, a in pairs if g <= limit + 1e-9)
+    for g, a in pairs:
+        if g <= limit + 1e-9:
+            continue
+        if room <= 0:
+            break
+        take = min(a, room / (g - limit))
+        total += take
+        room -= take * (g - limit)
+    return total
+
+
+def feedable_MJ(
+    rf: FloatArray,
+    attributed: FloatArray,
+    limit: float,
+    cap: float,
+    months: Sequence[int] | None = None,
+    threshold: float = math.inf,
+) -> float:
+    """RFNBO MJ a downstream unit can take, up to the feed cap. Compliant batches (each at most
+    ``threshold`` on its own) of one month may be averaged (§12.1): per month, the most MJ whose
+    blend stays at or below ``limit``. Batches of different months are never averaged."""
     ghg = np.divide(attributed, rf, out=np.full_like(rf, np.inf), where=rf > 0)
-    ok = (rf > 0) & (ghg <= limit + 1e-9)
-    return min(float(rf[ok].sum()), cap)
+    ok = (rf > 0) & (ghg <= threshold + 1e-9)
+    groups: dict[int, list[int]] = {}
+    for i in np.flatnonzero(ok):
+        groups.setdefault(0 if months is None else months[int(i)], []).append(int(i))
+    fed = sum(
+        blend_capacity([float(rf[i]) for i in ix], [float(ghg[i]) for i in ix], limit)
+        for ix in groups.values()
+    )
+    return min(fed, cap)
 
 
 @dataclass(frozen=True)
 class UnitBatching:
     unit: str
     cuts: list[tuple[int, int]]
-    mu: float | None  # the μ whose batching scored best; None for the per-batch limit
+    mu: float | None  # the μ whose batching scored best overall; None for the per-batch limit
+    # (each month then takes its best candidate, so months may follow different μ)
     limit_gCO2e_per_MJ: float | None
     score: Score
     search: list[tuple[float, Score]] = field(default_factory=list)
 
 
 def score_of(
-    us: UnitSeries, cuts: Sequence[tuple[int, int]], down: Downstream | None, limit: float
+    us: UnitSeries,
+    cuts: Sequence[tuple[int, int]],
+    down: Downstream | None,
+    limit: float,
+    slices: Sequence[tuple[int, int]] = (),
+    threshold: float = math.inf,
 ) -> Score:
+    """``slices`` are the month windows: batches in one may be averaged (§12.1)."""
     s = np.array([c[0] for c in cuts], dtype=np.int64)
     e = np.array([c[1] for c in cuts], dtype=np.int64)
     rf, attributed, _ = us.metrics(s, e)
-    fed = feedable_MJ(rf, attributed, limit, math.inf if down is None else down.cap_MJ)
+    months = [next((k for k, (a, b) in enumerate(slices) if a <= c < b), -1) for c, _ in cuts]
+    fed = feedable_MJ(
+        rf,
+        attributed,
+        limit,
+        math.inf if down is None else down.cap_MJ,
+        months if slices else None,
+        threshold,
+    )
     return Score(fed, float(attributed.sum()), len(cuts))
 
 
@@ -370,7 +426,13 @@ def batch_unit(
     down = downstream(cfg, frame, unit, caps)
     limit = product_limit(cfg, frame, unit, caps)
     base = segment(slices, lo, value_fn(us, "limit", 0.0, limit), eps)
-    best_score, best_cuts, best_mu = score_of(us, base, down, limit), base, None
+    threshold = cfg.settings.rfnbo_threshold_gCO2e_per_MJ
+    months = slices  # month windows: batches in one may be averaged (§12.1)
+    best_score, best_cuts, best_mu = (
+        score_of(us, base, down, limit, months, threshold),
+        base,
+        None,
+    )
     if down is None:
         return UnitBatching(unit.id, base, None, None, best_score)
 
@@ -378,8 +440,8 @@ def batch_unit(
 
     def run(mu: float) -> Score:
         if mu not in tried:
-            cuts = segment(slices, lo, value_fn(us, "blend", mu, limit), eps)
-            tried[mu] = (score_of(us, cuts, down, limit), cuts)
+            cuts = segment(slices, lo, value_fn(us, "blend", mu, limit, threshold), eps)
+            tried[mu] = (score_of(us, cuts, down, limit, months, threshold), cuts)
         return tried[mu][0]
 
     def better(a: float, b: float) -> bool:
@@ -407,6 +469,22 @@ def batch_unit(
         )
     if tried[best][0].key() > best_score.key():
         best_score, best_cuts, best_mu = tried[best][0], tried[best][1], best
+    # Months are averaged apart (§12.1), so each month may take its best candidate.
+    candidates: list[list[tuple[int, int]]] = [base, *(cuts for _, cuts in tried.values())]
+    mixed: list[tuple[int, int]] = []
+
+    def month_key(cs: list[tuple[int, int]]) -> tuple[float, float, int]:
+        return score_of(us, cs, None, limit, slices, threshold).key()
+
+    for a, b in slices:
+        options: list[list[tuple[int, int]]] = [
+            [c for c in cuts if a <= c[0] < b] for cuts in candidates
+        ]
+        chosen: list[tuple[int, int]] = max(options, key=month_key)
+        mixed.extend(chosen)
+    mixed_score = score_of(us, mixed, down, limit, months, threshold)
+    if mixed_score.key() > best_score.key():
+        best_score, best_cuts = mixed_score, mixed
     search = sorted((mu, s) for mu, (s, _) in tried.items())
     return UnitBatching(unit.id, best_cuts, best_mu, limit, best_score, search)
 

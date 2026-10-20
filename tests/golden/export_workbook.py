@@ -1,7 +1,7 @@
 """Export a test workbook's decision set and expected values to JSON fixtures.
 
     uv run python tests/golden/export_workbook.py <workbook.xlsx> <out-prefix> [--rule-2-5]
-        [--no-averaging]
+        [--rule-12]
 
 Writes ``<out-prefix>.decisions.json`` and ``<out-prefix>.expected.json``. Values are read from
 the workbook's cached results; nothing here uses the calculator.
@@ -13,12 +13,15 @@ RFNBO cannot be carried into the next quarter (decided 2026-10-17), so all of it
 end is written off, ahead of compliant batches. Workbook values that change are kept under
 ``superseded``.
 
-``--no-averaging`` regenerates what build plan §12 (decided 2026-10-20) changes: batches are never
-averaged. Each NH₃ batch's RFNBO output is split into parts, one per H₂ source GHG
-(GHG_j = g_j · C ÷ E + own ÷ E + adder, with C the H₂ consumed and E the NH₃ energy, both in MJ),
-the NH₃ ledger works on parts, and each consignment's GHG is its highest part plus the
-distribution adder. The workbook's consignment allocations average September and October NH₃ to
-meet the targets, which is no longer allowed, so they are re-derived: each consignment takes the
+``--rule-12`` regenerates what build plan §12 and §12.1 (decided 2026-10-20) change. An NH₃
+batch's RFNBO is split into parts: the compliant H₂ of one production month is averaged into one
+part (the workbook averaged all its feed; §12.1 allows that only for compliant RFNBO of one month
+and source), and each non-compliant H₂ GHG makes a part of its own (never averaged). A part's
+GHG is g × C ÷ E + own ÷ E + adder, with g the energy-weighted GHG of its H₂, C the H₂ consumed
+and E the NH₃ energy (MJ). The NH₃ ledger works on parts; a consignment's GHG is the highest
+energy-weighted average of its aggregated batches (one per production month) plus the
+distribution adder. The workbook's allocations average September with October NH₃, which
+§12.1 does not allow (different months), so they are re-derived: each consignment takes the
 parts at or below its limit (target − adder, and the threshold) in ascending GHG, oldest first;
 what is still missing comes from the lowest-GHG parts left, and the consignment then misses its
 target. Workbook values that change are kept under ``superseded``.
@@ -84,7 +87,7 @@ def runs(
 
 
 def export(
-    path: Path, rule_2_5: bool, no_averaging: bool = False
+    path: Path, rule_2_5: bool, rule_12: bool = False
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     wb = openpyxl.load_workbook(path, data_only=True, read_only=True)
 
@@ -305,10 +308,18 @@ def export(
             shipped_ghg=r[12],
         )
 
-    if no_averaging:
+    if rule_12:
         consignments_by_id = {c["id"]: c for c in consignments}
-        aggregated = _no_averaging(
-            h2, nh3, fed_into, nh3_lines, nh3_ledger, consignments_by_id, cons_expected, superseded
+        aggregated = _rule_12(
+            h2,
+            nh3,
+            fed_into,
+            feed,
+            nh3_lines,
+            nh3_ledger,
+            consignments_by_id,
+            cons_expected,
+            superseded,
         )
 
     write_offs = [
@@ -330,7 +341,7 @@ def export(
         shipped_ghg=pick(vt, "Lowest achievable shipped GHG"),
     )
 
-    if no_averaging:
+    if rule_12:
         v1 = _variant_minimise(v1, nh3_lines, superseded)
 
     decisions = {
@@ -343,7 +354,7 @@ def export(
     expected = {
         "source": path.name,
         "rule_2_5_applied": rule_2_5,
-        "no_averaging_applied": no_averaging,
+        "rule_12_applied": rule_12,
         "intervals": len(body),
         "h2_batches": h2,
         "nh3_batches": nh3,
@@ -359,22 +370,31 @@ def export(
 
 
 def _parts(
-    h2: dict[str, dict[str, Any]], b: dict[str, Any], sources: dict[str, float]
-) -> list[tuple[float, float, float, list[str]]]:
-    """(GHG, kg, share, sources) of each part of NH₃ batch ``b``, in ascending GHG."""
+    h2: dict[str, dict[str, Any]], bid: str, b: dict[str, Any], sources: dict[str, float]
+) -> list[tuple[float, float, float, list[str], str | None]]:
+    """(GHG, kg, share, sources, pool) of each part of NH₃ batch ``b``, in ascending GHG.
+    Compliant H₂ of one month is one pool (§12.1); non-compliant H₂ is never averaged."""
     c_mj = b["feed_consumed_kg"] * H2_LHV
     e_mj = b["product_kg"] * NH3_LHV
     own = b["electricity_emissions_g"]
-    groups: dict[float, list[str]] = {}
+    groups: dict[tuple[str, ...], list[str]] = {}
     for src in sorted(sources):
         if h2[src]["rfnbo_kg"] > 0:
-            groups.setdefault(round(h2[src]["ghg"], 9), []).append(src)
+            g = h2[src]["ghg"]
+            key = (
+                ("pool", h2[src]["month"]) if g <= THRESHOLD + 1e-9 else ("line", repr(round(g, 9)))
+            )
+            groups.setdefault(key, []).append(src)
     out = []
-    for _g, srcs in sorted(groups.items()):
-        share = sum(sources[s] for s in srcs) * H2_LHV / c_mj
-        ghg = h2[srcs[0]]["ghg"] * c_mj / e_mj + own / e_mj + NH3_ADDER
-        out.append((ghg, share * b["product_kg"], share, srcs))
-    return out
+    for key, srcs in groups.items():
+        kg = sum(sources[s] for s in srcs)
+        g = sum(sources[s] * h2[s]["ghg"] for s in srcs) / kg  # one LHV: energy-weighted
+        share = kg * H2_LHV / c_mj
+        ghg = g * c_mj / e_mj + own / e_mj + NH3_ADDER
+        distinct = len({round(h2[s]["ghg"], 9) for s in srcs}) > 1
+        pool = f"{bid}|{key[1]}|own" if key[0] == "pool" and distinct else None
+        out.append((ghg, share * b["product_kg"], share, srcs, pool))
+    return sorted(out, key=lambda x: (round(x[0], 9), x[3]))
 
 
 def _write_off(lines: dict[str, dict[str, Any]], physical_kg: float) -> float:
@@ -397,18 +417,19 @@ def _write_off(lines: dict[str, dict[str, Any]], physical_kg: float) -> float:
     return excess
 
 
-def _no_averaging(
+def _rule_12(
     h2: dict[str, dict[str, Any]],
     nh3: dict[str, dict[str, Any]],
     fed_into: dict[str, dict[str, float]],
+    feed: list[dict[str, Any]],
     nh3_lines: dict[str, dict[str, Any]],
     nh3_ledger: dict[str, Any],
     consignments: dict[str, dict[str, Any]],
     cons_expected: dict[str, dict[str, Any]],
     superseded: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    """Apply build plan §12 to the NH₃ batches, the NH₃ ledger and the consignments; returns
-    the re-derived aggregated batches."""
+    """Apply build plan §12 and §12.1 to the NH₃ batches (labelling pooled feed in ``feed``),
+    the NH₃ ledger and the consignments; returns the re-derived aggregated batches."""
     superseded["nh3_ghg"] = {b: v["ghg"] for b, v in nh3.items()}
     superseded["nh3_ledger"] = {
         "lines": {b: dict(x) for b, x in nh3_lines.items()},
@@ -422,17 +443,24 @@ def _no_averaging(
     lines: dict[str, dict[str, Any]] = OrderedDict(
         (b, x) for b, x in nh3_lines.items() if b not in nh3
     )
+    pool_of: dict[tuple[str, str], str] = {}
     for bid, b in nh3.items():
-        parts = _parts(h2, b, fed_into.get(bid, {}))
+        parts = _parts(h2, bid, b, fed_into.get(bid, {}))
         b["parts"] = {}
-        for k, (ghg, kg, share, srcs) in enumerate(parts, 1):
+        for k, (ghg, kg, share, srcs, pool) in enumerate(parts, 1):
             pid = bid if len(parts) == 1 else f"{bid}.{k}"
             b["parts"][pid] = dict(
                 ghg=ghg, kg=kg, share=share, compliant=ghg <= THRESHOLD + 1e-9, sources=srcs
             )
+            if pool:
+                b["parts"][pid]["pool"] = pool
+                pool_of.update({(s, bid): pool for s in srcs})
             lines[pid] = dict(month=b["month"], ghg=ghg, in_kg=kg)
         b["ghg"] = parts[0][0] if len(parts) == 1 else None
         b["compliant"] = all(p["compliant"] for p in b["parts"].values())
+    for a in feed:
+        if (a["source"], a["target"]) in pool_of:
+            a["pool"] = pool_of[a["source"], a["target"]]
     for x in lines.values():
         x["out_consignment_kg"] = 0.0
     aggregated = []
@@ -457,7 +485,15 @@ def _no_averaging(
             taken[pid] = kg
             left -= kg
         e["parts"] = taken
-        e["highest_ghg"] = max(lines[pid]["ghg"] for pid in taken)
+        # One aggregated batch per production month, at its energy-weighted average (§12.1).
+        e["aggregated_ghg"] = {
+            month: sum(
+                kg * lines[pid]["ghg"] for pid, kg in taken.items() if lines[pid]["month"] == month
+            )
+            / sum(kg for pid, kg in taken.items() if lines[pid]["month"] == month)
+            for month in sorted({lines[pid]["month"] for pid in taken})
+        }
+        e["highest_ghg"] = max(e["aggregated_ghg"].values())
         e["shipped_ghg"] = e["highest_ghg"] + e["distribution_adder"]
         del e["weighted_ghg"]
         for month in sorted({lines[pid]["month"] for pid in taken}):
@@ -509,9 +545,9 @@ def main() -> None:
     p.add_argument("workbook", type=Path)
     p.add_argument("out_prefix")
     p.add_argument("--rule-2-5", action="store_true")
-    p.add_argument("--no-averaging", action="store_true")
+    p.add_argument("--rule-12", action="store_true")
     args = p.parse_args()
-    decisions, expected = export(args.workbook, args.rule_2_5, args.no_averaging)
+    decisions, expected = export(args.workbook, args.rule_2_5, args.rule_12)
     for suffix, obj in (("decisions", decisions), ("expected", expected)):
         Path(f"{args.out_prefix}.{suffix}.json").write_text(
             json.dumps(obj, indent=1, default=str) + "\n", encoding="utf-8"
