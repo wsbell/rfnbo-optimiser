@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import datetime as dt
 import math
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -40,6 +40,22 @@ def _errors(exc: ValidationError) -> str:
     )
 
 
+def _put[T: (ConsignmentSpec, ProofOfSustainability)](
+    items: Sequence[T], item: T, replace: str | None, what: str
+) -> list[T]:
+    """``items`` with ``item`` added, or put in the place of the one whose id is ``replace``;
+    ids stay unique."""
+    if replace is not None and not any(x.id == replace for x in items):
+        raise WorkspaceError(f"no {what} {replace}")
+    if any(x.id == item.id and x.id != replace for x in items):
+        raise WorkspaceError(f"{what} {item.id} already exists")
+    if replace is not None:
+        return [item if x.id == replace else x for x in items]
+    out = list(items)
+    out.append(item)
+    return out
+
+
 @dataclass(frozen=True)
 class MappingRow:
     series: str
@@ -49,6 +65,17 @@ class MappingRow:
     @property
     def mapped(self) -> bool:
         return self.header is not None
+
+
+@dataclass(frozen=True)
+class Step:
+    """One item of the Run tab's checklist, and the badge on the tab it belongs to."""
+
+    tab: str
+    ok: bool
+    detail: str
+    badge: str = ""  # short text for the tab, e.g. "12/14"
+    required: bool = True  # an optional step never blocks a run
 
 
 class Workspace:
@@ -268,11 +295,105 @@ class Workspace:
             prep.frame.position(t) for t in stamps if prep.frame.index[0] <= t < prep.frame.end
         )
 
+    # ---- status ----------------------------------------------------------------------------
+
+    def status(self) -> list[Step]:
+        """Where the project stands, tab by tab: the Run tab's checklist and the tab badges.
+        Never raises; a step that cannot be checked says why."""
+        if self.project is None:
+            return [Step("Setup", False, "choose the plant config and quarter")]
+        p = self.project
+        try:
+            self.config()
+        except WorkspaceError as exc:
+            return [Step("Setup", False, f"plant config: {exc}")]
+        steps = [Step("Setup", True, f"plant config {p.file.config}, quarter {p.file.quarter}")]
+        rows = self.mapping()
+        done = sum(r.mapped for r in rows)
+        steps.append(
+            Step(
+                "Mapping",
+                done == len(rows),
+                f"{done} of {len(rows)} series mapped",
+                badge=f"{done}/{len(rows)}",
+            )
+        )
+        if done < len(rows):
+            steps.append(Step("Preview", False, "map every series to check the data"))
+        else:
+            try:
+                errors = sum(f.severity == "error" for f in self.flags())
+            except WorkspaceError as exc:
+                steps.append(Step("Preview", False, str(exc), badge="!"))
+            else:
+                steps.append(
+                    Step(
+                        "Preview",
+                        errors == 0,
+                        f"{errors} data quality error(s): correct them with a reason"
+                        if errors
+                        else "no data quality errors",
+                        badge=str(errors) if errors else "✓",
+                    )
+                )
+        n = len(p.corrections)
+        steps.append(
+            Step("Corrections", True, f"{n} correction(s)", badge=str(n or ""), required=False)
+        )
+        n = len(p.consignments)
+        steps.append(
+            Step(
+                "Consignments",
+                n > 0,
+                f"{n} consignment(s)" if n else "add at least one consignment",
+                badge=str(n),
+            )
+        )
+        issues = list(pos_rules(self.config(), p.pos, p.file.quarter))
+        steps.append(
+            Step(
+                "PoS",
+                not issues,
+                "; ".join(str(i) for i in issues) or f"{len(p.pos)} PoS record(s)",
+                badge=str(len(p.pos) or ""),
+                required=bool(issues),
+            )
+        )
+        if p.file.opening_from:
+            opening = f"from sealed run {p.file.opening_from}"
+        elif p.opening:
+            opening = f"{len(p.opening)} storage(s) entered by hand"
+        else:
+            opening = "no opening entries in this project"
+        steps.append(
+            Step("Opening", True, opening, badge=str(len(p.opening) or ""), required=False)
+        )
+        return steps
+
+    @staticmethod
+    def blocking(steps: Iterable[Step]) -> list[Step]:
+        """The steps that stop a run."""
+        return [s for s in steps if s.required and not s.ok]
+
+    def local(self, t: dt.datetime) -> str:
+        """A UTC instant in the plant time zone with its UTC offset, as the correction form
+        takes it back."""
+        return cal.to_local(t, self.timezone).isoformat(sep=" ", timespec="minutes")
+
     # ---- corrections -----------------------------------------------------------------------
 
-    def add_correction(self, series: str, start: str, end: str, value: float, reason: str) -> str:
+    def add_correction(
+        self,
+        series: str,
+        start: str,
+        end: str,
+        value: float,
+        reason: str,
+        replace: str | None = None,
+    ) -> str:
         """Correct ``series`` to ``value`` over [start, end), times in the plant time zone
-        (``YYYY-MM-DD HH:MM``, or with a UTC offset). Needs a reason."""
+        (``YYYY-MM-DD HH:MM``, or with a UTC offset). Needs a reason. ``replace`` edits the
+        correction with that id in place, keeping its id."""
         p = self._p()
         tz = self.timezone
         try:
@@ -280,19 +401,23 @@ class Workspace:
             e = cal.from_local(dt.datetime.fromisoformat(end), tz)
         except ValueError as exc:
             raise WorkspaceError(str(exc)) from exc
+        before = list(p.corrections)
+        others = [c for c in before if c.id != replace]
+        if replace is not None and len(others) == len(before):
+            raise WorkspaceError(f"no correction {replace}")
         n = 1
         while any(c.id == f"C{n:03d}" for c in p.corrections):
             n += 1
         try:
             c = Correction(
-                id=f"C{n:03d}", series=series, start=s, end=e, value=value, reason=reason
+                id=replace or f"C{n:03d}", series=series, start=s, end=e, value=value, reason=reason
             )
         except ValidationError as exc:
             raise WorkspaceError(_errors(exc)) from exc
         if series not in self.required_series():
             raise WorkspaceError(f"{series!r} is not a series this plant needs")
-        before = list(p.corrections)
-        p.corrections = [*before, c]
+        at = next((i for i, x in enumerate(before) if x.id == replace), len(before))
+        p.corrections = [*others[:at], c, *others[at:]]
         self._changed()
         try:
             self.prepared()
@@ -312,7 +437,8 @@ class Workspace:
     def outputs(self) -> list[str]:
         return [b.id for b in self.config().blocks_of(ConsignmentOutput)]
 
-    def add_consignment(self, **fields: Any) -> None:
+    def add_consignment(self, replace: str | None = None, **fields: Any) -> None:
+        """Add a consignment, or with ``replace`` edit the one with that id in place."""
         p = self._p()
         try:
             c = ConsignmentSpec.model_validate(fields)
@@ -320,26 +446,26 @@ class Workspace:
             raise WorkspaceError(_errors(exc)) from exc
         if c.output not in self.outputs():
             raise WorkspaceError(f"{c.output!r} is not a consignment output of this plant")
-        if any(x.id == c.id for x in p.consignments):
-            raise WorkspaceError(f"consignment {c.id} already exists")
-        p.consignments = [*p.consignments, c]
+        p.consignments = _put(p.consignments, c, replace, "consignment")
 
     def remove_consignment(self, consignment_id: str) -> None:
         p = self._p()
         p.consignments = [c for c in p.consignments if c.id != consignment_id]
 
-    def add_pos(self, **fields: Any) -> list[Issue]:
-        """Add a PoS record; refused with the rule it breaks (§11.1: compliant, in the quarter,
-        from a supplier of its product in the plant)."""
+    def add_pos(self, replace: str | None = None, **fields: Any) -> list[Issue]:
+        """Add a PoS record, or with ``replace`` edit the one with that id in place; refused
+        with the rule it breaks (§11.1: compliant, in the quarter, from a supplier of its
+        product in the plant)."""
         p = self._p()
         try:
             rec = ProofOfSustainability.model_validate(fields)
         except ValidationError as exc:
             raise WorkspaceError(_errors(exc)) from exc
-        issues = list(pos_rules(self.config(), [*p.pos, rec], p.file.quarter))
+        records = _put(p.pos, rec, replace, "PoS")
+        issues = list(pos_rules(self.config(), records, p.file.quarter))
         if issues:
             raise WorkspaceError("; ".join(str(i) for i in issues))
-        p.pos = [*p.pos, rec]
+        p.pos = records
         return []
 
     def remove_pos(self, pos_id: str) -> None:
@@ -386,6 +512,18 @@ class Workspace:
         p = self._p()
         p.opening = {k: v for k, v in p.opening.items() if k != storage}
         self._changed()
+
+    def remove_opening_entry(self, storage: str, batch_id: str) -> None:
+        """Remove one ledger entry from a storage's hand-entered opening position."""
+        p = self._p()
+        old = p.opening.get(storage)
+        if old is None or not any(e.batch_id == batch_id for e in old.opening_ledger):
+            raise WorkspaceError(f"no opening entry {batch_id} in {storage}")
+        self.set_opening(
+            storage,
+            old.opening_inventory_kg,
+            [e.model_dump() for e in old.opening_ledger if e.batch_id != batch_id],
+        )
 
     # ---- run -------------------------------------------------------------------------------
 

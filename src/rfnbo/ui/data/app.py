@@ -16,6 +16,8 @@ from typing import Any
 from nicegui import events, ui
 from nicegui import run as background
 
+from rfnbo.model.entities import ConsignmentSpec, ProofOfSustainability
+from rfnbo.project.corrections import Correction
 from rfnbo.ui.data.workspace import Workspace, WorkspaceError
 from rfnbo.ui.results import app as results
 from rfnbo.ui.results.app import _table
@@ -31,6 +33,39 @@ TABS = (
     "Run",
 )
 
+# A form's fields, built in the current layout context; returns a reader of their values.
+Fields = Callable[[], Callable[[], None]]
+
+
+def _slug(tab: str) -> str:
+    return tab.split()[0].lower()
+
+
+def _row_actions(
+    table: ui.table,
+    testid: str,
+    remove: Callable[[str], None],
+    edit: Callable[[str], None] | None = None,
+) -> None:
+    """Edit and delete buttons at the end of each row; they pass the row's key."""
+    table.columns = [*table.columns, {"name": "actions", "label": "", "field": "actions"}]
+    buttons = [("edit", "edit", "row_edit", "")] if edit else []
+    buttons.append(("remove", "delete", "row_remove", ' color="negative"'))
+    table.add_slot(
+        "body-cell-actions",
+        '<q-td :props="props" class="text-right">'
+        + "".join(
+            f'<q-btn flat dense round size="sm" icon="{icon}"{extra} '
+            f":data-testid=\"'{testid}-{name}-' + props.key\" "
+            f"@click=\"() => $parent.$emit('{event}', props.key)\" />"
+            for name, icon, event, extra in buttons
+        )
+        + "</q-td>",
+    )
+    table.on("row_remove", lambda e: remove(str(e.args)))
+    if edit:
+        table.on("row_edit", lambda e: edit(str(e.args)))
+
 
 class DataPage:
     """One browser tab's Data screen."""
@@ -38,6 +73,8 @@ class DataPage:
     def __init__(self, root: Path) -> None:
         self.ws = Workspace(root)
         self.message: ui.label | None = None
+        self.badges: dict[str, ui.badge] = {}
+        self.dialogs: ui.element | None = None
         self.start = 0
 
     # ---- helpers ---------------------------------------------------------------------------
@@ -59,6 +96,10 @@ class DataPage:
         if self.message is not None:
             self.message.text = text
             self.message.classes(replace="text-negative" if error else "text-positive")
+        if text:
+            # Also as a toast: the message line sits above the tabs and is easy to miss, and
+            # is hidden behind an open dialog.
+            ui.notify(text, type="negative" if error else "positive", position="top")
 
     def redraw(self) -> None:
         for section in (
@@ -72,6 +113,57 @@ class DataPage:
             self.run_tab,
         ):
             section.refresh()
+        self.show_status()
+
+    def show_status(self) -> None:
+        """Badge each tab with where it stands (series mapped, errors, records entered)."""
+        steps = {s.tab: s for s in self.ws.status()}
+        blocking = self.ws.blocking(steps.values())
+        for tab, badge in self.badges.items():
+            if tab == "Run":
+                text, color = ("ready", "positive") if not blocking else ("✗", "negative")
+            elif (s := steps.get(tab.split()[0])) is None:
+                text, color = "", "grey-7"
+            else:
+                text = s.badge or ("" if s.ok else "!")
+                color = "grey-7" if not s.required else ("positive" if s.ok else "negative")
+            badge.set_text(text)
+            badge.props(f"color={color}")
+            badge.set_visibility(bool(text))
+
+    def confirm(self, question: str, fn: Callable[[], Any], ok: str) -> None:
+        """Ask before removing something; a removal cannot be undone."""
+        assert self.dialogs is not None
+        self.dialogs.clear()
+        with self.dialogs, ui.dialog() as dialog, ui.card():
+            ui.label(question)
+            with ui.row():
+
+                def yes() -> None:
+                    dialog.close()
+                    self.act(fn, ok)
+
+                ui.button("Remove", on_click=yes).props(
+                    'color=negative data-testid="confirm-remove"'
+                )
+                ui.button("Cancel", on_click=dialog.close).props("flat")
+        dialog.open()
+
+    def edit(self, title: str, fields: Fields) -> None:
+        """Edit a record in a dialog with the same fields as the form that added it."""
+        assert self.dialogs is not None
+        self.dialogs.clear()
+        with self.dialogs, ui.dialog() as dialog, ui.card().classes("min-w-[48rem]"):
+            ui.label(title).classes("text-base font-medium")
+            with ui.row().classes("items-end gap-2"):
+                apply = fields()
+            with ui.row():
+                # On a refusal the dialog stays open with the entries, and the toast says why.
+                ui.button(
+                    "Save", on_click=lambda: self.act(apply, "saved") and dialog.close()
+                ).props('data-testid="edit-save"')
+                ui.button("Cancel", on_click=dialog.close).props("flat")
+        dialog.open()
 
     # ---- layout ----------------------------------------------------------------------------
 
@@ -80,9 +172,13 @@ class DataPage:
             ui.label(f"Data · {self.ws.root}").classes("text-lg font-medium")
             ui.link("Sealed runs →", "/").props('data-testid="runs-link"')
         self.message = ui.label("").props('data-testid="message"')
+        self.dialogs = ui.element("div")
         with ui.tabs() as tabs:
             for name in TABS:
-                ui.tab(name).props(f'data-testid="tab-{name.split()[0].lower()}"')
+                with ui.tab(name).props(f'data-testid="tab-{_slug(name)}"'):
+                    self.badges[name] = ui.badge("").props(
+                        f'floating data-testid="badge-{_slug(name)}"'
+                    )
         with ui.tab_panels(tabs, value=TABS[0]).classes("w-full"):
             for name, section in zip(
                 TABS,
@@ -100,6 +196,7 @@ class DataPage:
             ):
                 with ui.tab_panel(name):
                     section()
+        self.show_status()
 
     @ui.refreshable_method
     def setup(self) -> None:
@@ -140,7 +237,7 @@ class DataPage:
             }
             for i, s in enumerate(p.file.sources)
         ]
-        _table(
+        table = _table(
             [
                 ("i", "#", "n"),
                 ("file", "File", ""),
@@ -150,6 +247,18 @@ class DataPage:
             ],
             rows,
             testid="sources",
+            row_key="i",
+        )
+        files = {str(i): s.file for i, s in enumerate(p.file.sources)}
+        _row_actions(
+            table,
+            "sources",
+            remove=lambda k: self.confirm(
+                f"Remove {files[k]} from the project? The file stays in data/; its column "
+                "mapping is lost.",
+                lambda: self.ws.remove_data_file(int(k)),
+                f"{files[k]} removed",
+            ),
         )
         if p.file.sources:
             with ui.row().classes("items-end gap-2"):
@@ -163,12 +272,6 @@ class DataPage:
                     auto_upload=True,
                     on_upload=lambda e, w=which: self.import_mapping(e, int(w.value)),
                 ).props('accept=".json" data-testid="upload-mapping"')
-                ui.button(
-                    "Remove file",
-                    on_click=lambda w=which: self.act(
-                        lambda: self.ws.remove_data_file(int(w.value)), "removed"
-                    ),
-                ).props("flat")
 
     async def upload(self, e: events.UploadEventArguments) -> None:
         content = await e.file.read()
@@ -224,7 +327,9 @@ class DataPage:
             )
             ui.button(
                 "Unmap",
-                on_click=lambda: self.act(lambda: self.ws.map_series(series.value, None, None), ""),
+                on_click=lambda: self.act(
+                    lambda: self.ws.map_series(series.value, None, None), "unmapped"
+                ),
             ).props("flat")
 
     @ui.refreshable_method
@@ -306,56 +411,88 @@ class DataPage:
             ui.label(str(exc)).classes("text-negative")
             return
         with ui.row().classes("items-end gap-2"):
-            series = (
-                ui.select(names, label="Series").classes("w-72").props('data-testid="corr-series"')
+            apply = self.correction_fields(names, None, "corr")()
+            ui.button("Add correction", on_click=lambda: self.act(apply, "correction added")).props(
+                'data-testid="add-correction"'
             )
-            start = ui.input("From", placeholder="2026-10-01 01:00").props(
-                'data-testid="corr-from"'
-            )
-            end = ui.input("To (exclusive)", placeholder="2026-10-01 02:00").props(
-                'data-testid="corr-to"'
-            )
-            value = ui.number("Value per interval").props('data-testid="corr-value"')
-            reason = ui.input("Reason").classes("w-96").props('data-testid="corr-reason"')
-            ui.button(
-                "Add correction",
-                on_click=lambda: self.act(
-                    lambda: self.ws.add_correction(
-                        series.value, start.value, end.value, float(value.value), reason.value
-                    ),
-                    "correction added",
-                ),
-            ).props('data-testid="add-correction"')
         rows = [
             {
                 "id": c.id,
                 "series": c.series,
-                "start": c.start.isoformat(),
-                "end": c.end.isoformat(),
+                "start": self.ws.local(c.start),
+                "end": self.ws.local(c.end),
                 "value": c.value,
                 "reason": c.reason,
             }
             for c in p.corrections
         ]
-        _table(
+        table = _table(
             [
                 ("id", "Correction", ""),
                 ("series", "Series", ""),
-                ("start", "From (UTC)", ""),
-                ("end", "To (UTC)", ""),
+                ("start", "From (local)", ""),
+                ("end", "To (local)", ""),
                 ("value", "Value", "num"),
                 ("reason", "Reason", ""),
             ],
             rows,
             testid="corrections",
         )
-        if rows:
-            with ui.row().classes("items-end gap-2"):
-                which = ui.select([r["id"] for r in rows], label="Correction")
-                ui.button(
-                    "Remove",
-                    on_click=lambda: self.act(lambda: self.ws.remove_correction(which.value), ""),
-                ).props("flat")
+        by_id = {c.id: c for c in p.corrections}
+        _row_actions(
+            table,
+            "corrections",
+            remove=lambda k: self.confirm(
+                f"Remove correction {k}? Its reason is lost.",
+                lambda: self.ws.remove_correction(k),
+                f"correction {k} removed",
+            ),
+            edit=lambda k: self.edit(
+                f"Correction {k}", self.correction_fields(names, by_id[k], "edit-corr")
+            ),
+        )
+
+    def correction_fields(self, names: list[str], c: Correction | None, prefix: str) -> Fields:
+        def build() -> Callable[[], None]:
+            series = (
+                ui.select(names, label="Series", value=c.series if c else None)
+                .classes("w-72")
+                .props(f'data-testid="{prefix}-series"')
+            )
+            start = ui.input(
+                "From",
+                value=self.ws.local(c.start) if c else "",
+                placeholder="2026-10-01 01:00",
+            ).props(f'data-testid="{prefix}-from"')
+            end = ui.input(
+                "To (exclusive)",
+                value=self.ws.local(c.end) if c else "",
+                placeholder="2026-10-01 02:00",
+            ).props(f'data-testid="{prefix}-to"')
+            value = ui.number("Value per interval", value=c.value if c else None).props(
+                f'data-testid="{prefix}-value"'
+            )
+            reason = (
+                ui.input("Reason", value=c.reason if c else "")
+                .classes("w-96")
+                .props(f'data-testid="{prefix}-reason"')
+            )
+
+            def apply() -> None:
+                if value.value is None:
+                    raise WorkspaceError("enter the value per interval")
+                self.ws.add_correction(
+                    series.value,
+                    start.value,
+                    end.value,
+                    float(value.value),
+                    reason.value,
+                    replace=c.id if c else None,
+                )
+
+            return apply
+
+        return build
 
     @ui.refreshable_method
     def consignments(self) -> None:
@@ -370,28 +507,11 @@ class DataPage:
             ui.label(str(exc)).classes("text-negative")
             return
         with ui.row().classes("items-end gap-2"):
-            cid = ui.input("Consignment id").props('data-testid="cons-id"')
-            output = ui.select(outputs, label="Consignment output").classes("w-56")
-            output.props('data-testid="cons-output"')
-            volume = ui.number("Volume (kg)").props('data-testid="cons-volume"')
-            ship = ui.input("Ship date", placeholder="2026-12-15").props('data-testid="cons-date"')
-            target = ui.number("Target (gCO2e/MJ), blank = minimise").props(
-                'data-testid="cons-target"'
-            )
+            apply = self.consignment_fields(outputs, None, "cons")()
             ui.button(
-                "Add consignment",
-                on_click=lambda: self.act(
-                    lambda: self.ws.add_consignment(
-                        id=cid.value,
-                        output=output.value,
-                        volume_kg=volume.value,
-                        ship_date=ship.value,
-                        target_gCO2e_per_MJ=target.value,
-                    ),
-                    "consignment added",
-                ),
+                "Add consignment", on_click=lambda: self.act(apply, "consignment added")
             ).props('data-testid="add-consignment"')
-        _table(
+        table = _table(
             [
                 ("id", "Consignment", ""),
                 ("output", "Output", ""),
@@ -402,13 +522,48 @@ class DataPage:
             [c.model_dump(mode="json") for c in p.consignments],
             testid="consignment-list",
         )
-        if p.consignments:
-            with ui.row().classes("items-end gap-2"):
-                which = ui.select([c.id for c in p.consignments], label="Consignment")
-                ui.button(
-                    "Remove",
-                    on_click=lambda: self.act(lambda: self.ws.remove_consignment(which.value), ""),
-                ).props("flat")
+        by_id = {c.id: c for c in p.consignments}
+        _row_actions(
+            table,
+            "consignment-list",
+            remove=lambda k: self.confirm(
+                f"Remove consignment {k}?",
+                lambda: self.ws.remove_consignment(k),
+                f"consignment {k} removed",
+            ),
+            edit=lambda k: self.edit(
+                f"Consignment {k}", self.consignment_fields(outputs, by_id[k], "edit-cons")
+            ),
+        )
+
+    def consignment_fields(
+        self, outputs: list[str], c: ConsignmentSpec | None, prefix: str
+    ) -> Fields:
+        def build() -> Callable[[], None]:
+            cid = ui.input("Consignment id", value=c.id if c else "").props(
+                f'data-testid="{prefix}-id"'
+            )
+            output = ui.select(outputs, label="Consignment output", value=c.output if c else None)
+            output.classes("w-56").props(f'data-testid="{prefix}-output"')
+            volume = ui.number("Volume (kg)", value=c.volume_kg if c else None).props(
+                f'data-testid="{prefix}-volume"'
+            )
+            ship = ui.input(
+                "Ship date", value=c.ship_date.isoformat() if c else "", placeholder="2026-12-15"
+            ).props(f'data-testid="{prefix}-date"')
+            target = ui.number(
+                "Target (gCO2e/MJ), blank = minimise", value=c.target_gCO2e_per_MJ if c else None
+            ).props(f'data-testid="{prefix}-target"')
+            return lambda: self.ws.add_consignment(
+                replace=c.id if c else None,
+                id=cid.value,
+                output=output.value,
+                volume_kg=volume.value,
+                ship_date=ship.value,
+                target_gCO2e_per_MJ=target.value,
+            )
+
+        return build
 
     @ui.refreshable_method
     def pos(self) -> None:
@@ -422,29 +577,11 @@ class DataPage:
             "(≤ 28.2 gCO2e/MJ, distribution included) and dispatched in this quarter."
         ).classes("text-sm text-grey")
         with ui.row().classes("items-end gap-2"):
-            pid = ui.input("PoS id").props('data-testid="pos-id"')
-            supplier = ui.input("Supplier").props('data-testid="pos-supplier"')
-            product = ui.input("Product", value="H2").props('data-testid="pos-product"')
-            dispatch = ui.input("Dispatch date", placeholder="2026-10-20").props(
-                'data-testid="pos-date"'
+            apply = self.pos_fields(None, "pos")()
+            ui.button("Add PoS", on_click=lambda: self.act(apply, "PoS added")).props(
+                'data-testid="add-pos"'
             )
-            qty = ui.number("Quantity (kg)").props('data-testid="pos-qty"')
-            ghg = ui.number("GHG (gCO2e/MJ)").props('data-testid="pos-ghg"')
-            ui.button(
-                "Add PoS",
-                on_click=lambda: self.act(
-                    lambda: self.ws.add_pos(
-                        id=pid.value,
-                        supplier=supplier.value,
-                        product=product.value,
-                        dispatch_date=dispatch.value,
-                        quantity_kg=qty.value,
-                        ghg_gCO2e_per_MJ=ghg.value,
-                    ),
-                    "PoS added",
-                ),
-            ).props('data-testid="add-pos"')
-        _table(
+        table = _table(
             [
                 ("id", "PoS", ""),
                 ("supplier", "Supplier", ""),
@@ -456,12 +593,51 @@ class DataPage:
             [x.model_dump(mode="json") for x in p.pos],
             testid="pos-list",
         )
-        if p.pos:
-            with ui.row().classes("items-end gap-2"):
-                which = ui.select([x.id for x in p.pos], label="PoS")
-                ui.button(
-                    "Remove", on_click=lambda: self.act(lambda: self.ws.remove_pos(which.value), "")
-                ).props("flat")
+        by_id = {x.id: x for x in p.pos}
+        _row_actions(
+            table,
+            "pos-list",
+            remove=lambda k: self.confirm(
+                f"Remove PoS {k}?", lambda: self.ws.remove_pos(k), f"PoS {k} removed"
+            ),
+            edit=lambda k: self.edit(f"PoS {k}", self.pos_fields(by_id[k], "edit-pos")),
+        )
+
+    def pos_fields(self, x: ProofOfSustainability | None, prefix: str) -> Fields:
+        def build() -> Callable[[], None]:
+            pid = ui.input("PoS id", value=x.id if x else "").props(f'data-testid="{prefix}-id"')
+            supplier = ui.input("Supplier", value=x.supplier if x else "").props(
+                f'data-testid="{prefix}-supplier"'
+            )
+            product = ui.input("Product", value=x.product if x else "H2").props(
+                f'data-testid="{prefix}-product"'
+            )
+            dispatch = ui.input(
+                "Dispatch date",
+                value=x.dispatch_date.isoformat() if x else "",
+                placeholder="2026-10-20",
+            ).props(f'data-testid="{prefix}-date"')
+            qty = ui.number("Quantity (kg)", value=x.quantity_kg if x else None).props(
+                f'data-testid="{prefix}-qty"'
+            )
+            ghg = ui.number("GHG (gCO2e/MJ)", value=x.ghg_gCO2e_per_MJ if x else None).props(
+                f'data-testid="{prefix}-ghg"'
+            )
+
+            def apply() -> None:
+                self.ws.add_pos(
+                    replace=x.id if x else None,
+                    id=pid.value,
+                    supplier=supplier.value,
+                    product=product.value,
+                    dispatch_date=dispatch.value,
+                    quantity_kg=qty.value,
+                    ghg_gCO2e_per_MJ=ghg.value,
+                )
+
+            return apply
+
+        return build
 
     @ui.refreshable_method
     def opening(self) -> None:
@@ -473,15 +649,28 @@ class DataPage:
         ui.label("Open from the previous quarter's sealed run").classes("text-base font-medium")
         with ui.row().classes("items-end gap-2"):
             prior = ui.input("Sealed run folder", value=p.file.opening_from or "").classes("w-96")
-            ui.button(
-                "Use",
-                on_click=lambda: self.act(
-                    lambda: self.ws.set_opening_from(prior.value.strip() or None), "saved"
-                ),
-            )
+
+            def use() -> None:
+                run_dir = prior.value.strip() or None
+                fn = lambda: self.ws.set_opening_from(run_dir)  # noqa: E731
+                if run_dir and p.opening:
+                    self.confirm(
+                        f"Opening from {run_dir} replaces the {len(p.opening)} storage(s) "
+                        "entered by hand. Continue?",
+                        fn,
+                        "saved",
+                    )
+                else:
+                    self.act(fn, "saved")
+
+            ui.button("Use", on_click=use).props('data-testid="use-opening-from"')
         ui.label("Or enter a storage's opening position by hand").classes(
             "text-base font-medium mt-4"
         )
+        ui.label(
+            "Saving sets the storage's opening inventory and, if a batch id is given, adds that "
+            "ledger entry to the storage's opening ledger."
+        ).classes("text-sm text-grey")
         try:
             stores = self.ws.storages()
         except WorkspaceError as exc:
@@ -512,9 +701,9 @@ class DataPage:
             ui.button("Save storage", on_click=lambda: self.act(save, "saved"))
         rows: list[dict[str, Any]] = []
         for s, o in sorted(p.opening.items()):
-            entries = o.opening_ledger or []
             rows += [
                 {
+                    "key": json.dumps([s, e.batch_id]),
                     "storage": s,
                     "inventory": o.opening_inventory_kg,
                     "batch": e.batch_id,
@@ -522,9 +711,16 @@ class DataPage:
                     "ghg": e.ghg_gCO2e_per_MJ,
                     "month": e.production_month,
                 }
-                for e in entries
-            ] or [{"storage": s, "inventory": o.opening_inventory_kg, "batch": "(none)"}]
-        _table(
+                for e in o.opening_ledger
+            ] or [
+                {
+                    "key": json.dumps([s, None]),
+                    "storage": s,
+                    "inventory": o.opening_inventory_kg,
+                    "batch": "(none)",
+                }
+            ]
+        table = _table(
             [
                 ("storage", "Storage", ""),
                 ("inventory", "Opening inventory", "kg"),
@@ -535,7 +731,25 @@ class DataPage:
             ],
             rows,
             testid="opening",
+            row_key="key",
         )
+
+        def remove(key: str) -> None:
+            storage, batch = json.loads(key)
+            if batch is None:
+                self.confirm(
+                    f"Remove the opening position of {storage}?",
+                    lambda: self.ws.clear_opening(storage),
+                    f"{storage} removed",
+                )
+            else:
+                self.confirm(
+                    f"Remove opening entry {batch} from {storage}?",
+                    lambda: self.ws.remove_opening_entry(storage, batch),
+                    f"{batch} removed",
+                )
+
+        _row_actions(table, "opening", remove=remove)
 
     @ui.refreshable_method
     def run_tab(self) -> None:
@@ -546,15 +760,36 @@ class DataPage:
             "Optimise the quarter and seal it with its baseline under runs/. The same folder runs "
             "from the command line: rfnbo optimise --project <folder>."
         ).classes("text-sm text-grey")
+        steps = self.ws.status()
+        blocking = self.ws.blocking(steps)
+        with ui.column().classes("gap-0 my-2").props('data-testid="checklist"'):
+            for s in steps:
+                icon, color = (
+                    ("check_circle", "positive")
+                    if s.ok
+                    else ("cancel", "negative")
+                    if s.required
+                    else ("info", "grey")
+                )
+                with ui.row().classes("items-center gap-2 no-wrap"):
+                    ui.icon(icon, color=color)
+                    ui.label(f"{s.tab}: {s.detail}").props(f'data-testid="check-{_slug(s.tab)}"')
         with ui.row().classes("items-end gap-2"):
             label = ui.input("Run label (optional)").props('data-testid="run-label"')
             button = ui.button("Run").props('data-testid="run"')
+        if blocking:
+            button.disable()
+            ui.label(
+                "Not ready to run: " + "; ".join(s.tab for s in blocking) + " (marked ✗ above)"
+            ).classes("text-negative text-sm").props('data-testid="run-blocked"')
         status = ui.label("").props('data-testid="run-status"')
         link = ui.column()
 
         async def go() -> None:
             button.disable()
             status.text = "Optimising… (this takes a minute or two)"
+            status.classes(replace="")
+            link.clear()
             try:
                 out = await background.io_bound(self.ws.run, label.value.strip() or None)
             except (WorkspaceError, ValueError) as exc:
@@ -568,8 +803,14 @@ class DataPage:
                 f"Sealed to {out.out}: consignments met {o['consignments_met']}, carried value "
                 f"{o['carried_value_MJ']:,.0f} MJ, {o['failed_checks']} failed checks"
             )
-            status.classes(replace="text-positive")
+            met = o["consignments_met"] and not o["failed_checks"]
+            status.classes(replace="text-positive" if met else "text-negative")
             with link:
+                for s in out.summary["shortfalls"]:
+                    ui.label(
+                        f"{s['consignment']} not met: {s['reason']}; achievable "
+                        f"{s['achievable_kg']:,.1f} kg"
+                    ).classes("text-negative").props('data-testid="shortfall"')
                 ui.link(
                     "Open the sealed run in the results browser →",
                     f"/run/{out.run_ids['optimised']}",

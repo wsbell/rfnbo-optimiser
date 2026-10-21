@@ -76,6 +76,7 @@ class Editor:
         )
         with ui.row().classes("w-full items-center gap-2"):
             self.title = ui.label().classes("text-lg font-medium")
+            self.saved_state = ui.label().props('data-testid="saved-state"')
             ui.space()
             for kind in KINDS:
                 ui.button(f"+ {KIND_LABELS[kind]}", on_click=lambda k=kind: self.add(k)).props(
@@ -84,7 +85,7 @@ class Editor:
             ui.button("Plant settings", on_click=self.show_plant).props(
                 'dense flat data-testid="plant-settings"'
             )
-            ui.button("Save", on_click=self.save).props('data-testid="save"')
+            ui.button("Save", on_click=self.save).props('data-testid="save"').tooltip("Ctrl+S")
             ui.button("Download", on_click=self.download).props('flat data-testid="download"')
             ui.upload(label="Open JSON", auto_upload=True, on_upload=self.upload).props(
                 'accept=.json flat dense data-testid="upload"'
@@ -114,6 +115,7 @@ class Editor:
             ("bfd_node_selected", self.on_node_selected),
             ("bfd_unselected", lambda _: self.select(None)),
             ("bfd_node_moved", self.on_node_moved),
+            ("bfd_save", lambda _: self.save()),
         ):
             ui.on(event, handler)
 
@@ -251,15 +253,23 @@ class Editor:
         block_id = self.block_of(e.args["id"])
         if block_id is not None:
             self.doc.move(block_id, e.args["x"], e.args["y"])
+            self.show_saved_state()
 
     # ---- files ---------------------------------------------------------------------------
 
     def save(self) -> None:
         issues = self.doc.save(self.path)
+        self.show_saved_state()
         ui.notify(
             f"Saved {self.path.name}: " + (f"{len(issues)} issue(s) to fix" if issues else "valid"),
             type="warning" if issues else "positive",
         )
+
+    def show_saved_state(self) -> None:
+        dirty = self.doc.dirty
+        self.saved_state.text = "● unsaved changes" if dirty else "saved"
+        self.saved_state.classes(replace="text-warning" if dirty else "text-grey")
+        ui.run_javascript(f"bfd.dirty = {json.dumps(dirty)}")
 
     def download(self) -> None:
         ui.download.content(self.doc.to_json(), self.path.name, "application/json")
@@ -495,6 +505,7 @@ class Editor:
     def refresh(self) -> None:
         issues = self.doc.issues()
         self.title.text = f"{self.doc.data.get('plant', '')} · {self.path.name}"
+        self.show_saved_state()
         self.summary.text = (
             f"{len(issues)} issue(s)" if issues else "No issues: the diagram is valid"
         )

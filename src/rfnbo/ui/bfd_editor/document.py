@@ -105,6 +105,17 @@ class EditorDocument:
         self.data.setdefault("blocks", [])
         self.data.setdefault("flows", [])
         self.data.setdefault("layout", {})
+        # The diagram as last loaded from or saved to its file; None: not from its file (an
+        # uploaded diagram, until saved).
+        self._saved: dict[str, Any] | None = None
+
+    @property
+    def dirty(self) -> bool:
+        """True if the diagram (layout included) has changes its file does not hold."""
+        return self._saved != self.data
+
+    def mark_saved(self) -> None:
+        self._saved = copy.deepcopy(self.data)
 
     # ---- creation and persistence -------------------------------------------------
 
@@ -115,7 +126,8 @@ class EditorDocument:
         timezone: str = "Europe/Amsterdam",
         effective_from: dt.date | None = None,
     ) -> EditorDocument:
-        return cls(
+        """An empty diagram; unchanged until edited, though nothing is written yet."""
+        doc = cls(
             {
                 "schema_version": 1,
                 "plant": plant,
@@ -128,6 +140,8 @@ class EditorDocument:
                 "layout": {},
             }
         )
+        doc.mark_saved()
+        return doc
 
     @classmethod
     def from_json(cls, text: str) -> EditorDocument:
@@ -138,7 +152,9 @@ class EditorDocument:
 
     @classmethod
     def load(cls, path: str | Path) -> EditorDocument:
-        return cls.from_json(Path(path).read_text(encoding="utf-8"))
+        doc = cls.from_json(Path(path).read_text(encoding="utf-8"))
+        doc.mark_saved()
+        return doc
 
     def to_json(self) -> str:
         """JSON for saving. A valid diagram is normalised through the schema."""
@@ -158,6 +174,7 @@ class EditorDocument:
     def save(self, path: str | Path) -> list[Issue]:
         """Write the diagram (drafts too, so work is never lost); return outstanding issues."""
         Path(path).write_text(self.to_json(), encoding="utf-8")
+        self.mark_saved()
         return self.issues()
 
     # ---- lookup -------------------------------------------------------------------

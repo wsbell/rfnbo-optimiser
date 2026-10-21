@@ -81,6 +81,7 @@ def test_set_up_correct_and_run_a_quarter(browser: Any, screen: tuple[str, Path]
     url, project = screen
     page = browser.new_page()
     page.goto(url + "data")
+    expect(page.get_by_test_id("badge-run")).to_have_text("✗")
     _fill(page, "config", str(GOLDEN / "tc4.plant.json"))
     _fill(page, "quarter", "2026-Q4")
     page.get_by_test_id("apply-setup").click()
@@ -100,6 +101,13 @@ def test_set_up_correct_and_run_a_quarter(browser: Any, screen: tuple[str, Path]
     page.get_by_test_id("tab-preview").click()
     expect(page.get_by_test_id("quality")).to_have_text("No data quality errors", timeout=30000)
     expect(page.get_by_test_id("preview")).to_contain_text("2026-10-01T00:00+02:00")
+    expect(page.get_by_test_id("badge-mapping")).to_have_text("20/20")
+
+    # The Run tab says what is missing and will not run until it is there.
+    page.get_by_test_id("tab-run").click()
+    expect(page.get_by_test_id("run-blocked")).to_contain_text("Consignments")
+    expect(page.get_by_test_id("check-consignments")).to_contain_text("add at least one")
+    expect(page.get_by_test_id("run")).to_be_disabled()
 
     page.get_by_test_id("tab-corrections").click()
     _choose(page, "corr-series", "compressor_electricity_kWh")
@@ -115,11 +123,20 @@ def test_set_up_correct_and_run_a_quarter(browser: Any, screen: tuple[str, Path]
     page.get_by_test_id("tab-consignments").click()
     _fill(page, "cons-id", "CA")
     _choose(page, "cons-output", "consignment_a")
-    _fill(page, "cons-volume", "150000")
+    _fill(page, "cons-volume", "140000")
     _fill(page, "cons-date", "2026-12-15")
     _fill(page, "cons-target", "5")
     page.get_by_test_id("add-consignment").click()
     expect(page.get_by_test_id("consignment-list")).to_contain_text("consignment_a")
+    expect(page.get_by_test_id("badge-consignments")).to_have_text("1")
+    # Edited in place, in a dialog holding the record's values.
+    page.get_by_test_id("consignment-list-edit-CA").click()
+    expect(
+        page.locator('input[data-testid="edit-cons-id"], [data-testid="edit-cons-id"] input')
+    ).to_have_value("CA")
+    _fill(page, "edit-cons-volume", "150000")
+    page.get_by_test_id("edit-save").click()
+    expect(page.get_by_test_id("consignment-list")).to_contain_text("150,000.000")
 
     page.get_by_test_id("tab-pos").click()
     for testid, value in (
@@ -135,8 +152,24 @@ def test_set_up_correct_and_run_a_quarter(browser: Any, screen: tuple[str, Path]
     _fill(page, "pos-ghg", "3")
     page.get_by_test_id("add-pos").click()
     expect(page.get_by_test_id("pos-list")).to_contain_text("POS-A")
+    # A row's delete button asks first.
+    for testid, value in (
+        ("pos-id", "POS-B"),
+        ("pos-supplier", "H2 Trailers BV"),
+        ("pos-date", "2026-10-21"),
+        ("pos-qty", "10"),
+        ("pos-ghg", "3"),
+    ):
+        _fill(page, testid, value)
+    page.get_by_test_id("add-pos").click()
+    expect(page.get_by_test_id("pos-list")).to_contain_text("POS-B")
+    page.get_by_test_id("pos-list-remove-POS-B").click()
+    page.get_by_test_id("confirm-remove").click()
+    expect(page.get_by_test_id("message")).to_have_text("PoS POS-B removed")
+    expect(page.get_by_test_id("pos-list")).not_to_contain_text("POS-B")
 
     page.get_by_test_id("tab-run").click()
+    expect(page.get_by_test_id("badge-run")).to_have_text("ready")
     _fill(page, "run-label", "ui")
     page.get_by_test_id("run").click()
     expect(page.get_by_test_id("run-status")).to_contain_text("Sealed to", timeout=300000)

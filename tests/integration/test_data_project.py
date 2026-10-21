@@ -224,3 +224,73 @@ def test_local_times_convert_through_the_calendar() -> None:
         cal.from_local(dt.datetime(2027, 3, 28, 2, 30), tz)
     aware = dt.datetime.fromisoformat("2026-10-25 02:15+01:00")
     assert cal.from_local(aware, tz) == dt.datetime(2026, 10, 25, 1, 15, tzinfo=dt.UTC)
+
+
+def test_status_says_what_stops_a_run(tmp_path: Path) -> None:
+    """The Run tab's checklist and the tab badges: each required step, and why it is not done."""
+    blank = Workspace(tmp_path / "blank")
+    assert [(s.tab, s.ok) for s in blank.status()] == [("Setup", False)]
+
+    ws = Workspace(tmp_path / "p")
+    ws.setup(str(PLANT), "2026-Q4")
+    steps = {s.tab: s for s in ws.status()}
+    assert steps["Mapping"].badge == f"0/{len(ws.required_series())}"
+    assert not steps["Preview"].ok and "map every series" in steps["Preview"].detail
+    assert [s.tab for s in ws.blocking(steps.values())] == ["Mapping", "Preview", "Consignments"]
+
+    ws.add_data_file("plant.csv", _frame_csv(tmp_path, blank=range(4, 8)))
+    steps = {s.tab: s for s in ws.status()}
+    assert steps["Mapping"].ok
+    assert steps["Preview"].badge == "1" and "1 data quality error" in steps["Preview"].detail
+    ws.add_correction(
+        "liquefier_electricity_kWh", "2026-10-01 01:00", "2026-10-01 02:00", 300.0, "DCS log"
+    )
+    ws.add_consignment(id="CA", output="consignment_a", volume_kg=1, ship_date="2026-12-15")
+    steps = {s.tab: s for s in ws.status()}
+    assert steps["Preview"].ok and steps["Corrections"].badge == "1"
+    assert ws.blocking(steps.values()) == []  # PoS and the opening ledger are optional
+
+
+def test_records_are_edited_in_place(tmp_path: Path) -> None:
+    ws = _workspace(tmp_path)
+    cons = {"output": "consignment_a", "ship_date": "2026-12-15"}
+    ws.add_consignment(id="CA", volume_kg=100, **cons)
+    ws.add_consignment(id="CB", volume_kg=200, **cons)
+    ws.add_consignment(replace="CA", id="CA2", volume_kg=150, **cons)
+    assert ws.project is not None
+    assert [(c.id, c.volume_kg) for c in ws.project.consignments] == [("CA2", 150), ("CB", 200)]
+    with pytest.raises(WorkspaceError, match="already exists"):
+        ws.add_consignment(replace="CA2", id="CB", volume_kg=1, **cons)
+    with pytest.raises(WorkspaceError, match="no consignment CA"):
+        ws.add_consignment(replace="CA", id="CA", volume_kg=1, **cons)
+
+    pos = {"supplier": "H2 Trailers BV", "product": "H2", "dispatch_date": "2026-10-20"}
+    ws.add_pos(id="P1", quantity_kg=100.0, ghg_gCO2e_per_MJ=3.0, **pos)
+    with pytest.raises(WorkspaceError, match="pos_compliant"):
+        ws.add_pos(replace="P1", id="P1", quantity_kg=100.0, ghg_gCO2e_per_MJ=28.3, **pos)
+    ws.add_pos(replace="P1", id="P1", quantity_kg=120.0, ghg_gCO2e_per_MJ=3.0, **pos)
+    assert [(x.id, x.quantity_kg) for x in ws.project.pos] == [("P1", 120.0)]
+
+    first = ("compressor_electricity_kWh", "2026-10-02 00:00", "2026-10-02 00:30", 40.0, "log")
+    cid = ws.add_correction(*first)
+    ws.add_correction(*first[:3], 41.0, "log, re-read", replace=cid)
+    (c,) = ws.project.corrections
+    assert (c.id, c.value, c.reason) == (cid, 41.0, "log, re-read")
+    # Shown in plant time with its offset, which the form takes back unchanged (and which
+    # tells the two 02:00–03:00 hours apart on the night the clocks go back).
+    assert ws.local(c.start) == "2026-10-02 00:00+02:00"
+
+    ws.set_opening(
+        "lh2_storage",
+        1000.0,
+        [
+            {"batch_id": b, "rfnbo_kg": 1.0, "ghg_gCO2e_per_MJ": 1.7, "production_month": "2026-09"}
+            for b in ("L1", "L2")
+        ],
+    )
+    ws.remove_opening_entry("lh2_storage", "L1")
+    o = ws.project.opening["lh2_storage"]
+    assert o.opening_inventory_kg == 1000.0
+    assert [e.batch_id for e in o.opening_ledger] == ["L2"]
+    with pytest.raises(WorkspaceError, match="no opening entry"):
+        ws.remove_opening_entry("lh2_storage", "L1")

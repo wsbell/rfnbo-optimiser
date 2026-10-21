@@ -284,3 +284,29 @@ def test_unit_to_unit_link_adds_a_pass_through_storage(
         ("pt_electrolyser_compressor", "compressor"),
     }
     page.close()
+
+
+def test_unsaved_changes_are_marked_and_ctrl_s_saves(
+    browser: Any, editor: tuple[str, Path]
+) -> None:
+    url, path = editor
+    page = _open(browser, url)
+    expect(page.get_by_test_id("saved-state")).to_have_text("saved")
+    page.get_by_test_id("add-input").click()
+    expect(page.get_by_test_id("saved-state")).to_have_text("● unsaved changes")
+    page.keyboard.press("Control+s")
+    expect(page.get_by_test_id("saved-state")).to_have_text("saved")
+    assert json.loads(path.read_text("utf-8"))["blocks"][0]["kind"] == "input"
+    assert page.evaluate("bfd.dirty") is False
+    # Leaving with unsaved changes asks first: the page cancels "beforeunload", which makes
+    # the browser ask (headless Chromium shows no dialog, so the event is checked directly).
+    leave = """() => {
+        const e = new Event("beforeunload", {cancelable: true});
+        window.dispatchEvent(e);
+        return e.defaultPrevented;
+    }"""
+    assert page.evaluate(leave) is False
+    page.get_by_test_id("add-input").click()
+    expect(page.get_by_test_id("saved-state")).to_have_text("● unsaved changes")
+    assert page.evaluate(leave) is True
+    page.close()

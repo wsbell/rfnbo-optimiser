@@ -66,8 +66,10 @@ def _table(
     links: dict[str, str] | None = None,
     testid: str = "",
     page: int = 0,
-) -> None:
-    """columns: (key, label, unit); links: column key → row key holding the href."""
+    row_key: str | None = None,
+) -> ui.table:
+    """columns: (key, label, unit); links: column key → row key holding the href; row_key:
+    a row field that identifies the row, kept unformatted (default: the first column)."""
     cols = [
         {
             "name": k,
@@ -82,9 +84,11 @@ def _table(
         row: dict[str, Any] = {k: fmt(r.get(k), unit) for k, _, unit in columns}
         for k, href_key in (links or {}).items():
             row[f"{k}__href"] = r.get(href_key)
+        if row_key is not None:
+            row[row_key] = r.get(row_key)
         shown.append(row)
     table = ui.table(
-        columns=cols, rows=shown, row_key=columns[0][0], pagination=page or None
+        columns=cols, rows=shown, row_key=row_key or columns[0][0], pagination=page or None
     ).props(f'dense flat bordered data-testid="{testid}"')
     for k in links or {}:
         table.add_slot(
@@ -96,6 +100,7 @@ def _table(
               <span v-else>{{{{ props.value }}}}</span>
             </q-td>""",
         )
+    return table
 
 
 def _not_found(exc: Exception) -> None:

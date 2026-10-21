@@ -93,4 +93,24 @@ window.bfd = {
       el.classList.toggle("bfd-bad", bad.has(el.id.replace("node-", "")));
     });
   },
+
+  // Python sets this after every edit and save: the diagram has changes its file lacks.
+  dirty: false,
 };
+
+// Warn before leaving the page with unsaved changes.
+window.addEventListener("beforeunload", (e) => {
+  if (bfd.dirty) {
+    e.preventDefault();
+    e.returnValue = "";
+  }
+});
+
+// Ctrl+S / Cmd+S saves. Blurring first applies a field edited on blur (a block's id).
+document.addEventListener("keydown", (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
+    e.preventDefault();
+    if (document.activeElement) document.activeElement.blur();
+    emitEvent("bfd_save", null);
+  }
+});

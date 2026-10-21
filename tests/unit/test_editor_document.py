@@ -290,3 +290,23 @@ def test_flow_plant_and_settings_fields_have_editors() -> None:
         "layout",
     }
     assert {s.key for s in SETTINGS_FIELDS} == set(Settings.model_fields)
+
+
+def test_dirty_until_saved(tmp_path: Path) -> None:
+    """The editor marks unsaved changes and warns before they are lost."""
+    doc = EditorDocument.new()
+    assert not doc.dirty  # nothing drawn yet
+    bid = doc.add_block("input")
+    assert doc.dirty
+    path = tmp_path / "plant.json"
+    doc.save(path)
+    assert not doc.dirty
+    doc.move(bid, 10, 20)  # layout counts: it is saved in the file
+    assert doc.dirty
+    doc.save(path)
+    loaded = EditorDocument.load(path)
+    assert not loaded.dirty
+    loaded.update_block(bid, name="Grid electricity")
+    assert loaded.dirty
+    # A diagram opened from an upload is not in the file Save writes to.
+    assert EditorDocument.from_json(path.read_text("utf-8")).dirty
