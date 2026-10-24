@@ -13,6 +13,8 @@ window.bfd = {
     } else {
       const ed = new Drawflow(container);
       ed.reroute = false;
+      // Straight lines with right-angle bends (Drawflow's own are curves).
+      ed.createCurvature = (sx, sy, ex, ey) => this.elbow(sx, sy, ex, ey);
       ed.start();
       const emit = (name, data) => { if (!this.silent) emitEvent(name, data); };
       ed.on("connectionCreated", (c) => emit("bfd_connection_created", c));
@@ -36,6 +38,75 @@ window.bfd = {
       this.silent = false;
     }
     return ids;
+  },
+
+  // A connection from an output port (sx, sy) to an input port (ex, ey): along to the middle
+  // of the gap, across, and in, ending in an arrowhead at the input port's edge. A target at
+  // or behind the source is reached round the outside.
+  elbow(sx, sy, ex, ey) {
+    const tip = ex - 7;
+    const head = ` M ${tip - 7} ${ey - 4.5} L ${tip} ${ey} L ${tip - 7} ${ey + 4.5}`;
+    if (tip - sx >= 24) {
+      const mx = Math.round(sx + (tip - sx) / 2);
+      return `M ${sx} ${sy} L ${mx} ${sy} L ${mx} ${ey} L ${tip} ${ey}` + head;
+    }
+    const out = sx + 16, back = tip - 16, my = Math.round((sy + ey) / 2);
+    return (
+      `M ${sx} ${sy} L ${out} ${sy} L ${out} ${my} L ${back} ${my} L ${back} ${ey} L ${tip} ${ey}` +
+      head
+    );
+  },
+
+  // Inputs are drawn as pins on the units they feed unless shown: hidden, their nodes and
+  // wires are not drawn (CSS on the canvas's bfd-show-inputs class).
+  markInputs(ids) {
+    const inputs = new Set(ids.map(String));
+    document.querySelectorAll("#bfd-canvas .connection").forEach((el) => {
+      const from = [...el.classList].find((c) => c.startsWith("node_out_node-"));
+      el.classList.toggle("bfd-from-input", !!from && inputs.has(from.slice(14)));
+    });
+  },
+
+  showInputs(show) {
+    const ed = this.editor;
+    document.getElementById("bfd-canvas").classList.toggle("bfd-show-inputs", show);
+    // Wires drawn while their input was hidden start from nowhere: redraw them.
+    for (const id of Object.keys(ed.drawflow.drawflow.Home.data)) {
+      ed.updateConnectionNodes(`node-${id}`);
+    }
+    this.fit();
+  },
+
+  // Zoom and pan so every block drawn fits the canvas (never zooming in past 1:1).
+  fit() {
+    const ed = this.editor, box = document.getElementById("bfd-canvas");
+    const show = box.classList.contains("bfd-show-inputs");
+    const nodes = Object.values(ed.drawflow.drawflow.Home.data).filter(
+      (n) => show || !n.class.split(" ").includes("bfd-input"),
+    );
+    const size = (n) => {
+      const el = document.getElementById(`node-${n.id}`);
+      return el ? [el.offsetWidth, el.offsetHeight] : [168, 80];
+    };
+    let zoom = 1, left = 0, top = 0;
+    if (nodes.length) {
+      left = Math.min(...nodes.map((n) => n.pos_x));
+      top = Math.min(...nodes.map((n) => n.pos_y));
+      const right = Math.max(...nodes.map((n) => n.pos_x + size(n)[0]));
+      const bottom = Math.max(...nodes.map((n) => n.pos_y + size(n)[1]));
+      zoom = Math.min(
+        1, (box.clientWidth - 48) / (right - left), (box.clientHeight - 48) / (bottom - top),
+      );
+      zoom = Math.max(ed.zoom_min, zoom);
+    }
+    // Drawflow scales about the canvas centre, so the pan accounts for it.
+    const cx = ed.precanvas.clientWidth / 2, cy = ed.precanvas.clientHeight / 2;
+    ed.zoom = zoom;
+    ed.zoom_last_value = zoom;
+    ed.canvas_x = Math.round(24 - cx - (left - cx) * zoom);
+    ed.canvas_y = Math.round(24 - cy - (top - cy) * zoom);
+    ed.precanvas.style.transform =
+      `translate(${ed.canvas_x}px, ${ed.canvas_y}px) scale(${ed.zoom})`;
   },
 
   addNode(n) {

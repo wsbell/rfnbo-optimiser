@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import html
 import json
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -47,9 +48,20 @@ CSS = """
 #bfd-canvas .bfd-consignment_output { background: #FDF3F7; border-color: #F0D2DF; }
 #bfd-canvas .drawflow-node.bfd-pass_through { background: #FFFFFF; border: 1px dashed #8792A2;
                                               min-height: 48px; }
+#bfd-canvas .drawflow-node.bfd-processing_unit { background: #F1FAF4; border-color: #BFE3CB; }
 #bfd-canvas .drawflow-node .input, #bfd-canvas .drawflow-node .output {
-  background: #FFFFFF; border: 2px solid #8792A2; }
-#bfd-canvas .connection .main-path { stroke: #8792A2; stroke-width: 2.5px; }
+  box-sizing: border-box; width: 12px; height: 12px; margin: 0; top: 0; background: #FFFFFF;
+  border: 2px solid #8792A2; }
+#bfd-canvas .drawflow-node .input { left: -17px; }
+#bfd-canvas .drawflow-node .output { right: -5px; }
+#bfd-canvas .drawflow-node .input:hover, #bfd-canvas .drawflow-node .output:hover {
+  border-color: #5146E5; transform: scale(1.4); }
+#bfd-canvas .connection .main-path { stroke: #8792A2; stroke-width: 2px; fill: none;
+  stroke-linejoin: round; stroke-linecap: round; }
+#bfd-canvas:not(.bfd-show-inputs) .drawflow-node.bfd-input,
+#bfd-canvas:not(.bfd-show-inputs) .connection.bfd-from-input { display: none; }
+#bfd-canvas.bfd-show-inputs .bfd-pins { display: none; }
+.bfd-pins { margin-top: 2px; font-size: 11px; line-height: 14px; color: #7A4A06; }
 #bfd-canvas .connection .main-path.selected { stroke: #5146E5; }
 #bfd-canvas .connection.bfd-dashed .main-path { stroke-dasharray: 8 5; }
 .bfd-kind { font-size: 10px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase;
@@ -65,7 +77,14 @@ CSS = """
 """
 
 
-def node_html(block: dict[str, Any]) -> str:
+def pin_label(block: dict[str, Any]) -> str:
+    """An input as a pin on the unit it feeds: what it is, in a word or two."""
+    if block.get("material") == "electricity":
+        return "renewable" if block.get("renewable") else "non-renewable"
+    return str(block.get("material") or block.get("name") or block.get("id"))
+
+
+def node_html(block: dict[str, Any], pins: Sequence[str] = ()) -> str:
     name = html.escape(str(block.get("name", "")))
     label = KIND_LABELS.get(block.get("kind", ""), "")
     if block.get("kind") == "storage_unit" and block.get("pass_through"):
@@ -74,6 +93,7 @@ def node_html(block: dict[str, Any]) -> str:
     return (
         f'<div class="bfd-kind">{label}</div><div class="bfd-title">{name}</div>'
         f'<div class="bfd-sub">{bid}</div>'
+        + (f'<div class="bfd-pins">In: {html.escape(", ".join(pins))}</div>' if pins else "")
     )
 
 
@@ -86,6 +106,20 @@ class Editor:
         self.doc = EditorDocument.load(path) if path.exists() else EditorDocument.new()
         self.node_of: dict[str, int] = {}
         self.selected: tuple[str, str] | None = None  # ("block" | "flow", id)
+        # Inputs are pins on the units they feed until shown; a new diagram shows them.
+        self.show_inputs = not any(b.get("kind") == "input" for b in self.doc.blocks)
+
+    def html(self, block: dict[str, Any]) -> str:
+        return node_html(block, self.pins(block["id"]))
+
+    def pins(self, block_id: str) -> list[str]:
+        """The inputs flowing into a block, as pin labels."""
+        kinds = {b.get("id"): b for b in self.doc.blocks}
+        return [
+            pin_label(kinds[f["source"]])
+            for f in self.doc.flows
+            if f.get("target") == block_id and kinds.get(f.get("source"), {}).get("kind") == "input"
+        ]
 
     # ---- layout ----------------------------------------------------------------------
 
@@ -155,6 +189,11 @@ class Editor:
                                         ),
                                     )
                                 ).props(f'dense data-testid="zoom-{call}"').style("min-width: 36px")
+                    self.inputs_strip = (
+                        ui.row()
+                        .classes("w-full items-center gap-2")
+                        .style(f"padding: 8px 20px; border-bottom: 1px solid {theme.DIVIDER}")
+                    )
                     with ui.element("div").classes("relative w-full"):
                         ui.element("div").props('id="bfd-canvas"')
                 with (
@@ -192,7 +231,7 @@ class Editor:
                     "outputs": n_out,
                     "x": x,
                     "y": y,
-                    "html": node_html(b),
+                    "html": self.html(b),
                 }
             )
         edges = [{"source": f["source"], "target": f["target"]} for f in self.doc.flows]
@@ -204,6 +243,7 @@ class Editor:
         self.node_of = {k: int(v) for k, v in ids.items()}
         self.select(None)
         self.refresh()
+        ui.run_javascript(f"bfd.showInputs({json.dumps(self.show_inputs)})")
 
     # ---- canvas events -----------------------------------------------------------------
 
@@ -214,6 +254,8 @@ class Editor:
         return None
 
     async def add(self, kind: str) -> None:
+        if kind == "input" and not self.show_inputs:
+            self.set_inputs(True)
         block_id = self.doc.add_block(kind)
         b = self.doc.block(block_id)
         x, y = self.doc.position(block_id)
@@ -225,7 +267,7 @@ class Editor:
             "outputs": n_out,
             "x": x,
             "y": y,
-            "html": node_html(b),
+            "html": self.html(b),
         }
         self.node_of[block_id] = int(
             await ui.run_javascript(f"return bfd.addNode({json.dumps(node)})")
@@ -269,7 +311,7 @@ class Editor:
             "outputs": 1,
             "x": x,
             "y": y,
-            "html": node_html(b),
+            "html": self.html(b),
         }
         n = int(await ui.run_javascript(f"return bfd.addNode({json.dumps(node)})"))
         self.node_of[pt] = n
@@ -494,7 +536,7 @@ class Editor:
         if block_id in self.node_of:
             ui.run_javascript(
                 f"bfd.setHtml({self.node_of[block_id]}, "
-                f"{json.dumps(node_html(self.doc.block(block_id)))})"
+                f"{json.dumps(self.html(self.doc.block(block_id)))})"
             )
 
     def rename(self, cur: list[str], new: str) -> None:
@@ -585,6 +627,51 @@ class Editor:
         ]
         passing = [n for b, n in self.node_of.items() if self.doc.is_pass_through(b)]
         ui.run_javascript(f"bfd.style({json.dumps(edges)}, {json.dumps(passing)})")
+        inputs = [b for b in self.doc.blocks if b.get("kind") == "input"]
+        units = [b for b in self.doc.blocks if b.get("kind") == "processing_unit"]
+        marked = [self.node_of[b["id"]] for b in inputs if b["id"] in self.node_of]
+        ui.run_javascript(
+            "".join(
+                f"bfd.setHtml({self.node_of[b['id']]}, {json.dumps(self.html(b))});"
+                for b in units
+                if b["id"] in self.node_of
+            )
+            + f"bfd.markInputs({json.dumps(marked)});"
+        )
+        self.input_chips(inputs)
+
+    def input_chips(self, inputs: list[dict[str, Any]]) -> None:
+        """The strip over the canvas: show or hide inputs, and each input as a chip that
+        selects it (how a hidden input is edited)."""
+        self.inputs_strip.clear()
+        with self.inputs_strip:
+            ui.switch(
+                "Show inputs", value=self.show_inputs, on_change=lambda e: self.set_inputs(e.value)
+            ).props('dense data-testid="show-inputs"')
+            if not inputs:
+                return
+            ui.label("Inputs:" if self.show_inputs else "Inputs, drawn as pins:").classes("rf-note")
+            names = {b.get("id"): b.get("name") or b.get("id") for b in self.doc.blocks}
+            for b in inputs:
+                feeds = [f["target"] for f in self.doc.flows if f.get("source") == b["id"]]
+                into = (
+                    names.get(feeds[0], feeds[0])
+                    if len(feeds) == 1
+                    else f"{len(feeds)} units"
+                    if feeds
+                    else "not connected"
+                )
+                ui.button(
+                    f"{b.get('name') or b['id']} → {into}",
+                    on_click=lambda bid=b["id"]: self.select(("block", bid)),
+                ).props(f'flat dense data-testid="input-{b["id"]}"').style(
+                    "background: #FFF8EB; color: #7A4A06; font-size: 12px; padding: 0 8px"
+                )
+
+    def set_inputs(self, show: bool) -> None:
+        self.show_inputs = show
+        ui.run_javascript(f"bfd.showInputs({json.dumps(show)})")
+        self.refresh()
 
     def issue_list(self, ref: str) -> None:
         for i in self.doc.issues_by_ref().get(ref, []):

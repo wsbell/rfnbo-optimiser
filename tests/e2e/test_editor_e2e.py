@@ -215,6 +215,12 @@ def test_editing_an_existing_plant(browser: Any, editor: tuple[str, Path]) -> No
     page = _open(browser, url)
     expect(page.locator(".drawflow-node")).to_have_count(13)
 
+    # Inputs start as pins on the units they feed; the switch draws them as blocks.
+    expect(_node(page, "water")).to_be_hidden()
+    expect(_node(page, "electrolyser").locator(".bfd-pins")).to_contain_text("In:")
+    page.get_by_test_id("show-inputs").click()
+    expect(_node(page, "water")).to_be_visible()
+
     # A disallowed connection is refused and not drawn.
     _drag(
         page,

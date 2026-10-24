@@ -310,3 +310,34 @@ def test_dirty_until_saved(tmp_path: Path) -> None:
     assert loaded.dirty
     # A diagram opened from an upload is not in the file Save writes to.
     assert EditorDocument.from_json(path.read_text("utf-8")).dirty
+
+
+def test_automatic_layout_runs_in_lanes() -> None:
+    """Test plant 4 laid out as drawn in the design mockup: columns by flow, the LH2 route on
+    the top lane, spot sales in the middle, the CH2 route below, inputs left of x = 0."""
+    golden = Path(__file__).resolve().parents[1] / "golden" / "tc4.plant.json"
+    doc = EditorDocument.load(golden)
+    at = doc.auto_layout()
+    lanes = {}
+    for block, (x, y) in at.items():
+        lanes.setdefault(y, []).append((x, block))
+    top, middle, bottom = ([b for _, b in sorted(lanes[y])] for y in sorted(lanes))
+    assert top == [
+        "renewable_power", "h2_buffer", "liquefier", "lh2_storage", "dist_customer_a",
+        "consignment_a",
+    ]  # fmt: skip
+    assert middle == ["grid_power", "electrolyser", "h2_supplier", "dist_spot", "spot"]
+    assert bottom == [
+        "water", "pt_compressor", "compressor", "ch2_storage", "dist_customer_b",
+        "consignment_b",
+    ]  # fmt: skip
+    assert all(x < 0 for b, (x, _) in at.items() if doc.block(b)["kind"] == "input")
+    assert at["h2_buffer"][0] == at["h2_supplier"][0]  # a supplier sits beside what it feeds
+
+
+def test_ordered_rows_take_the_nearest_free_rows() -> None:
+    from rfnbo.ui.bfd_editor.document import _ordered_rows
+
+    assert _ordered_rows([0.33, 1.67], 3) == [0, 2]
+    assert _ordered_rows([1.0], 3) == [1]
+    assert _ordered_rows([2.0, 2.0, 2.0], 3) == [0, 1, 2]

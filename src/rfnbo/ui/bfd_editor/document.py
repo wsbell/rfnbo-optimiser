@@ -99,6 +99,32 @@ def _defaults(kind: str, effective_from: str) -> dict[str, Any]:
     raise EditorError(f"unknown block kind {kind!r}")
 
 
+def _ordered_rows(targets: list[float], rows: int) -> list[int]:
+    """Increasing rows in ``range(rows)``, one per target, as near the targets as they can be
+    (least total distance; the lower row on a tie)."""
+    n = len(targets)
+    inf = float("inf")
+    # cost[k][r]: best total for the first k+1 targets with target k on row r.
+    cost = [[inf] * rows for _ in range(n)]
+    back = [[-1] * rows for _ in range(n)]
+    for r in range(rows):
+        cost[0][r] = abs(r - targets[0])
+    for k in range(1, n):
+        best, arg = inf, -1
+        for r in range(rows):
+            if r > 0 and cost[k - 1][r - 1] < best:
+                best, arg = cost[k - 1][r - 1], r - 1
+            if arg >= 0:
+                cost[k][r] = best + abs(r - targets[k])
+                back[k][r] = arg
+    r = min(range(rows), key=lambda x: (cost[n - 1][x], x))
+    out = [r]
+    for k in range(n - 1, 0, -1):
+        r = back[k][r]
+        out.append(r)
+    return out[::-1]
+
+
 class EditorDocument:
     def __init__(self, data: dict[str, Any]) -> None:
         self.data = copy.deepcopy(data)
@@ -208,23 +234,104 @@ class EditorDocument:
         return self.auto_position(block_id)
 
     def auto_position(self, block_id: str) -> tuple[float, float]:
-        """Left-to-right by flow depth, for configs saved without a layout."""
+        """Where a block sits in the automatic layout (configs saved without one)."""
+        return self.auto_layout()[block_id]
+
+    def auto_layout(self) -> dict[str, tuple[float, float]]:
+        """Lanes, left to right by flow: each block a column after the blocks feeding it, an
+        RFNBO supplier just before the units it supplies, and inputs in a column of their own
+        to the left (x < 0, beside the units they feed). Within a column, blocks are ordered
+        and spaced so lines run as straight as they can."""
+        ids = [b["id"] for b in self.blocks]
+        kind = {b["id"]: b.get("kind") for b in self.blocks}
+        edges = [
+            (f["source"], f["target"])
+            for f in self.flows
+            if f.get("source") in kind and f.get("target") in kind
+        ]
+        parents = {i: [s for s, t in edges if t == i and kind[s] != "input"] for i in ids}
+        children = {i: [t for s, t in edges if s == i] for i in ids}
+
         depth: dict[str, int] = {}
 
         def d(node: str, seen: frozenset[str] = frozenset()) -> int:
-            if node in depth:
-                return depth[node]
-            sources = [
-                f["source"]
-                for f in self.flows
-                if f.get("target") == node and f.get("source") not in seen
-            ]
-            depth[node] = 1 + max((d(s, seen | {node}) for s in sources), default=-1)
+            if node not in depth:
+                up = [p for p in parents[node] if p not in seen]
+                depth[node] = 1 + max((d(p, seen | {node}) for p in up), default=-1)
             return depth[node]
 
-        col = d(block_id)
-        row = [b["id"] for b in self.blocks if d(b["id"]) == col].index(block_id)
-        return 40.0 + 260.0 * col, 40.0 + 140.0 * row
+        col = {i: d(i) for i in ids if kind[i] != "input"}
+        for i in col:  # a source without feed sits one column before what it supplies
+            if not parents[i] and children[i]:
+                col[i] = max(0, min(col[c] for c in children[i] if c in col) - 1)
+        for i in ids:
+            if kind[i] == "input":
+                col[i] = -1
+        columns: dict[int, list[str]] = {}
+        for i in ids:
+            columns.setdefault(col[i], []).append(i)
+        order = sorted(columns)
+        # A link pulls its ends into line; one-to-one links (a chain) pull hardest, a fan-out
+        # or fan-in less, so chains run straight.
+        weight: dict[str, dict[str, float]] = {i: {} for i in ids}
+        for s, t in edges:
+            if kind[s] == "input" and kind[t] != "input":
+                weight[s][t] = 1 / len(children[s])  # inputs follow the units they feed
+                continue
+            w = 1 / (max(len(children[s]), 1) * max(len(parents[t]), 1))
+            weight[s][t] = weight[t][s] = w
+
+        def pull(b: str, at: dict[str, float], side: int = 0) -> float | None:
+            """Weighted mean place of a block's neighbours (on one side if ``side``)."""
+            near = [
+                (at[n], w)
+                for n, w in weight[b].items()
+                if n in at and col[n] != col[b] and (side == 0 or (col[n] - col[b]) * side > 0)
+            ]
+            total = sum(w for _, w in near)
+            return sum(p * w for p, w in near) / total if total else None
+
+        # Order each column by its neighbours' places, sweeping in from the left, then the
+        # right (each sweep looks back at the columns it has passed).
+        def place(c: int) -> dict[str, float]:
+            n = len(columns[c])
+            return {b: k - (n - 1) / 2 for k, b in enumerate(columns[c])}
+
+        for sweep, side in ((order, -1), (order[::-1], 1)) * 2:
+            where: dict[str, float] = {}
+            for c in order:
+                where.update(place(c))
+            for c in sweep:
+                current = place(c)
+
+                def key(
+                    b: str,
+                    current: dict[str, float] = current,
+                    where: dict[str, float] = where,
+                    side: int = side,
+                ) -> tuple[float, float]:
+                    p = pull(b, where, side)
+                    return (current[b] if p is None else p, current[b])
+
+                columns[c].sort(key=key)
+                where.update(place(c))
+
+        # Rows: a grid as tall as the fullest column; each other column takes the rows nearest
+        # its neighbours' (in order, one block a row), refined over a few passes.
+        rows_n = max(len(v) for v in columns.values()) if columns else 0
+        row: dict[str, float] = {}
+        for c in order:
+            if len(columns[c]) == rows_n:
+                row.update({b: k for k, b in enumerate(columns[c])})
+        for _ in range(4):
+            for c in order:
+                if len(columns[c]) == rows_n:
+                    continue
+                targets = [pull(b, row) for b in columns[c]]
+                mid = (rows_n - 1) / 2
+                chosen = _ordered_rows([mid if t is None else t for t in targets], rows_n)
+                row.update(zip(columns[c], chosen, strict=True))
+        return {i: (40.0 + 240.0 * col[i], 40.0 + 140.0 * row[i]) for i in ids}
 
     # ---- edits ----------------------------------------------------------------------
 
