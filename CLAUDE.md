@@ -57,6 +57,9 @@ uv run rfnbo validate examples/test_plant.json
 - `src/rfnbo/trace/`: `json_log.py` (per-batch records, `recompute_ghg`), `lineage.py`
   (edges and drill-down), `run.py` (seal, verify, open next quarter from a sealed run).
   Sealed outputs must stay byte-identical on re-run: no wall-clock, no unordered iteration.
+- `src/rfnbo/ui/theme.py`: the shared look (colour tokens, type, card/table/button/input/pill
+  styles, top bar). Every screen calls `theme.setup()` before `ui.run` and `theme.apply()` on
+  each page; build new UI from its helpers rather than ad-hoc colours.
 - `src/rfnbo/ui/bfd_editor/`: the diagram editor (`rfnbo edit`). `document.py` holds all
   editing state and validation with no UI imports; `fields.py` defines the property forms
   (a test checks every schema field has one); `page.py` is the NiceGUI page; `static/` holds

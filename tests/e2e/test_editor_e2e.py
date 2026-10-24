@@ -85,6 +85,12 @@ def _fill(page: Any, testid: str, value: Any) -> None:
     box.press("Tab")
 
 
+def _add(page: Any, kind: str) -> None:
+    """Add a block from the "Add block" menu."""
+    page.get_by_test_id("add-block").click()
+    page.get_by_test_id(f"add-{kind}").click()
+
+
 def _choose(page: Any, testid: str, option: str) -> None:
     page.locator(f'[data-testid="{testid}"]').click()
     page.get_by_role("option", name=option, exact=True).click()
@@ -98,7 +104,7 @@ def _check(page: Any, testid: str, on: bool) -> None:
 
 def _node(page: Any, block_id: str) -> Any:
     return page.locator(".drawflow-node").filter(
-        has=page.locator(".bfd-sub", has_text=re.compile(rf"· {re.escape(block_id)}$"))
+        has=page.locator(".bfd-sub", has_text=re.compile(rf"^{re.escape(block_id)}$"))
     )
 
 
@@ -145,7 +151,7 @@ def _draw(page: Any, spec: PlantConfig) -> None:
     for b in spec.blocks:
         raw = b.model_dump(mode="json", exclude_none=True)
         kind = raw.pop("kind")
-        page.get_by_test_id(f"add-{kind}").click()
+        _add(page, kind)
         expect(_input(page, "field-id")).to_have_value(re.compile(rf"^{kind}_\d+$"))
         _fill(page, "field-id", raw.pop("id"))
         expect(_input(page, "field-id")).to_have_value(b.id)
@@ -257,7 +263,7 @@ def test_unit_to_unit_link_adds_a_pass_through_storage(
     url, path = editor
     page = _open(browser, url)
     for block_id, product in (("electrolyser", "H2"), ("compressor", "CH2")):
-        page.get_by_test_id("add-processing_unit").click()
+        _add(page, "processing_unit")
         expect(_input(page, "field-id")).to_have_value(re.compile(r"^processing_unit_\d+$"))
         _fill(page, "field-id", block_id)
         expect(_input(page, "field-id")).to_have_value(block_id)
@@ -292,7 +298,7 @@ def test_unsaved_changes_are_marked_and_ctrl_s_saves(
     url, path = editor
     page = _open(browser, url)
     expect(page.get_by_test_id("saved-state")).to_have_text("saved")
-    page.get_by_test_id("add-input").click()
+    _add(page, "input")
     expect(page.get_by_test_id("saved-state")).to_have_text("● unsaved changes")
     page.keyboard.press("Control+s")
     expect(page.get_by_test_id("saved-state")).to_have_text("saved")
@@ -306,7 +312,7 @@ def test_unsaved_changes_are_marked_and_ctrl_s_saves(
         return e.defaultPrevented;
     }"""
     assert page.evaluate(leave) is False
-    page.get_by_test_id("add-input").click()
+    _add(page, "input")
     expect(page.get_by_test_id("saved-state")).to_have_text("● unsaved changes")
     assert page.evaluate(leave) is True
     page.close()

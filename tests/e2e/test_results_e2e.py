@@ -87,7 +87,7 @@ def test_trace_a_consignment_to_15_minute_data(
     page = browser.new_page(viewport={"width": 1500, "height": 1000})
     page.goto(url)
     _link(page, run_id).click()
-    expect(page.get_by_test_id("reproduce")).to_have_text("reproduces byte for byte", timeout=30000)
+    expect(page.get_by_test_id("reproduce")).to_have_text("Reproduces byte for byte", timeout=30000)
 
     _link(page, "C1").click()
     expect(page.get_by_text("Consignment C1 · Customer A")).to_be_visible()
@@ -139,7 +139,7 @@ def test_trace_a_multi_step_consignment_to_15_minute_data(
     url, _, tc3_id, _ = results
     page = browser.new_page(viewport={"width": 1500, "height": 1000})
     page.goto(f"{url}run/{tc3_id}")
-    expect(page.get_by_test_id("reproduce")).to_have_text("reproduces byte for byte", timeout=30000)
+    expect(page.get_by_test_id("reproduce")).to_have_text("Reproduces byte for byte", timeout=30000)
     expect(page.get_by_test_id("products")).to_contain_text("pass-through")
 
     _link(page, "CA").click()
@@ -169,7 +169,7 @@ def test_trace_a_consignment_to_the_pos_that_fed_it(
     url, _, _, tc4_id = results
     page = browser.new_page()
     page.goto(f"{url}run/{tc4_id}")
-    expect(page.get_by_test_id("reproduce")).to_have_text("reproduces byte for byte", timeout=30000)
+    expect(page.get_by_test_id("reproduce")).to_have_text("Reproduces byte for byte", timeout=30000)
     register = page.get_by_test_id("pos")
     expect(register).to_contain_text("POS-C")
     expect(register).to_contain_text("6,000")

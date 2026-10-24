@@ -20,6 +20,7 @@ from nicegui import run as background
 
 from rfnbo.model.entities import ConsignmentSpec, ProofOfSustainability
 from rfnbo.project.corrections import Correction
+from rfnbo.ui import theme
 from rfnbo.ui.bfd_editor import page as editor
 from rfnbo.ui.data.workspace import PlantSummary, Workspace, WorkspaceError
 from rfnbo.ui.results import app as results
@@ -35,6 +36,31 @@ TABS = (
     "Opening ledger",
     "Run",
 )
+
+# Each tab's card: heading and the line under it.
+CARDS = (
+    ("Plant config and quarter", "The plant this quarter is accounted for, and its data files"),
+    ("Column mapping", "Every series the plant needs, and the column it is read from"),
+    ("Data quality and preview", "Every quality flag; values in the plant time zone"),
+    (
+        "Corrections",
+        "One series set to a value over [from, to), in the plant time zone, with a reason. The "
+        "original file is never changed; the sealed run records its hash and every correction.",
+    ),
+    ("Consignments", "Target blank means minimise the shipped GHG"),
+    (
+        "Proofs of sustainability",
+        "Purchased RFNBO: compliant at ≤ 28.2 gCO2e/MJ including distribution, dispatched in "
+        "this quarter",
+    ),
+    ("Opening ledger", "The quarter's opening position: a previous sealed run, or by hand"),
+    (
+        "Run",
+        "Optimise the quarter and seal it with its baseline under runs/. The same folder runs "
+        "from the command line: rfnbo optimise --project <folder>.",
+    ),
+)
+TONE = {"positive": "success", "negative": "danger", "grey-7": "neutral"}
 
 # A form's fields, built in the current layout context; returns a reader of their values.
 Fields = Callable[[], Callable[[], None]]
@@ -76,7 +102,8 @@ class DataPage:
     def __init__(self, root: Path) -> None:
         self.ws = Workspace(root)
         self.message: ui.label | None = None
-        self.badges: dict[str, ui.badge] = {}
+        self.badges: dict[str, ui.label] = {}
+        self.readiness: ui.label | None = None
         self.dialogs: ui.element | None = None
         self.chosen: str | None = None  # plant config chosen on the Setup tab
         self.quarter: str | None = None
@@ -118,6 +145,7 @@ class DataPage:
             self.run_tab,
         ):
             section.refresh()
+        self.heading.refresh()
         self.show_status()
 
     def show_status(self) -> None:
@@ -132,9 +160,15 @@ class DataPage:
             else:
                 text = s.badge or ("" if s.ok else "!")
                 color = "grey-7" if not s.required else ("positive" if s.ok else "negative")
-            badge.set_text(text)
-            badge.props(f"color={color}")
+            theme.set_pill(badge, text, TONE[color])
             badge.set_visibility(bool(text))
+        if self.readiness is not None:
+            n = len(blocking)
+            theme.set_pill(
+                self.readiness,
+                "Ready to run" if not n else f"{n} step{'s' if n > 1 else ''} to do",
+                "success" if not n else "caution",
+            )
 
     def confirm(
         self,
@@ -147,7 +181,7 @@ class DataPage:
         """Ask before removing or replacing something; it cannot be undone."""
         assert self.dialogs is not None
         self.dialogs.clear()
-        with self.dialogs, ui.dialog() as dialog, ui.card():
+        with self.dialogs, ui.dialog() as dialog, ui.card().classes("p-5 gap-4 max-w-lg"):
             ui.label(question)
             with ui.row():
 
@@ -164,15 +198,15 @@ class DataPage:
                     if cancelled:
                         cancelled()
 
-                ui.button("Cancel", on_click=no).props("flat")
+                theme.secondary(ui.button("Cancel", on_click=no))
         dialog.open()
 
     def edit(self, title: str, fields: Fields) -> None:
         """Edit a record in a dialog with the same fields as the form that added it."""
         assert self.dialogs is not None
         self.dialogs.clear()
-        with self.dialogs, ui.dialog() as dialog, ui.card().classes("min-w-[48rem]"):
-            ui.label(title).classes("text-base font-medium")
+        with self.dialogs, ui.dialog() as dialog, ui.card().classes("min-w-[48rem] p-5 gap-4"):
+            ui.label(title).classes("rf-h2")
             with ui.row().classes("items-end gap-2"):
                 apply = fields()
             with ui.row():
@@ -180,41 +214,61 @@ class DataPage:
                 ui.button(
                     "Save", on_click=lambda: self.act(apply, "saved") and dialog.close()
                 ).props('data-testid="edit-save"')
-                ui.button("Cancel", on_click=dialog.close).props("flat")
+                theme.secondary(ui.button("Cancel", on_click=dialog.close))
         dialog.open()
 
     # ---- layout ----------------------------------------------------------------------------
 
     def build(self) -> None:
-        with ui.row().classes("items-center gap-4"):
-            ui.label(f"Data · {self.ws.root}").classes("text-lg font-medium")
+        theme.apply()
+        root = self.ws.root
+        right = theme.top_bar([(root.name or str(root), None)], hint=str(root.resolve()))
+        with right:
+            self.readiness = theme.pill("", testid="readiness")
             ui.link("Sealed runs →", "/").props('data-testid="runs-link"')
-        self.message = ui.label("").props('data-testid="message"')
         self.dialogs = ui.element("div")
-        with ui.tabs() as tabs:
-            for name in TABS:
-                with ui.tab(name).props(f'data-testid="tab-{_slug(name)}"'):
-                    self.badges[name] = ui.badge("").props(
-                        f'floating data-testid="badge-{_slug(name)}"'
-                    )
-        with ui.tab_panels(tabs, value=TABS[0]).classes("w-full"):
-            for name, section in zip(
-                TABS,
-                (
-                    self.setup,
-                    self.mapping,
-                    self.preview,
-                    self.corrections,
-                    self.consignments,
-                    self.pos,
-                    self.opening,
-                    self.run_tab,
-                ),
-                strict=True,
+        sections = (
+            self.setup,
+            self.mapping,
+            self.preview,
+            self.corrections,
+            self.consignments,
+            self.pos,
+            self.opening,
+            self.run_tab,
+        )
+        with ui.row().classes("w-full items-start gap-0").style("flex-wrap: wrap"):
+            with ui.column().classes("rf-nav gap-1"):
+                ui.label("Quarter").classes("rf-eyebrow").style("padding: 0 12px 6px")
+                with ui.tabs().props("vertical").classes("w-full") as tabs:
+                    for name in TABS:
+                        with ui.tab(name).props(f'data-testid="tab-{_slug(name)}"'):
+                            self.badges[name] = theme.pill(
+                                "", testid=f"badge-{_slug(name)}"
+                            ).classes("rf-count")
+            with theme.page(wide=True).style(
+                "flex: 999 1 560px; min-width: 0; width: auto; max-width: 1180px"
             ):
-                with ui.tab_panel(name):
-                    section()
+                self.heading()
+                self.message = ui.label("").props('data-testid="message"').classes("rf-note")
+                with ui.tab_panels(tabs, value=TABS[0]).classes("w-full"):
+                    for name, (heading, sub), section in zip(TABS, CARDS, sections, strict=True):
+                        with ui.tab_panel(name), theme.card(heading, sub):
+                            section()
         self.show_status()
+
+    @ui.refreshable_method
+    def heading(self) -> None:
+        p = self.ws.project
+        if p is None:
+            theme.title("New project", "Choose the plant config and the quarter to begin")
+            return
+        try:
+            cfg = self.ws.config()
+            line = f"{cfg.plant} · {cfg.timezone} · {p.file.config}"
+        except WorkspaceError:
+            line = p.file.config
+        theme.title(p.file.quarter, line)
 
     @ui.refreshable_method
     def setup(self) -> None:
@@ -223,7 +277,6 @@ class DataPage:
         if self.chosen is None:
             # A folder holding one plant config needs no choice, only the quarter.
             self.chosen = p.file.config if p else (options[0] if len(options) == 1 else None)
-        ui.label("Plant config").classes("text-base font-medium")
         with ui.row().classes("items-center gap-2"):
             ui.select(
                 options,
@@ -236,9 +289,11 @@ class DataPage:
                 .props('accept=".json" data-testid="upload-config"')
                 .classes("hidden")
             )
-            ui.button("Upload…", on_click=lambda: picker.run_method("pickFiles")).props(
-                'flat icon=upload data-testid="upload-config-button"'
-            ).tooltip("A plant config JSON file; it is copied into this folder")
+            theme.secondary(
+                ui.button("Upload…", icon="upload", on_click=lambda: picker.run_method("pickFiles"))
+            ).props('data-testid="upload-config-button"').tooltip(
+                "A plant config JSON file; it is copied into this folder"
+            )
             ui.button("New plant diagram", on_click=self.new_plant).props(
                 'flat data-testid="new-plant"'
             )
@@ -260,7 +315,7 @@ class DataPage:
             ui.label(
                 "Choose the plant config, upload one (it is copied into this folder), or draw "
                 "a new plant diagram."
-            ).classes("text-sm text-grey")
+            ).classes("rf-note")
             return
         summary = self.ws.plant_summary(self.chosen)
         self.plant_card(summary)
@@ -284,13 +339,22 @@ class DataPage:
                 )
         if not p:
             return
-        ui.label("Data files").classes("text-base font-medium mt-4")
+        ui.label("Data files").classes("rf-h2 mt-4")
         ui.label(
             "Uploaded files are kept unchanged in data/. Columns whose header agrees with a "
             "series name are mapped automatically."
-        ).classes("text-sm text-grey")
-        ui.upload(label="Upload CSV or Excel", auto_upload=True, on_upload=self.upload).props(
-            'accept=".csv,.xlsx,.xlsm" data-testid="upload-data"'
+        ).classes("rf-note")
+        files_picker = (
+            ui.upload(auto_upload=True, on_upload=self.upload)
+            .props('accept=".csv,.xlsx,.xlsm" data-testid="upload-data"')
+            .classes("hidden")
+        )
+        theme.secondary(
+            ui.button(
+                "Upload CSV or Excel",
+                icon="upload",
+                on_click=lambda: files_picker.run_method("pickFiles"),
+            )
         )
         rows = [
             {
@@ -332,14 +396,29 @@ class DataPage:
                     value=len(p.file.sources) - 1,
                     label="File",
                 )
-                ui.upload(
-                    label="Import a saved column mapping (source spec JSON)",
-                    auto_upload=True,
-                    on_upload=lambda e, w=which: self.import_mapping(e, int(w.value)),
-                ).props('accept=".json" data-testid="upload-mapping"')
+                mapping_picker = (
+                    ui.upload(
+                        auto_upload=True,
+                        on_upload=lambda e, w=which: self.import_mapping(e, int(w.value)),
+                    )
+                    .props('accept=".json" data-testid="upload-mapping"')
+                    .classes("hidden")
+                )
+                theme.secondary(
+                    ui.button(
+                        "Import a saved column mapping",
+                        icon="file_open",
+                        on_click=lambda: mapping_picker.run_method("pickFiles"),
+                    )
+                ).tooltip("A source spec JSON, as rfnbo run --source takes")
 
     def plant_card(self, s: PlantSummary) -> None:
-        with ui.card().classes("p-3 mt-2 w-full max-w-4xl").props('data-testid="plant-card"'):
+        with (
+            ui.element("div")
+            .classes("rf-card")
+            .style("padding: 12px 16px; max-width: 56rem; box-shadow: none")
+            .props('data-testid="plant-card"')
+        ):
             with ui.row().classes("items-center gap-2 w-full no-wrap"):
                 if s.plant is not None:
                     c = s.plant
@@ -512,7 +591,7 @@ class DataPage:
         ui.label(
             f"Intervals {self.start:,}–{min(self.start + 96, view['intervals']) - 1:,} of "
             f"{view['intervals']:,}, plant time zone; corrected values marked *"
-        ).classes("text-sm text-grey")
+        ).classes("rf-note")
         names = view["columns"]
         rows = [
             {"local": r["local"]}
@@ -540,11 +619,6 @@ class DataPage:
             return
         p = self.ws.project
         assert p is not None
-        ui.label(
-            "A correction sets one series to a value over [from, to), in the plant time zone. "
-            "It needs a reason; the original file is never changed, and the sealed run records "
-            "the file's hash and every correction."
-        ).classes("text-sm text-grey")
         try:
             names = self.ws.required_series()
         except WorkspaceError as exc:
@@ -553,7 +627,7 @@ class DataPage:
         with ui.row().classes("items-end gap-2"):
             apply = self.correction_fields(names, None, "corr")()
             ui.button("Add correction", on_click=lambda: self.act(apply, "correction added")).props(
-                'data-testid="add-correction"'
+                'outline color=dark data-testid="add-correction"'
             )
         rows = [
             {
@@ -650,7 +724,7 @@ class DataPage:
             apply = self.consignment_fields(outputs, None, "cons")()
             ui.button(
                 "Add consignment", on_click=lambda: self.act(apply, "consignment added")
-            ).props('data-testid="add-consignment"')
+            ).props('outline color=dark data-testid="add-consignment"')
         table = _table(
             [
                 ("id", "Consignment", ""),
@@ -712,14 +786,10 @@ class DataPage:
             return
         p = self.ws.project
         assert p is not None
-        ui.label(
-            "A proof of sustainability for RFNBO bought from a supplier: compliant "
-            "(≤ 28.2 gCO2e/MJ, distribution included) and dispatched in this quarter."
-        ).classes("text-sm text-grey")
         with ui.row().classes("items-end gap-2"):
             apply = self.pos_fields(None, "pos")()
             ui.button("Add PoS", on_click=lambda: self.act(apply, "PoS added")).props(
-                'data-testid="add-pos"'
+                'outline color=dark data-testid="add-pos"'
             )
         table = _table(
             [
@@ -786,7 +856,7 @@ class DataPage:
             return
         p = self.ws.project
         assert p is not None
-        ui.label("Open from the previous quarter's sealed run").classes("text-base font-medium")
+        ui.label("Open from the previous quarter's sealed run").classes("rf-h2")
         with ui.row().classes("items-end gap-2"):
             prior = ui.input("Sealed run folder", value=p.file.opening_from or "").classes("w-96")
 
@@ -810,7 +880,7 @@ class DataPage:
         ui.label(
             "Saving sets the storage's opening inventory and, if a batch id is given, adds that "
             "ledger entry to the storage's opening ledger."
-        ).classes("text-sm text-grey")
+        ).classes("rf-note")
         try:
             stores = self.ws.storages()
         except WorkspaceError as exc:
@@ -896,10 +966,6 @@ class DataPage:
         if not self.ws.ready:
             ui.label("Set up the project first.")
             return
-        ui.label(
-            "Optimise the quarter and seal it with its baseline under runs/. The same folder runs "
-            "from the command line: rfnbo optimise --project <folder>."
-        ).classes("text-sm text-grey")
         steps = self.ws.status()
         blocking = self.ws.blocking(steps)
         with ui.column().classes("gap-0 my-2").props('data-testid="checklist"'):
@@ -916,7 +982,7 @@ class DataPage:
                     ui.label(f"{s.tab}: {s.detail}").props(f'data-testid="check-{_slug(s.tab)}"')
         with ui.row().classes("items-end gap-2"):
             label = ui.input("Run label (optional)").props('data-testid="run-label"')
-            button = ui.button("Run").props('data-testid="run"')
+            button = ui.button("Run optimisation", icon="play_arrow").props('data-testid="run"')
         if blocking:
             button.disable()
             ui.label(
@@ -962,6 +1028,7 @@ class DataPage:
 
 def run(root: Path, port: int = 8082, show: bool = True) -> None:
     results._ROOT = root / "runs"
+    theme.setup()
 
     @ui.page("/data")
     def data_page() -> None:

@@ -13,6 +13,7 @@ from typing import Any
 
 from nicegui import app, events, ui
 
+from rfnbo.ui import theme
 from rfnbo.ui.bfd_editor.document import KIND_LABELS, KINDS, EditorDocument, EditorError
 from rfnbo.ui.bfd_editor.fields import (
     BLOCK_FIELDS,
@@ -26,24 +27,41 @@ from rfnbo.ui.bfd_editor.fields import (
 
 STATIC = Path(__file__).parent / "static"
 PORTS = {"input": (0, 1), "rfnbo_supply": (0, 1), "consignment_output": (1, 0)}
+# Block colours follow the app's look (rfnbo.ui.theme): a quiet tint and a kind label per kind.
 CSS = """
-#bfd-canvas { height: calc(100vh - 140px); width: 100%; border: 1px solid #ccc;
-              position: relative; background: #fafafa; }
-#bfd-canvas .drawflow-node { width: 170px; min-height: 56px; padding: 6px 10px;
-                             border: 1px solid #555; border-radius: 6px; }
-#bfd-canvas .drawflow-node.selected { border: 2px solid #1565c0; background: #e3f2fd; }
-#bfd-canvas .drawflow-node.bfd-bad { border: 2px solid #c62828; }
-#bfd-canvas .bfd-input { background: #fff8e1; }
-#bfd-canvas .bfd-rfnbo_supply { background: #fffde7; border-style: double; }
-#bfd-canvas .bfd-processing_unit { background: #e8f5e9; }
-#bfd-canvas .bfd-storage_unit { background: #e3f2fd; }
-#bfd-canvas .bfd-distribution { background: #f3e5f5; }
-#bfd-canvas .bfd-consignment_output { background: #fce4ec; }
-#bfd-canvas .drawflow-node.bfd-pass_through { border-style: dashed; min-height: 40px; }
-#bfd-canvas .connection .main-path { stroke-width: 3px; }
+#bfd-canvas { height: calc(100vh - 230px); min-height: 420px; width: 100%; position: relative;
+              background-color: #FBFCFD; border-radius: 0 0 8px 8px;
+              background-image: radial-gradient(#DCE1E7 1px, transparent 1px);
+              background-size: 16px 16px; }
+#bfd-canvas .drawflow-node { width: 168px; min-height: 64px; padding: 8px 10px;
+                             box-sizing: border-box; background: #FFFFFF; color: #0A2540;
+                             border: 1px solid #C9D1DA; border-radius: 8px;
+                             box-shadow: 0 1px 2px rgba(10,37,64,.06); }
+#bfd-canvas .drawflow-node.selected { border: 2px solid #5146E5; background: #FFFFFF;
+                                      box-shadow: 0 0 0 4px rgba(81,70,229,.15); }
+#bfd-canvas .drawflow-node.bfd-bad { border: 2px solid #A3123A; }
+#bfd-canvas .bfd-input { background: #FFF8EB; border-color: #EED9B4; }
+#bfd-canvas .bfd-rfnbo_supply { background: #FFF8EB; border-color: #E2C48C; }
+#bfd-canvas .bfd-storage_unit { background: #F2F7FF; border-color: #C9D9EE; }
+#bfd-canvas .bfd-distribution { background: #F7F4FF; border-color: #DAD2F2; }
+#bfd-canvas .bfd-consignment_output { background: #FDF3F7; border-color: #F0D2DF; }
+#bfd-canvas .drawflow-node.bfd-pass_through { background: #FFFFFF; border: 1px dashed #8792A2;
+                                              min-height: 48px; }
+#bfd-canvas .drawflow-node .input, #bfd-canvas .drawflow-node .output {
+  background: #FFFFFF; border: 2px solid #8792A2; }
+#bfd-canvas .connection .main-path { stroke: #8792A2; stroke-width: 2.5px; }
+#bfd-canvas .connection .main-path.selected { stroke: #5146E5; }
 #bfd-canvas .connection.bfd-dashed .main-path { stroke-dasharray: 8 5; }
-.bfd-title { font-weight: 600; font-size: 13px; }
-.bfd-sub { font-size: 11px; color: #555; }
+.bfd-kind { font-size: 10px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase;
+            color: #425466; }
+.bfd-input .bfd-kind, .bfd-rfnbo_supply .bfd-kind { color: #7A4A06; }
+.bfd-processing_unit .bfd-kind { color: #05603A; }
+.bfd-storage_unit .bfd-kind { color: #1D4F91; }
+.bfd-distribution .bfd-kind { color: #5B3BA8; }
+.bfd-consignment_output .bfd-kind { color: #9B1F5A; }
+.bfd-title { font-weight: 600; font-size: 13px; line-height: 16px; }
+.bfd-sub { font-size: 11px; line-height: 14px; color: #697386; }
+.rf-props { max-height: calc(100vh - 230px); min-height: 420px; overflow-y: auto; }
 """
 
 
@@ -53,7 +71,10 @@ def node_html(block: dict[str, Any]) -> str:
     if block.get("kind") == "storage_unit" and block.get("pass_through"):
         label = "Pass-through"
     bid = html.escape(str(block.get("id", "")))
-    return f'<div class="bfd-title">{name}</div><div class="bfd-sub">{label} · {bid}</div>'
+    return (
+        f'<div class="bfd-kind">{label}</div><div class="bfd-title">{name}</div>'
+        f'<div class="bfd-sub">{bid}</div>'
+    )
 
 
 class Editor:
@@ -75,41 +96,77 @@ class Editor:
             '<script src="/bfd-static/bfd.js"></script>'
             f"<style>{CSS}</style>"
         )
-        with ui.row().classes("w-full items-center gap-2"):
-            if self.back:
-                ui.link("← Data screen", self.back).props('data-testid="back"')
-            self.title = ui.label().classes("text-lg font-medium")
+        theme.apply()
+        right = theme.top_bar([("Plant config", None)], back=self.back)
+        with right:
             self.saved_state = ui.label().props('data-testid="saved-state"')
-            ui.space()
-            for kind in KINDS:
-                ui.button(f"+ {KIND_LABELS[kind]}", on_click=lambda k=kind: self.add(k)).props(
-                    f'dense outline data-testid="add-{kind}"'
-                )
-            ui.button("Plant settings", on_click=self.show_plant).props(
-                'dense flat data-testid="plant-settings"'
+            theme.secondary(ui.button("Download JSON", on_click=self.download)).props(
+                'data-testid="download"'
             )
+            opener = (
+                ui.upload(auto_upload=True, on_upload=self.upload)
+                .props('accept=.json data-testid="upload"')
+                .classes("hidden")
+            )
+            theme.secondary(
+                ui.button("Open JSON…", on_click=lambda: opener.run_method("pickFiles"))
+            ).tooltip(f"Load a plant config; Save writes it to {self.path.name}")
             ui.button("Save", on_click=self.save).props('data-testid="save"').tooltip("Ctrl+S")
-            ui.button("Download", on_click=self.download).props('flat data-testid="download"')
-            ui.upload(label="Open JSON", auto_upload=True, on_upload=self.upload).props(
-                'accept=.json flat dense data-testid="upload"'
-            ).classes("w-40")
-        with ui.row().classes("w-full no-wrap"):
-            with ui.element("div").classes("grow relative"):
-                ui.element("div").props('id="bfd-canvas"')
-                with ui.row().classes("absolute gap-1").style("top: 8px; right: 8px; z-index: 5"):
-                    for label, call in (("+", "zoom_in"), ("−", "zoom_out"), ("1:1", "zoom_reset")):
-                        ui.button(
-                            label, on_click=lambda c=call: ui.run_javascript(f"bfd.editor.{c}()")
-                        ).props(f'dense outline size=sm data-testid="zoom-{call}"')
-            with (
-                ui.column()
-                .classes("w-96 gap-1")
-                .style("height: calc(100vh - 140px); overflow-y: auto")
-            ):
-                self.props_box = ui.column().classes("w-full")
-                ui.separator()
-                self.summary = ui.label().props('data-testid="issue-summary"')
-                self.issues_box = ui.column().classes("w-full gap-0")
+        with theme.page(wide=True):
+            with ui.row().classes("w-full items-end gap-3").style("flex-wrap: wrap"):
+                with ui.column().classes("gap-1"):
+                    ui.label("Plant config").classes("rf-h1").props('role="heading" aria-level="1"')
+                    self.title = ui.label().classes("rf-sub").style("font-size: 14px")
+                ui.space()
+                theme.secondary(ui.button("Plant settings", on_click=self.show_plant)).props(
+                    'data-testid="plant-settings"'
+                )
+                with ui.dropdown_button("Add block", icon="add", auto_close=True).props(
+                    'outline color=dark no-caps data-testid="add-block"'
+                ):
+                    for kind in KINDS:
+                        ui.item(KIND_LABELS[kind], on_click=lambda k=kind: self.add(k)).props(
+                            f'data-testid="add-{kind}"'
+                        )
+            with ui.row().classes("w-full items-start gap-5").style("flex-wrap: wrap"):
+                with (
+                    ui.element("section")
+                    .classes("rf-card")
+                    .style("flex: 999 1 640px; min-width: 0; width: auto")
+                ):
+                    with ui.row().classes("rf-card-head w-full"):
+                        ui.label("Diagram").classes("rf-h2")
+                        ui.label(
+                            "Drag from a block's right port to another block's left port to "
+                            "connect them"
+                        ).classes("rf-sub")
+                        ui.space()
+                        with ui.row().classes("gap-1"):
+                            for label, call in (
+                                ("−", "zoom_out"),
+                                ("1:1", "zoom_reset"),
+                                ("+", "zoom_in"),
+                            ):
+                                theme.secondary(
+                                    ui.button(
+                                        label,
+                                        on_click=lambda c=call: ui.run_javascript(
+                                            f"bfd.editor.{c}()"
+                                        ),
+                                    )
+                                ).props(f'dense data-testid="zoom-{call}"').style("min-width: 36px")
+                    with ui.element("div").classes("relative w-full"):
+                        ui.element("div").props('id="bfd-canvas"')
+                with (
+                    ui.element("aside")
+                    .classes("rf-card")
+                    .style("flex: 1 1 320px; max-width: 400px; min-width: 0; width: auto"),
+                    ui.column().classes("rf-card-body rf-props w-full gap-2"),
+                ):
+                    self.props_box = ui.column().classes("w-full gap-2")
+                    ui.separator().style(f"background: {theme.DIVIDER}")
+                    self.summary = ui.label().props('data-testid="issue-summary"')
+                    self.issues_box = ui.column().classes("w-full gap-1")
         for event, handler in (
             ("bfd_connection_created", self.on_connection_created),
             ("bfd_connection_removed", self.on_connection_removed),
@@ -271,7 +328,7 @@ class Editor:
     def show_saved_state(self) -> None:
         dirty = self.doc.dirty
         self.saved_state.text = "● unsaved changes" if dirty else "saved"
-        self.saved_state.classes(replace="text-warning" if dirty else "text-grey")
+        self.saved_state.classes(replace="text-warning" if dirty else "rf-note")
         ui.run_javascript(f"bfd.dirty = {json.dumps(dirty)}")
 
     def download(self) -> None:
@@ -303,14 +360,14 @@ class Editor:
                 self.flow_form(what[1])
 
     def plant_form(self) -> None:
-        ui.label("Plant").classes("text-base font-medium")
+        ui.label("Plant").classes("rf-h2")
         for spec in PLANT_FIELDS:
             self.field(
                 spec,
                 self.doc.data.get(spec.key),
                 lambda v, k=spec.key: self.doc.update_plant(**{k: v}),
             )
-        ui.label("Settings").classes("text-sm font-medium mt-2")
+        ui.label("Settings").classes("rf-eyebrow mt-3")
         settings = self.doc.data.get("settings", {})
         for spec in SETTINGS_FIELDS:
             self.field(
@@ -324,7 +381,7 @@ class Editor:
         # the next field right after changing the id is never lost.
         cur = [block_id]
         b = self.doc.block(block_id)
-        ui.label(KIND_LABELS[b["kind"]]).classes("text-base font-medium")
+        ui.label(KIND_LABELS[b["kind"]]).classes("rf-h2")
         id_input = (
             ui.input("Id", value=block_id).props('dense data-testid="field-id"').classes("w-full")
         )
@@ -349,7 +406,7 @@ class Editor:
     def flow_form(self, flow_id: str) -> None:
         cur = [flow_id]
         f = self.doc.flow(flow_id)
-        ui.label(f"Flow {f['source']} → {f['target']}").classes("text-base font-medium")
+        ui.label(f"Flow {f['source']} → {f['target']}").classes("rf-h2")
         id_input = (
             ui.input("Id", value=flow_id).props('dense data-testid="field-id"').classes("w-full")
         )
@@ -409,9 +466,9 @@ class Editor:
 
     def table(self, cur: list[str], spec: TableSpec) -> None:
         rows = self.doc.block(cur[0]).get(spec.key, [])
-        ui.label(spec.label).classes("text-sm font-medium mt-2")
+        ui.label(spec.label).classes("rf-eyebrow mt-3")
         for i, row in enumerate(rows):
-            with ui.card().classes("w-full p-2 gap-0"):
+            with ui.card().props("flat bordered").classes("w-full p-3 gap-1"):
                 for col in spec.columns:
                     nullable = (spec.key, col.key) in NULLABLE_NUMBERS
                     self.field(
@@ -556,6 +613,7 @@ def add_static() -> None:
 
 def run(path: Path, port: int = 8080, show: bool = True) -> None:
     add_static()
+    theme.setup()
 
     @ui.page("/")
     async def index() -> None:

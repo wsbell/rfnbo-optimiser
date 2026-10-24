@@ -186,7 +186,7 @@ def test_set_up_correct_and_run_a_quarter(browser: Any, screen: tuple[str, Path]
     expect(page.get_by_test_id("run-status")).to_contain_text("Sealed to", timeout=300000)
     expect(page.get_by_test_id("run-status")).to_contain_text("consignments met True")
     page.get_by_test_id("open-run").click()
-    expect(page.get_by_test_id("reproduce")).to_have_text("reproduces byte for byte", timeout=60000)
+    expect(page.get_by_test_id("reproduce")).to_have_text("Reproduces byte for byte", timeout=60000)
     expect(page.get_by_test_id("pos")).to_contain_text("POS-A")
 
     rec = sealed.load_record(project / "runs" / "ui" / "optimised")
