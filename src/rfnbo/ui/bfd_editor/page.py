@@ -59,8 +59,9 @@ def node_html(block: dict[str, Any]) -> str:
 class Editor:
     """One browser tab's editor."""
 
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, back: str | None = None) -> None:
         self.path = path
+        self.back = back  # link back to the page that opened the editor
         self.doc = EditorDocument.load(path) if path.exists() else EditorDocument.new()
         self.node_of: dict[str, int] = {}
         self.selected: tuple[str, str] | None = None  # ("block" | "flow", id)
@@ -75,6 +76,8 @@ class Editor:
             f"<style>{CSS}</style>"
         )
         with ui.row().classes("w-full items-center gap-2"):
+            if self.back:
+                ui.link("← Data screen", self.back).props('data-testid="back"')
             self.title = ui.label().classes("text-lg font-medium")
             self.saved_state = ui.label().props('data-testid="saved-state"')
             ui.space()
@@ -539,14 +542,23 @@ class Editor:
             self.select(("flow", ref))
 
 
-def run(path: Path, port: int = 8080, show: bool = True) -> None:
+async def open_editor(path: Path, back: str | None = None) -> None:
+    """Build the editor on the current page, editing ``path``."""
+    editor = Editor(path, back)
+    editor.build()
+    await ui.context.client.connected()
+    await editor.load_canvas()
+
+
+def add_static() -> None:
     app.add_static_files("/bfd-static", STATIC)
+
+
+def run(path: Path, port: int = 8080, show: bool = True) -> None:
+    add_static()
 
     @ui.page("/")
     async def index() -> None:
-        editor = Editor(path)
-        editor.build()
-        await ui.context.client.connected()
-        await editor.load_canvas()
+        await open_editor(path)
 
     ui.run(port=port, show=show, reload=False, title="RFNBO plant editor")

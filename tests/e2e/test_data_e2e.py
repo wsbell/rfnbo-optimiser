@@ -82,10 +82,21 @@ def test_set_up_correct_and_run_a_quarter(browser: Any, screen: tuple[str, Path]
     page = browser.new_page()
     page.goto(url + "data")
     expect(page.get_by_test_id("badge-run")).to_have_text("✗")
-    _fill(page, "config", str(GOLDEN / "tc4.plant.json"))
-    _fill(page, "quarter", "2026-Q4")
-    page.get_by_test_id("apply-setup").click()
-    expect(page.get_by_test_id("message")).to_have_text("saved")
+    # The plant config is uploaded into the folder, checked and summarised; choosing the
+    # quarter sets the project up.
+    page.locator('[data-testid="upload-config"] input[type=file]').set_input_files(
+        str(GOLDEN / "tc4.plant.json")
+    )
+    expect(page.get_by_test_id("plant-summary")).to_contain_text("Test plant 4", timeout=30000)
+    _choose(page, "quarter", "2026-Q4")
+    expect(page.get_by_test_id("message")).to_have_text(
+        "plant config tc4.plant.json, quarter 2026-Q4"
+    )
+    # Its diagram opens in the editor on the same server, and leads back.
+    page.get_by_test_id("edit-plant").click()
+    expect(page.get_by_test_id("saved-state")).to_have_text("saved", timeout=30000)
+    page.get_by_test_id("back").click()
+    expect(page.get_by_test_id("plant-summary")).to_contain_text("Test plant 4")
 
     workbook = GOLDEN / "workbooks" / "RFNBO_optimiser_test4_purchased_Q4_2026.xlsx"
     page.locator('[data-testid="upload-data"] input[type=file]').set_input_files(str(workbook))

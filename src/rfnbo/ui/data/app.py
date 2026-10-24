@@ -8,17 +8,20 @@ sealed run opens there.
 
 from __future__ import annotations
 
+import datetime as dt
 import json
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from nicegui import events, ui
 from nicegui import run as background
 
 from rfnbo.model.entities import ConsignmentSpec, ProofOfSustainability
 from rfnbo.project.corrections import Correction
-from rfnbo.ui.data.workspace import Workspace, WorkspaceError
+from rfnbo.ui.bfd_editor import page as editor
+from rfnbo.ui.data.workspace import PlantSummary, Workspace, WorkspaceError
 from rfnbo.ui.results import app as results
 from rfnbo.ui.results.app import _table
 
@@ -75,6 +78,8 @@ class DataPage:
         self.message: ui.label | None = None
         self.badges: dict[str, ui.badge] = {}
         self.dialogs: ui.element | None = None
+        self.chosen: str | None = None  # plant config chosen on the Setup tab
+        self.quarter: str | None = None
         self.start = 0
 
     # ---- helpers ---------------------------------------------------------------------------
@@ -131,8 +136,15 @@ class DataPage:
             badge.props(f"color={color}")
             badge.set_visibility(bool(text))
 
-    def confirm(self, question: str, fn: Callable[[], Any], ok: str) -> None:
-        """Ask before removing something; a removal cannot be undone."""
+    def confirm(
+        self,
+        question: str,
+        fn: Callable[[], Any],
+        ok: str,
+        action: str = "Remove",
+        cancelled: Callable[[], None] | None = None,
+    ) -> None:
+        """Ask before removing or replacing something; it cannot be undone."""
         assert self.dialogs is not None
         self.dialogs.clear()
         with self.dialogs, ui.dialog() as dialog, ui.card():
@@ -143,10 +155,16 @@ class DataPage:
                     dialog.close()
                     self.act(fn, ok)
 
-                ui.button("Remove", on_click=yes).props(
-                    'color=negative data-testid="confirm-remove"'
+                ui.button(action, on_click=yes).props(
+                    f'color=negative data-testid="confirm-{action.lower()}"'
                 )
-                ui.button("Cancel", on_click=dialog.close).props("flat")
+
+                def no() -> None:
+                    dialog.close()
+                    if cancelled:
+                        cancelled()
+
+                ui.button("Cancel", on_click=no).props("flat")
         dialog.open()
 
     def edit(self, title: str, fields: Fields) -> None:
@@ -201,23 +219,70 @@ class DataPage:
     @ui.refreshable_method
     def setup(self) -> None:
         p = self.ws.project
-        ui.label("Plant config and quarter").classes("text-base font-medium")
-        with ui.row().classes("items-end gap-2"):
-            config = (
-                ui.input("Plant config (path)", value=p.file.config if p else "")
-                .props('data-testid="config"')
-                .classes("w-96")
+        options = self.ws.plant_configs()
+        if self.chosen is None:
+            # A folder holding one plant config needs no choice, only the quarter.
+            self.chosen = p.file.config if p else (options[0] if len(options) == 1 else None)
+        ui.label("Plant config").classes("text-base font-medium")
+        with ui.row().classes("items-center gap-2"):
+            ui.select(
+                options,
+                label="Plant config in this folder",
+                value=self.chosen if self.chosen in options else None,
+                on_change=lambda e: self.choose_config(e.value),
+            ).classes("w-96").props('data-testid="config-select"')
+            picker = (
+                ui.upload(auto_upload=True, on_upload=self.upload_config)
+                .props('accept=".json" data-testid="upload-config"')
+                .classes("hidden")
             )
-            quarter = ui.input("Quarter", value=p.file.quarter if p else "", placeholder="2026-Q4")
-            quarter.props('data-testid="quarter"')
-            ui.button(
-                "Apply",
-                on_click=lambda: self.act(
-                    lambda: self.ws.setup(config.value.strip(), quarter.value.strip()), "saved"
-                ),
-            ).props('data-testid="apply-setup"')
+            ui.button("Upload…", on_click=lambda: picker.run_method("pickFiles")).props(
+                'flat icon=upload data-testid="upload-config-button"'
+            ).tooltip("A plant config JSON file; it is copied into this folder")
+            ui.button("New plant diagram", on_click=self.new_plant).props(
+                'flat data-testid="new-plant"'
+            )
+        with (
+            ui.expansion("Or use a plant config elsewhere").props(
+                'dense data-testid="config-elsewhere"'
+            ),
+            ui.row().classes("items-end gap-2"),
+        ):
+            path = (
+                ui.input("Path, absolute or relative to the project folder")
+                .classes("w-96")
+                .props('data-testid="config"')
+            )
+            ui.button("Use", on_click=lambda: self.choose_config(path.value.strip())).props(
+                'data-testid="use-config"'
+            )
+        if not self.chosen:
+            ui.label(
+                "Choose the plant config, upload one (it is copied into this folder), or draw "
+                "a new plant diagram."
+            ).classes("text-sm text-grey")
+            return
+        summary = self.ws.plant_summary(self.chosen)
+        self.plant_card(summary)
+        if summary.plant is None:
+            return
+        quarters, suggested = self.ws.quarters(summary.plant, dt.date.today())
+        if p and p.file.quarter not in quarters:
+            quarters.insert(0, p.file.quarter)
+        if self.quarter is None:
+            self.quarter = p.file.quarter if p else suggested
+        with ui.row().classes("items-center gap-2 mt-2"):
+            ui.select(
+                quarters,
+                label="Quarter",
+                value=self.quarter if self.quarter in quarters else None,
+                on_change=lambda e: self.choose_quarter(e.value),
+            ).classes("w-40").props('data-testid="quarter"')
+            if not p:
+                ui.button("Set up project", on_click=self.apply_setup).props(
+                    'data-testid="apply-setup"'
+                )
         if not p:
-            ui.label("Choose a validated plant config (made in rfnbo edit) and a quarter.")
             return
         ui.label("Data files").classes("text-base font-medium mt-4")
         ui.label(
@@ -272,6 +337,81 @@ class DataPage:
                     auto_upload=True,
                     on_upload=lambda e, w=which: self.import_mapping(e, int(w.value)),
                 ).props('accept=".json" data-testid="upload-mapping"')
+
+    def plant_card(self, s: PlantSummary) -> None:
+        with ui.card().classes("p-3 mt-2 w-full max-w-4xl").props('data-testid="plant-card"'):
+            with ui.row().classes("items-center gap-2 w-full no-wrap"):
+                if s.plant is not None:
+                    c = s.plant
+                    ui.icon("check_circle", color="positive")
+                    ui.label(
+                        f"{c.plant} · version {c.version} · effective {c.effective_from} · "
+                        f"{c.timezone} · {len(c.blocks)} blocks, {len(c.flows)} flows"
+                    ).props('data-testid="plant-summary"')
+                else:
+                    ui.icon("cancel", color="negative")
+                    ui.label(f"{s.config} cannot be used yet: {len(s.issues)} issue(s)").props(
+                        'data-testid="plant-summary"'
+                    )
+                ui.space()
+                ui.button(
+                    "Edit diagram",
+                    on_click=lambda: ui.navigate.to(f"/plant?file={quote(s.config)}"),
+                ).props('flat dense icon=edit data-testid="edit-plant"').tooltip(str(s.path))
+            for issue in s.issues[:10]:
+                ui.label(issue).classes("text-xs text-negative")
+            if len(s.issues) > 10:
+                ui.label(f"… and {len(s.issues) - 10} more: open the diagram to see them all")
+
+    def choose_config(self, config: str | None) -> None:
+        """A config chosen, uploaded or typed: used at once if it is valid."""
+        self.chosen = config or None
+        p = self.ws.project
+        if not self.chosen or not self.ws.plant_summary(self.chosen).ok:
+            self.setup.refresh()
+            return
+        if p and p.file.config != self.chosen:
+            self.confirm(
+                f"Switch this project's plant config from {p.file.config} to {self.chosen}?",
+                lambda: self.ws.setup(str(self.chosen), p.file.quarter),
+                f"plant config {self.chosen}",
+                action="Switch",
+                cancelled=self.reset_setup,
+            )
+        elif p or self.quarter:
+            self.apply_setup()
+        else:
+            self.setup.refresh()
+
+    def choose_quarter(self, quarter: str | None) -> None:
+        self.quarter = quarter
+        if quarter and self.chosen and self.ws.plant_summary(self.chosen).ok:
+            self.apply_setup()
+
+    def apply_setup(self) -> None:
+        config, quarter = self.chosen, self.quarter
+        if not config or not quarter:
+            self.say("choose the plant config and the quarter", error=True)
+            return
+        self.act(
+            lambda: self.ws.setup(config, quarter), f"plant config {config}, quarter {quarter}"
+        )
+
+    def reset_setup(self) -> None:
+        p = self.ws.project
+        self.chosen = p.file.config if p else None
+        self.setup.refresh()
+
+    async def upload_config(self, e: events.UploadEventArguments) -> None:
+        content = await e.file.read()
+        names: list[str] = []
+        if self.act(lambda: names.append(self.ws.add_plant_config(e.file.name, content))):
+            self.choose_config(names[0])
+
+    def new_plant(self) -> None:
+        name = self.ws.new_plant_name()
+        self.ws.root.mkdir(parents=True, exist_ok=True)
+        ui.navigate.to(f"/plant?file={quote(name)}")
 
     async def upload(self, e: events.UploadEventArguments) -> None:
         content = await e.file.read()
@@ -826,6 +966,17 @@ def run(root: Path, port: int = 8082, show: bool = True) -> None:
     @ui.page("/data")
     def data_page() -> None:
         DataPage(root).build()
+
+    # The diagram editor, on a plant config of the project (opened from the Setup tab).
+    editor.add_static()
+
+    @ui.page("/plant")
+    async def plant_page(file: str = "") -> None:
+        if not file:
+            ui.navigate.to("/data")
+            return
+        path = Path(file) if Path(file).is_absolute() else root / file
+        await editor.open_editor(path, back="/data")
 
     # Open the Data screen itself; "/" is the results browser for the folder's runs.
     ui.run(

@@ -8,6 +8,7 @@ without a browser. Changes are written to the project folder on :meth:`Workspace
 from __future__ import annotations
 
 import datetime as dt
+import json
 import math
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
@@ -68,6 +69,18 @@ class MappingRow:
 
 
 @dataclass(frozen=True)
+class PlantSummary:
+    config: str  # as chosen: relative to the project folder or absolute
+    path: Path
+    plant: PlantConfig | None  # None: the file is missing, not JSON, or invalid
+    issues: list[str]
+
+    @property
+    def ok(self) -> bool:
+        return self.plant is not None
+
+
+@dataclass(frozen=True)
 class Step:
     """One item of the Run tab's checklist, and the badge on the tab it belongs to."""
 
@@ -96,6 +109,75 @@ class Workspace:
         if self.project is None:
             raise WorkspaceError("choose the plant config and quarter first")
         return self.project
+
+    def plant_configs(self) -> list[str]:
+        """Plant configs to choose from: the JSON files at the top of the project folder (not
+        the project's own files), and the one in use wherever it is."""
+        own = {F.PROJECT_FILE, F.CONSIGNMENTS_FILE, F.CORRECTIONS_FILE, F.OPENING_FILE}
+        found = (
+            sorted(p.name for p in self.root.glob("*.json") if p.name not in own)
+            if self.root.is_dir()
+            else []
+        )
+        if self.project is not None and self.project.file.config not in found:
+            found.insert(0, self.project.file.config)
+        return found
+
+    def plant_summary(self, config: str) -> PlantSummary:
+        """What a plant config file holds, or why it cannot be used. Never raises."""
+        path = Path(config) if Path(config).is_absolute() else self.root / config
+        try:
+            cfg = load_config(path)
+        except ConfigError as exc:
+            return PlantSummary(config, path, None, [str(i) for i in exc.issues])
+        except (OSError, ValueError) as exc:
+            return PlantSummary(config, path, None, [str(exc)])
+        return PlantSummary(config, path, cfg, [])
+
+    def add_plant_config(self, name: str, content: bytes) -> str:
+        """Copy an uploaded plant config into the project folder, so the folder holds every
+        input; returns its name there. Drafts are kept too: they open in the editor."""
+        safe = Path(name).name
+        own = {F.PROJECT_FILE, F.CONSIGNMENTS_FILE, F.CORRECTIONS_FILE, F.OPENING_FILE}
+        if not safe.lower().endswith(".json"):
+            raise WorkspaceError(f"{safe}: a plant config is a .json file")
+        if safe in own:
+            raise WorkspaceError(f"{safe} is one of the project's own files; rename the upload")
+        try:
+            if not isinstance(json.loads(content), dict):
+                raise ValueError("not a JSON object")
+        except ValueError as exc:
+            raise WorkspaceError(f"{safe}: not a plant config: {exc}") from exc
+        dest = self.root / safe
+        if dest.exists() and dest.read_bytes() != content:
+            raise WorkspaceError(f"{safe} already holds a different file; rename the upload")
+        self.root.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(content)
+        return safe
+
+    def new_plant_name(self) -> str:
+        """A free file name in the project folder for a new plant diagram."""
+        n, name = 1, "plant.json"
+        while (self.root / name).exists():
+            n += 1
+            name = f"plant-{n}.json"
+        return name
+
+    @staticmethod
+    def quarters(cfg: PlantConfig, today: dt.date) -> tuple[list[str], str]:
+        """The quarters a plant config can be accounted for, newest first: from the one it
+        takes effect in to ``today``'s; and the one to suggest, the last complete quarter."""
+
+        def key(d: dt.date) -> tuple[int, int]:
+            return d.year, (d.month - 1) // 3 + 1
+
+        (y, q), last = key(cfg.effective_from), key(today)
+        out = []
+        while (y, q) <= last:
+            out.append(f"{y}-Q{q}")
+            y, q = (y + 1, 1) if q == 4 else (y, q + 1)
+        out.reverse()
+        return out, (out[1] if len(out) > 1 else out[0] if out else "")
 
     def setup(self, config: str, quarter: str) -> None:
         """Choose the plant config (path, relative to the folder or absolute) and quarter."""

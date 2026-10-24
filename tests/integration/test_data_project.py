@@ -294,3 +294,34 @@ def test_records_are_edited_in_place(tmp_path: Path) -> None:
     assert [e.batch_id for e in o.opening_ledger] == ["L2"]
     with pytest.raises(WorkspaceError, match="no opening entry"):
         ws.remove_opening_entry("lh2_storage", "L1")
+
+
+def test_plant_config_is_chosen_from_the_folder_or_uploaded(tmp_path: Path) -> None:
+    ws = Workspace(tmp_path / "p")
+    assert ws.plant_configs() == []  # the folder need not exist yet
+    name = ws.add_plant_config("tc4.plant.json", PLANT.read_bytes())
+    assert (tmp_path / "p" / name).read_bytes() == PLANT.read_bytes()
+    assert ws.add_plant_config(name, PLANT.read_bytes()) == name  # the same file again
+    with pytest.raises(WorkspaceError, match="different file"):
+        ws.add_plant_config(name, b'{"plant": "other"}')
+    with pytest.raises(WorkspaceError, match="project's own files"):
+        ws.add_plant_config("project.json", b"{}")
+    with pytest.raises(WorkspaceError, match="not a plant config"):
+        ws.add_plant_config("x.json", b"[1]")
+    # A draft is kept (it opens in the editor) but cannot be used.
+    ws.add_plant_config("draft.json", b'{"plant": "half drawn"}')
+    assert ws.plant_configs() == ["draft.json", "tc4.plant.json"]
+    draft = ws.plant_summary("draft.json")
+    assert not draft.ok and draft.issues
+    assert not ws.plant_summary("missing.json").ok
+    good = ws.plant_summary(name)
+    assert good.ok and good.plant is not None and good.plant.timezone == "Europe/Amsterdam"
+    assert ws.new_plant_name() == "plant.json"
+
+    quarters, suggested = ws.quarters(good.plant, dt.date(2026, 10, 24))
+    assert quarters == ["2026-Q4", "2026-Q3", "2026-Q2", "2026-Q1"]  # from effective_from
+    assert suggested == "2026-Q3"  # the last complete quarter
+    ws.setup(name, "2026-Q4")
+    ws.save()
+    assert Project.load(tmp_path / "p").file.config == "tc4.plant.json"  # inside the folder
+    assert ws.plant_configs() == ["draft.json", "tc4.plant.json"]
