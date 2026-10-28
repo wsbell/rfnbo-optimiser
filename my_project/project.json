@@ -1,0 +1,24 @@
+{
+ "config": "plant.json",
+ "quarter": "2026-Q4",
+ "sources": [
+  {
+   "file": "data/test_data_15min.csv",
+   "format": "csv",
+   "sheet": null,
+   "time_column": "Start (UTC)",
+   "timestamps": "UTC",
+   "columns": {
+    "solar_available_kWh": "Solar power available (kWh)",
+    "electrolyser_electricity_kWh": "Electrolyser power (kWh)",
+    "electrolyser_H2_kg": "H2 production (kg)",
+    "compressor_H2_kg": "H2 production (kg)",
+    "compressor_electricity_kWh": "Compressor power (kWh)",
+    "compressor_CH2_kg": "Compressor flow (kg)",
+    "ch2_shipped_kg": "Compressor flow (kg)"
+   }
+  }
+ ],
+ "opening_from": null,
+ "batch_materiality_MJ": 120.0
+}

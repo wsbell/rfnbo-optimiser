@@ -1,0 +1,9 @@
+[
+ {
+  "id": "C1",
+  "output": "consignment_customer",
+  "volume_kg": 250000.0,
+  "ship_date": "2026-12-15",
+  "target_gCO2e_per_MJ": null
+ }
+]
