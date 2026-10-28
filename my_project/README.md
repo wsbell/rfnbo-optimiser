@@ -22,6 +22,7 @@ uv run rfnbo edit my_project/plant.json               # view or edit the plant d
 | `consignments.json` | The consignments to meet |
 | `pos.csv`, `corrections.json`, `opening.json` | Empty: no purchased RFNBO, no corrections, no opening ledger |
 | `convert_hourly.py` | Rebuilds the data file from the spreadsheet |
+| `test_data.source.json` | The column mapping on its own, for `rfnbo optimise --source` or the Data screen's "Import a saved column mapping" |
 
 ## The data conversion
 
@@ -42,10 +43,12 @@ The data covers all of 2026, so any quarter can be run: change `quarter` in `pro
 | `solar_available_kWh` | Solar Power (MWh) | Renewable power available, shared by both units |
 | `electrolyser_electricity_kWh` | Electrolyser Power (MWh) | |
 | `electrolyser_H2_kg` | H2 Production (tonne) | |
-| `compressor_H2_kg` | H2 Production (tonne) | The compressor takes all the electrolyser's H2 (direct link, no storage) |
 | `compressor_electricity_kWh` | Compressor Power (MWh) | |
 | `compressor_CH2_kg` | Compressor Flow (tonne) | Read as the compressor's output (99.8% of its feed) |
-| `ch2_shipped_kg` | Compressor Flow (tonne) | All of it is filled into trailers for the customer (no CH2 storage) |
+
+The two direct links need no column of their own: a pass-through storage holds nothing, so
+the compressor's feed is the electrolyser's production, and what is filled into trailers for the
+customer is the compressor's output.
 
 ## Assumptions and placeholders: check these
 

@@ -103,21 +103,9 @@
     {"id": "f_grid_el", "source": "grid_power", "target": "electrolyser", "material": "electricity"},
     {"id": "f_grid_comp", "source": "grid_power", "target": "compressor", "material": "electricity"},
     {"id": "f_el_pt", "source": "electrolyser", "target": "pt_electrolyser_compressor", "material": "H2"},
-    {
-      "id": "f_pt_comp",
-      "source": "pt_electrolyser_compressor",
-      "target": "compressor",
-      "material": "H2",
-      "series": "compressor_H2_kg"
-    },
+    {"id": "f_pt_comp", "source": "pt_electrolyser_compressor", "target": "compressor", "material": "H2"},
     {"id": "f_comp_fill", "source": "compressor", "target": "pt_compressor_customer", "material": "CH2"},
-    {
-      "id": "f_fill_dist",
-      "source": "pt_compressor_customer",
-      "target": "dist_customer",
-      "material": "CH2",
-      "series": "ch2_shipped_kg"
-    },
+    {"id": "f_fill_dist", "source": "pt_compressor_customer", "target": "dist_customer", "material": "CH2"},
     {"id": "f_dist_cons", "source": "dist_customer", "target": "consignment_customer", "material": "CH2"}
   ]
 }

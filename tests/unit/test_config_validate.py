@@ -373,3 +373,21 @@ def test_load_config_reports_schema_and_rule_errors(raw: Raw, tmp_path: Path) ->
     with pytest.raises(ConfigError) as exc:
         load_config(bad)
     assert [i.rule for i in exc.value.issues] == ["storage_series"]
+
+
+def test_pass_through_outflow_is_metered_by_its_inflow() -> None:
+    """A pass-through holds nothing, so an outflow given no series takes the inflow's
+    (decided 2026-10-28): the flow into it if the unit splits its output, else the unit's
+    production series. A series given on the outflow is kept."""
+    raw = json.loads(PLANT_3.read_text(encoding="utf-8"))
+    del _flow(raw, "f_pt_comp")["series"]  # the electrolyser splits: its flow in is metered
+    _direct_to_distribution(raw)
+    del _flow(raw, "f_ch2s_b")["series"]  # the compressor does not: its production series
+    cfg = PlantConfig.model_validate(raw)
+    assert validate(cfg) == []
+    series = {f.id: f.series for f in cfg.flows}
+    assert series["f_pt_comp"] == _flow(raw, "f_el_pt")["series"]
+    assert series["f_ch2s_b"] == _block(raw, "compressor")["production_series"]
+    raw = json.loads(PLANT_3.read_text(encoding="utf-8"))
+    kept = PlantConfig.model_validate(raw)
+    assert {f.id: f.series for f in kept.flows}["f_pt_comp"] == _flow(raw, "f_pt_comp")["series"]

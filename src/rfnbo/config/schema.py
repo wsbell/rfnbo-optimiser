@@ -255,6 +255,32 @@ class PlantConfig(_Model):
             raise ValueError(f"unknown IANA time zone {v!r}") from exc
         return v
 
+    @model_validator(mode="after")
+    def _pass_through_outflow(self) -> PlantConfig:
+        """A pass-through storage holds nothing, so what leaves it each interval is what came
+        in: an outflow given no series of its own is metered by the inflow, that is the inflow
+        flow's series (a unit that splits its output) or else the unit's production series
+        (decided 2026-10-28). A series given on the outflow is kept."""
+        blocks = {b.id: b for b in self.blocks}
+        flows = list(self.flows)
+        for k, f in enumerate(flows):
+            store = blocks.get(f.source)
+            if f.series or not isinstance(store, StorageUnit) or not store.pass_through:
+                continue
+            into = [g for g in flows if g.target == store.id]
+            out = [g for g in flows if g.source == store.id]
+            if len(into) != 1 or len(out) != 1:
+                continue  # not a direct link: pass_through_links reports it
+            unit = blocks.get(into[0].source)
+            series = into[0].series or (
+                unit.production_series if isinstance(unit, ProcessingUnit) else None
+            )
+            if series:
+                flows[k] = f.model_copy(update={"series": series})
+        if flows != self.flows:
+            object.__setattr__(self, "flows", flows)  # frozen model: set once, at validation
+        return self
+
     def block(self, block_id: str) -> Block:
         for b in self.blocks:
             if b.id == block_id:

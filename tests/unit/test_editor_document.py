@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -354,3 +355,16 @@ def test_ordered_rows_take_the_nearest_free_rows() -> None:
     assert _ordered_rows([0.33, 1.67], 3) == [0, 2]
     assert _ordered_rows([1.0], 3) == [1]
     assert _ordered_rows([2.0, 2.0, 2.0], 3) == [0, 1, 2]
+
+
+def test_derived_pass_through_series_are_not_written(tmp_path: Path) -> None:
+    """A pass-through outflow left unmetered stays so in the saved file; the schema derives
+    its series on loading."""
+    raw = json.loads(PLANT_3.read_text(encoding="utf-8"))
+    for f in raw["flows"]:
+        if f["id"] == "f_pt_comp":
+            del f["series"]
+    doc = EditorDocument(raw)
+    assert doc.issues() == []
+    saved = json.loads(doc.to_json())
+    assert "series" not in next(f for f in saved["flows"] if f["id"] == "f_pt_comp")

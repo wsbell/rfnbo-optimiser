@@ -197,6 +197,11 @@ class EditorDocument:
                 for e in b.get("opening_ledger", []):  # and only purchased entries say so
                     if e.get("origin") == "produced":
                         del e["origin"]
+            # A pass-through's outflow series is derived on loading; the file keeps it unset.
+            unset = {f.get("id") for f in self.flows if not f.get("series")}
+            for f in data["flows"]:
+                if f["id"] in unset:
+                    f.pop("series", None)
         ordered = {k: data[k] for k in _TOP_ORDER if k in data}
         ordered.update({k: v for k, v in data.items() if k not in ordered})
         return json.dumps(ordered, indent=2, ensure_ascii=False) + "\n"
