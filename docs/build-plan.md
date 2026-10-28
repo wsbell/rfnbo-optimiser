@@ -406,6 +406,7 @@ decisions, the lineage graph) already works on networks.
 | 5 | Losses inside a unit? | They raise the GHG of the batch produced: emissions of the whole feed over the smaller output (rule 3) |
 | 6 | Recycle flows (boil-off gas back to a compressor)? | Out of scope; flows stay one way |
 | 7 | Hydrogen consigned at more than one point? | Allowed: every storage that feeds a distribution block is a final product point |
+| 8 | A unit's output straight to customers, with no storage (a tube trailer fill)? (decided 2026-10-27) | Allowed: the unit feeds the distribution block through a pass-through storage, as in rule 5 (the editor inserts it when a unit is dragged onto a distribution block). Consignments are entered as usual and drawn from its ledger, which closes at zero each quarter: RFNBO no consignment takes is written off (§2.7); consignments cannot exceed the RFNBO the unit produced (ledger ≥ 0). A pipeline is the distribution block itself; a compressor before it stays a processing unit, its emissions in the batch GHG. No new emissions rule |
 
 **Follow-up (settled 2026-10-17).** (a) The single-chain optimiser uses the new objective 2
 now (§2.8). (b) Non-compliant RFNBO cannot be stored and carried between quarters: it is

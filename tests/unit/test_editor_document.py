@@ -130,8 +130,21 @@ def test_unit_to_unit_link_inserts_a_pass_through_storage() -> None:
     assert all(s["dashed"] for s in doc.edge_styles())
     with pytest.raises(EditorError, match="already linked"):
         doc.link_units(el, comp)
-    with pytest.raises(EditorError, match="only two processing units"):
+    with pytest.raises(EditorError, match="only a processing unit is linked directly"):
         doc.link_units(el, pt)
+
+
+def test_unit_to_distribution_link_inserts_a_pass_through_storage() -> None:
+    """A unit whose output goes straight to customers, such as a tube trailer fill."""
+    doc = EditorDocument.new()
+    fill = doc.add_block("processing_unit", block_id="trailer_fill")
+    doc.update_block(fill, product="CH2")
+    dist = doc.add_block("distribution", block_id="dist_customer_b")
+    pt = doc.link_units(fill, dist)
+    assert doc.is_pass_through(pt) and doc.block(pt)["product"] == "CH2"
+    assert [(f["source"], f["target"]) for f in doc.flows] == [(fill, pt), (pt, dist)]
+    with pytest.raises(EditorError, match="only a processing unit"):
+        doc.link_units(dist, fill)
 
 
 def test_flows_are_coloured_by_product() -> None:

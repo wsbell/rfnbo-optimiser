@@ -15,7 +15,13 @@ from typing import Any
 from nicegui import app, events, ui
 
 from rfnbo.ui import theme
-from rfnbo.ui.bfd_editor.document import KIND_LABELS, KINDS, EditorDocument, EditorError
+from rfnbo.ui.bfd_editor.document import (
+    DIRECT_TARGETS,
+    KIND_LABELS,
+    KINDS,
+    EditorDocument,
+    EditorError,
+)
 from rfnbo.ui.bfd_editor.fields import (
     BLOCK_FIELDS,
     FLOW_FIELDS,
@@ -280,7 +286,7 @@ class Editor:
         if src is None or tgt is None:
             return
         kinds = (self.doc.block(src)["kind"], self.doc.block(tgt)["kind"])
-        if kinds == ("processing_unit", "processing_unit"):
+        if kinds[0] == "processing_unit" and kinds[1] in DIRECT_TARGETS:
             await self.link_units(src, tgt, int(e.args["output_id"]), int(e.args["input_id"]))
             return
         try:
@@ -295,7 +301,8 @@ class Editor:
         self.refresh()
 
     async def link_units(self, src: str, tgt: str, src_node: int, tgt_node: int) -> None:
-        """A unit dragged onto a unit: replace the drawn link with a pass-through storage."""
+        """A unit dragged onto a unit or a distribution block: replace the drawn link with a
+        pass-through storage."""
         ui.run_javascript(f"bfd.removeConnection({src_node}, {tgt_node})")
         try:
             pt = self.doc.link_units(src, tgt)

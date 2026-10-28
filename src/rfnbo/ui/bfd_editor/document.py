@@ -125,6 +125,10 @@ def _ordered_rows(targets: list[float], rows: int) -> list[int]:
     return out[::-1]
 
 
+# What a processing unit may be linked to directly, through an inserted pass-through storage.
+DIRECT_TARGETS = ("processing_unit", "distribution")
+
+
 class EditorDocument:
     def __init__(self, data: dict[str, Any]) -> None:
         self.data = copy.deepcopy(data)
@@ -452,11 +456,14 @@ class EditorDocument:
         return str(flow["id"])
 
     def link_units(self, source: str, target: str) -> str:
-        """A direct unit → unit link: insert a pass-through storage between the two units
-        (build plan §10.2 rule 5) and connect through it. Returns the storage's id."""
+        """A direct link from a unit to a unit (build plan §10.2 rule 5), or to a distribution
+        block for a unit whose output goes straight to customers (decided 2026-10-27): insert a
+        pass-through storage between the two and connect through it. Returns its id."""
         src, tgt = self.block(source), self.block(target)
-        if (src["kind"], tgt["kind"]) != ("processing_unit", "processing_unit"):
-            raise EditorError("only two processing units are linked directly")
+        if src["kind"] != "processing_unit" or tgt["kind"] not in DIRECT_TARGETS:
+            raise EditorError(
+                "only a processing unit is linked directly, to a unit or a distribution block"
+            )
         if any(
             f.get("source") == source
             and self.is_pass_through(str(f.get("target", "")))

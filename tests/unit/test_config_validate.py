@@ -83,6 +83,30 @@ def test_pass_through_storage_has_no_inventory() -> None:
         PlantConfig.model_validate(raw)
 
 
+def _direct_to_distribution(raw: Raw) -> None:
+    """Test plant 3 with the compressor filling tube trailers straight for Customer B: no CH2
+    storage, a pass-through storage into the distribution block instead."""
+    raw["blocks"] = [b for b in raw["blocks"] if b["id"] != "ch2_storage"] + [
+        {
+            "kind": "storage_unit",
+            "id": "pt_fill",
+            "name": "Tube trailer fill",
+            "product": "CH2",
+            "pass_through": True,
+            "opening_inventory_kg": 0.0,
+        }
+    ]
+    _flow(raw, "f_comp_ch2s")["target"] = "pt_fill"
+    _flow(raw, "f_ch2s_b")["source"] = "pt_fill"
+
+
+def test_unit_output_straight_to_distribution_through_a_pass_through() -> None:
+    """A unit whose output goes straight to customers (decided 2026-10-27)."""
+    raw = json.loads(PLANT_3.read_text(encoding="utf-8"))
+    _direct_to_distribution(raw)
+    assert validate(PlantConfig.model_validate(raw)) == []
+
+
 def _dup_block(r: Raw) -> None:
     r["blocks"].append(dict(_block(r, "water")))
 
@@ -229,9 +253,9 @@ def _split_output_unmetered(r: Raw) -> None:
     del _flow(r, "f_el_buf")["series"]
 
 
-def _pass_through_to_distribution(r: Raw) -> None:
+def _pass_through_to_storage(r: Raw) -> None:
     _plant_3(r)
-    _flow(r, "f_pt_comp")["target"] = "dist_customer_b"
+    _flow(r, "f_pt_comp")["target"] = "ch2_storage"
 
 
 def _pass_through_two_sources(r: Raw) -> None:
@@ -304,7 +328,7 @@ CASES: dict[str, list[Callable[[Raw], None]]] = {
     "storage_series": [_no_inventory_series],
     "unit_outputs": [_no_unit_output],
     "split_outputs_metered": [_split_output_unmetered],
-    "pass_through_links": [_pass_through_to_distribution, _pass_through_two_sources],
+    "pass_through_links": [_pass_through_to_storage, _pass_through_two_sources],
     "unit_feed_products": [_unit_takes_two_products],
     "storages_produced": [_storage_not_produced],
     "unit_feeds": [_electrolyser_without_renewable, _downstream_without_feed],

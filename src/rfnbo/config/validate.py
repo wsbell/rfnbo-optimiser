@@ -205,7 +205,9 @@ def split_outputs_metered(cfg: PlantConfig) -> Iterator[Issue]:
 
 
 def pass_through_links(cfg: PlantConfig) -> Iterator[Issue]:
-    """A pass-through storage is a direct link: one unit in, one unit out (§10.2 rule 5)."""
+    """A pass-through storage is a direct link: one unit in, and out to one unit (§10.2 rule
+    5) or to one distribution block, for a unit whose output goes straight to customers, such
+    as a tube trailer fill (decided 2026-10-27). Either way its ledger closes at zero."""
     for s in cfg.blocks_of(StorageUnit):
         if not s.pass_through:
             continue
@@ -217,10 +219,12 @@ def pass_through_links(cfg: PlantConfig) -> Iterator[Issue]:
                 "a pass-through storage takes product from exactly one processing unit",
                 s.id,
             )
-        if len(out) != 1 or not isinstance(cfg.block(out[0].target), ProcessingUnit):
+        if len(out) != 1 or not isinstance(
+            cfg.block(out[0].target), ProcessingUnit | DistributionBlock
+        ):
             yield Issue(
                 "pass_through_links",
-                "a pass-through storage feeds exactly one processing unit",
+                "a pass-through storage feeds exactly one processing unit or distribution block",
                 s.id,
             )
 
