@@ -8,9 +8,9 @@ from __future__ import annotations
 
 import html
 import json
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from nicegui import app, events, ui
 
@@ -103,12 +103,46 @@ def node_html(block: dict[str, Any], pins: Sequence[str] = ()) -> str:
     )
 
 
+class Columns(Protocol):
+    """The data columns a meter can be read from, when the editor sits in a project (the Data
+    screen): each meter's field then picks a column instead of naming a series."""
+
+    def columns(self) -> list[tuple[int, str]]: ...  # (data file index, header)
+    def column_of(self, series: str) -> tuple[int, str] | None: ...
+    def map_column(self, series: str, column: tuple[int, str] | None) -> None: ...
+
+
+# Series named for a meter picked from the data: block or flow id, then what it measures.
+SERIES_SUFFIX = {
+    "production_series": "production_kg",
+    "electricity_series": "electricity_kWh",
+    "inventory_series": "inventory_kg",
+}
+
+
+def series_name(owner: str, key: str, block: dict[str, Any] | None) -> str:
+    """A series name for a meter that has none yet, from what it is (stable, readable)."""
+    if key in SERIES_SUFFIX:
+        return f"{owner}_{SERIES_SUFFIX[key]}"
+    if block is not None and block.get("kind") == "input":
+        return f"{owner}_available_kWh"
+    return f"{owner}_kg"
+
+
 class Editor:
     """One browser tab's editor."""
 
-    def __init__(self, path: Path, back: str | None = None) -> None:
+    def __init__(
+        self,
+        path: Path,
+        back: str | None = None,
+        columns: Columns | None = None,
+        on_saved: Callable[[Path], None] | None = None,
+    ) -> None:
         self.path = path
         self.back = back  # link back to the page that opened the editor
+        self.columns = columns
+        self.on_saved = on_saved
         self.doc = EditorDocument.load(path) if path.exists() else EditorDocument.new()
         self.node_of: dict[str, int] = {}
         self.selected: tuple[str, str] | None = None  # ("block" | "flow", id)
@@ -129,100 +163,150 @@ class Editor:
 
     # ---- layout ----------------------------------------------------------------------
 
-    def build(self) -> None:
+    @staticmethod
+    def head() -> None:
+        """Drawflow and the editor's styles, once per page."""
         ui.add_head_html(
             '<link rel="stylesheet" href="/bfd-static/drawflow.min.css">'
             '<script src="/bfd-static/drawflow.min.js"></script>'
             '<script src="/bfd-static/bfd.js"></script>'
             f"<style>{CSS}</style>"
         )
-        theme.apply()
-        right = theme.top_bar([("Plant config", None)], back=self.back)
-        with right:
-            self.saved_state = ui.label().props('data-testid="saved-state"')
+
+    def file_actions(self, compact: bool = False) -> None:
+        """Saved state, Save, Download and Open; ``compact`` puts the last two in a menu."""
+        self.saved_state = ui.label().props('data-testid="saved-state"')
+        opener = (
+            ui.upload(auto_upload=True, on_upload=self.upload)
+            .props('accept=.json data-testid="upload"')
+            .classes("hidden")
+        )
+        hint = f"Load a plant config; Save writes it to {self.path.name}"
+        if compact:
+            with (
+                ui.button(icon="more_horiz").props(
+                    'flat round color=dark aria-label="More" data-testid="plant-more"'
+                ),
+                ui.menu(),
+            ):
+                ui.menu_item("Download JSON", on_click=self.download).props(
+                    'data-testid="download"'
+                )
+                ui.menu_item("Open JSON…", on_click=lambda: opener.run_method("pickFiles")).tooltip(
+                    hint
+                )
+        else:
             theme.secondary(ui.button("Download JSON", on_click=self.download)).props(
                 'data-testid="download"'
             )
-            opener = (
-                ui.upload(auto_upload=True, on_upload=self.upload)
-                .props('accept=.json data-testid="upload"')
-                .classes("hidden")
-            )
             theme.secondary(
                 ui.button("Open JSON…", on_click=lambda: opener.run_method("pickFiles"))
-            ).tooltip(f"Load a plant config; Save writes it to {self.path.name}")
-            ui.button("Save", on_click=self.save).props('data-testid="save"').tooltip("Ctrl+S")
+            ).tooltip(hint)
+        ui.button("Save", on_click=self.save).props('data-testid="save"').tooltip("Ctrl+S")
+
+    def block_actions(self) -> None:
+        theme.secondary(ui.button("Plant settings", on_click=self.show_plant)).props(
+            'data-testid="plant-settings"'
+        )
+        with ui.dropdown_button("Add block", icon="add", auto_close=True).props(
+            'outline color=dark no-caps data-testid="add-block"'
+        ):
+            for kind in KINDS:
+                ui.item(KIND_LABELS[kind], on_click=lambda k=kind: self.add(k)).props(
+                    f'data-testid="add-{kind}"'
+                )
+
+    def build(self) -> None:
+        """The editor as a page of its own (rfnbo edit)."""
+        self.head()
+        theme.apply()
+        with theme.top_bar([("Plant config", None)], back=self.back):
+            self.file_actions()
         with theme.page(wide=True):
             with ui.row().classes("w-full items-end gap-3").style("flex-wrap: wrap"):
                 with ui.column().classes("gap-1"):
                     ui.label("Plant config").classes("rf-h1").props('role="heading" aria-level="1"')
                     self.title = ui.label().classes("rf-sub").style("font-size: 14px")
                 ui.space()
-                theme.secondary(ui.button("Plant settings", on_click=self.show_plant)).props(
-                    'data-testid="plant-settings"'
+                self.block_actions()
+            self.body()
+        self.listen()
+
+    def build_embedded(self) -> None:
+        """The editor inside another page (the Data screen's Plant tab): no top bar; the page
+        registers the canvas events once and forwards them (:meth:`events`)."""
+        with ui.row().classes("w-full items-center gap-3").style("flex-wrap: wrap"):
+            self.title = ui.label().classes("rf-sub").style("font-size: 14px")
+            ui.space()
+            self.block_actions()
+            self.file_actions(compact=True)
+        self.body()
+
+    def body(self) -> None:
+        with ui.row().classes("w-full items-start gap-5").style("flex-wrap: wrap"):
+            with (
+                ui.element("section")
+                .classes("rf-card")
+                .style("flex: 999 1 640px; min-width: 0; width: auto")
+            ):
+                with ui.row().classes("rf-card-head w-full"):
+                    ui.label("Diagram").classes("rf-h2")
+                    ui.label(
+                        "Drag from a block's right port to another block's left port to "
+                        "connect them"
+                    ).classes("rf-sub")
+                    ui.space()
+                    with ui.row().classes("gap-1"):
+                        for label, call in (
+                            ("−", "zoom_out"),
+                            ("1:1", "zoom_reset"),
+                            ("+", "zoom_in"),
+                        ):
+                            theme.secondary(
+                                ui.button(
+                                    label,
+                                    on_click=lambda c=call: ui.run_javascript(f"bfd.editor.{c}()"),
+                                )
+                            ).props(f'dense data-testid="zoom-{call}"').style("min-width: 36px")
+                self.inputs_strip = (
+                    ui.row()
+                    .classes("w-full items-center gap-2")
+                    .style(f"padding: 8px 20px; border-bottom: 1px solid {theme.DIVIDER}")
                 )
-                with ui.dropdown_button("Add block", icon="add", auto_close=True).props(
-                    'outline color=dark no-caps data-testid="add-block"'
-                ):
-                    for kind in KINDS:
-                        ui.item(KIND_LABELS[kind], on_click=lambda k=kind: self.add(k)).props(
-                            f'data-testid="add-{kind}"'
-                        )
-            with ui.row().classes("w-full items-start gap-5").style("flex-wrap: wrap"):
-                with (
-                    ui.element("section")
-                    .classes("rf-card")
-                    .style("flex: 999 1 640px; min-width: 0; width: auto")
-                ):
-                    with ui.row().classes("rf-card-head w-full"):
-                        ui.label("Diagram").classes("rf-h2")
-                        ui.label(
-                            "Drag from a block's right port to another block's left port to "
-                            "connect them"
-                        ).classes("rf-sub")
-                        ui.space()
-                        with ui.row().classes("gap-1"):
-                            for label, call in (
-                                ("−", "zoom_out"),
-                                ("1:1", "zoom_reset"),
-                                ("+", "zoom_in"),
-                            ):
-                                theme.secondary(
-                                    ui.button(
-                                        label,
-                                        on_click=lambda c=call: ui.run_javascript(
-                                            f"bfd.editor.{c}()"
-                                        ),
-                                    )
-                                ).props(f'dense data-testid="zoom-{call}"').style("min-width: 36px")
-                    self.inputs_strip = (
-                        ui.row()
-                        .classes("w-full items-center gap-2")
-                        .style(f"padding: 8px 20px; border-bottom: 1px solid {theme.DIVIDER}")
-                    )
-                    with ui.element("div").classes("relative w-full"):
-                        ui.element("div").props('id="bfd-canvas"')
-                with (
-                    ui.element("aside")
-                    .classes("rf-card")
-                    .style("flex: 1 1 320px; max-width: 400px; min-width: 0; width: auto"),
-                    ui.column().classes("rf-card-body rf-props w-full gap-2"),
-                ):
-                    self.props_box = ui.column().classes("w-full gap-2")
-                    ui.separator().style(f"background: {theme.DIVIDER}")
-                    self.summary = ui.label().props('data-testid="issue-summary"')
-                    self.issues_box = ui.column().classes("w-full gap-1")
-        for event, handler in (
-            ("bfd_connection_created", self.on_connection_created),
-            ("bfd_connection_removed", self.on_connection_removed),
-            ("bfd_connection_selected", self.on_connection_selected),
-            ("bfd_node_removed", self.on_node_removed),
-            ("bfd_node_selected", self.on_node_selected),
-            ("bfd_unselected", lambda _: self.select(None)),
-            ("bfd_node_moved", self.on_node_moved),
-            ("bfd_save", lambda _: self.save()),
-        ):
-            ui.on(event, handler)
+                with ui.element("div").classes("relative w-full"):
+                    ui.element("div").props('id="bfd-canvas"')
+            with (
+                ui.element("aside")
+                .classes("rf-card")
+                .style("flex: 1 1 320px; max-width: 400px; min-width: 0; width: auto"),
+                ui.column().classes("rf-card-body rf-props w-full gap-2"),
+            ):
+                self.props_box = ui.column().classes("w-full gap-2")
+                ui.separator().style(f"background: {theme.DIVIDER}")
+                self.summary = ui.label().props('data-testid="issue-summary"')
+                self.issues_box = ui.column().classes("w-full gap-1")
+
+    # Canvas events from bfd.js, by handler name.
+    EVENTS = (
+        ("bfd_connection_created", "on_connection_created"),
+        ("bfd_connection_removed", "on_connection_removed"),
+        ("bfd_connection_selected", "on_connection_selected"),
+        ("bfd_node_removed", "on_node_removed"),
+        ("bfd_node_selected", "on_node_selected"),
+        ("bfd_unselected", "on_unselected"),
+        ("bfd_node_moved", "on_node_moved"),
+        ("bfd_save", "on_save"),
+    )
+
+    def listen(self) -> None:
+        for event, name in self.EVENTS:
+            ui.on(event, getattr(self, name))
+
+    def on_unselected(self, _: Any) -> None:
+        self.select(None)
+
+    def on_save(self, _: Any) -> None:
+        self.save()
 
     async def load_canvas(self) -> None:
         nodes = []
@@ -369,6 +453,8 @@ class Editor:
     def save(self) -> None:
         issues = self.doc.save(self.path)
         self.show_saved_state()
+        if self.on_saved:
+            self.on_saved(self.path)
         ui.notify(
             f"Saved {self.path.name}: " + (f"{len(issues)} issue(s) to fix" if issues else "valid"),
             type="warning" if issues else "positive",
@@ -445,7 +531,10 @@ class Editor:
                 self.table(cur, spec)
             else:
                 self.field(
-                    spec, b.get(spec.key), lambda v, k=spec.key: self.edit_block(cur[0], **{k: v})
+                    spec,
+                    b.get(spec.key),
+                    lambda v, k=spec.key: self.edit_block(cur[0], **{k: v}),
+                    owner=cur[0],
                 )
         ui.button("Delete block", on_click=lambda: self.delete_block(cur[0])).props(
             'flat color=negative dense data-testid="delete-block"'
@@ -462,15 +551,34 @@ class Editor:
         id_input.on("blur", lambda: self.rename_flow(cur, id_input.value))
         for spec in FLOW_FIELDS:
             self.field(
-                spec, f.get(spec.key), lambda v, k=spec.key: self.edit_flow(cur[0], **{k: v})
+                spec,
+                f.get(spec.key),
+                lambda v, k=spec.key: self.edit_flow(cur[0], **{k: v}),
+                owner=cur[0],
             )
         ui.button("Delete flow", on_click=lambda: self.delete_flow(cur[0])).props(
             'flat color=negative dense data-testid="delete-flow"'
         )
         self.issue_list(flow_id)
 
-    def field(self, spec: FieldSpec, value: Any, apply: Any, testid: str | None = None) -> None:
+    def field(
+        self,
+        spec: FieldSpec,
+        value: Any,
+        apply: Any,
+        testid: str | None = None,
+        owner: str | None = None,
+    ) -> None:
         tid = f'data-testid="{testid or "field-" + spec.key}"'
+        if (
+            self.columns is not None
+            and owner is not None
+            and spec.key.endswith("series")
+            and spec.type == "optional_text"
+            and self.columns.columns()
+        ):
+            self.column_field(spec, value, apply, owner, tid)
+            return
 
         def changed(v: Any) -> None:
             try:
@@ -512,6 +620,51 @@ class Editor:
             )
             if spec.hint:
                 inp.tooltip(spec.hint)
+
+    def column_field(self, spec: FieldSpec, value: Any, apply: Any, owner: str, tid: str) -> None:
+        """A meter read from the project's data: pick its column; the series is named for the
+        block or flow and mapped to that column."""
+        assert self.columns is not None
+        cols = self.columns.columns()
+        keys = {f"{i}|{h}": (i, h) for i, h in cols}
+        files = {i for i, _ in cols}
+        options = {"": "Not measured"} | {
+            k: (h if len(files) == 1 else f"{h} (file {i + 1})") for k, (i, h) in keys.items()
+        }
+        mapped = self.columns.column_of(value) if value else None
+        current = f"{mapped[0]}|{mapped[1]}" if mapped else ""
+        label = spec.label.replace(" series", "").replace("series", "Metered")
+
+        def picked(key: str | None) -> None:
+            block = next((b for b in self.doc.blocks if b.get("id") == owner), None)
+            name = value or series_name(owner, spec.key, block)
+            assert self.columns is not None
+            try:
+                if key:
+                    apply(name)
+                    self.columns.map_column(name, keys[key])
+                else:
+                    if value:
+                        self.columns.map_column(value, None)
+                    apply(None)
+            except (EditorError, ValueError) as exc:
+                ui.notify(str(exc), type="negative")
+            # The mapping is saved with the project; save the diagram with it, so the two
+            # never disagree.
+            self.save()
+            self.refresh()
+            self.select(self.selected)  # show the series it now reads
+
+        ui.select(
+            options,
+            label=f"{label}: data column",
+            value=current,
+            on_change=lambda e: picked(e.value),
+        ).props(f"dense {tid}").classes("w-full")
+        if value:
+            ui.label(f"series {value}" + ("" if mapped else ", no column")).classes(
+                "rf-note rf-mono"
+            ).style("margin-top: -4px")
 
     def table(self, cur: list[str], spec: TableSpec) -> None:
         rows = self.doc.block(cur[0]).get(spec.key, [])

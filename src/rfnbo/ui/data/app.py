@@ -13,7 +13,6 @@ import json
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
 
 from nicegui import events, ui
 from nicegui import run as background
@@ -22,12 +21,14 @@ from rfnbo.model.entities import ConsignmentSpec, ProofOfSustainability
 from rfnbo.project.corrections import Correction
 from rfnbo.ui import theme
 from rfnbo.ui.bfd_editor import page as editor
+from rfnbo.ui.bfd_editor.page import Editor
 from rfnbo.ui.data.workspace import PlantSummary, Workspace, WorkspaceError
 from rfnbo.ui.results import app as results
 from rfnbo.ui.results.app import _table
 
 TABS = (
     "Setup",
+    "Plant",
     "Mapping",
     "Preview",
     "Corrections",
@@ -40,6 +41,7 @@ TABS = (
 # Each tab's card: heading and the line under it.
 CARDS = (
     ("Plant config and quarter", "The plant this quarter is accounted for, and its data files"),
+    ("Plant", "Draw the plant and pick the data column each meter is read from"),
     ("Column mapping", "Every series the plant needs, and the column it is read from"),
     ("Data quality and preview", "Every quality flag; values in the plant time zone"),
     (
@@ -96,6 +98,25 @@ def _row_actions(
         table.on("row_edit", lambda e: edit(str(e.args)))
 
 
+class _Columns:
+    """The project's data columns, offered to the Plant tab's editor."""
+
+    def __init__(self, page: DataPage) -> None:
+        self.page = page
+
+    def columns(self) -> list[tuple[int, str]]:
+        return self.page.ws.columns()
+
+    def column_of(self, series: str) -> tuple[int, str] | None:
+        return self.page.ws.column_of(series)
+
+    def map_column(self, series: str, column: tuple[int, str] | None) -> None:
+        ws = self.page.ws
+        index, header = column if column else (None, None)
+        ws.map_series(series, index, header, require=False)
+        ws.save()
+
+
 class DataPage:
     """One browser tab's Data screen."""
 
@@ -105,6 +126,9 @@ class DataPage:
         self.badges: dict[str, ui.label] = {}
         self.readiness: ui.label | None = None
         self.dialogs: ui.element | None = None
+        self.editor: Editor | None = None  # the Plant tab's diagram editor
+        self.canvas_loaded = False
+        self.tabs: ui.tabs | None = None
         self.chosen: str | None = None  # plant config chosen on the Setup tab
         self.quarter: str | None = None
         self.start = 0
@@ -147,6 +171,8 @@ class DataPage:
             section.refresh()
         self.heading.refresh()
         self.show_status()
+        if self.editor is None or self.editor.path != self.plant_path():
+            self.plant.refresh()
 
     def show_status(self) -> None:
         """Badge each tab with where it stands (series mapped, errors, records entered)."""
@@ -229,6 +255,7 @@ class DataPage:
         self.dialogs = ui.element("div")
         sections = (
             self.setup,
+            self.plant,
             self.mapping,
             self.preview,
             self.corrections,
@@ -240,22 +267,93 @@ class DataPage:
         with ui.row().classes("w-full items-start gap-0").style("flex-wrap: wrap"):
             with ui.column().classes("rf-nav gap-1"):
                 ui.label("Quarter").classes("rf-eyebrow").style("padding: 0 12px 6px")
-                with ui.tabs().props("vertical").classes("w-full") as tabs:
+                with (
+                    ui.tabs(on_change=lambda e: self.tab_changed(str(e.value)))
+                    .props("vertical")
+                    .classes("w-full") as tabs
+                ):
                     for name in TABS:
                         with ui.tab(name).props(f'data-testid="tab-{_slug(name)}"'):
                             self.badges[name] = theme.pill(
                                 "", testid=f"badge-{_slug(name)}"
                             ).classes("rf-count")
-            with theme.page(wide=True).style(
-                "flex: 999 1 560px; min-width: 0; width: auto; max-width: 1180px"
-            ):
+            with theme.page(wide=True).style("flex: 999 1 560px; min-width: 0; width: auto"):
                 self.heading()
                 self.message = ui.label("").props('data-testid="message"').classes("rf-note")
                 with ui.tab_panels(tabs, value=TABS[0]).classes("w-full"):
                     for name, (heading, sub), section in zip(TABS, CARDS, sections, strict=True):
-                        with ui.tab_panel(name), theme.card(heading, sub):
-                            section()
+                        with ui.tab_panel(name):
+                            if section is self.plant:  # the editor brings its own cards
+                                section()
+                                continue
+                            with theme.card(heading, sub):
+                                section()
+        self.tabs = tabs
+        Editor.head()
+        for event, name in Editor.EVENTS:  # forwarded to whichever editor the Plant tab holds
+            ui.on(event, lambda e, name=name: self.to_editor(name, e))
         self.show_status()
+
+    # ---- plant tab -------------------------------------------------------------------------
+
+    def plant_path(self) -> Path | None:
+        """The plant config the Plant tab edits: the project's, else the one chosen."""
+        p = self.ws.project
+        config = p.file.config if p else self.chosen
+        if not config:
+            return None
+        return Path(config) if Path(config).is_absolute() else self.ws.root / config
+
+    @ui.refreshable_method
+    def plant(self) -> None:
+        path = self.plant_path()
+        self.editor, self.canvas_loaded = None, False
+        if path is None or not path.exists():
+            with theme.card("Plant", "No plant config yet"):
+                ui.label("Choose a plant config on Setup, or start a new diagram here.").classes(
+                    "rf-note"
+                )
+                ui.button("New plant diagram", icon="add", on_click=self.new_plant).props(
+                    'data-testid="new-plant-here"'
+                )
+            return
+        self.editor = Editor(path, columns=_Columns(self), on_saved=self.plant_saved)
+        self.editor.build_embedded()
+        if self.tabs is not None and self.tabs.value == "Plant":
+            ui.timer(0.1, self.show_canvas, once=True)
+
+    def to_editor(self, name: str, e: Any) -> Any:
+        if self.editor is not None and self.canvas_loaded:
+            return getattr(self.editor, name)(e)
+        return None
+
+    async def tab_changed(self, tab: str) -> None:
+        if tab == "Plant":
+            await self.show_canvas()
+
+    async def show_canvas(self) -> None:
+        """Draw the diagram once its canvas is on the page (the Plant tab renders on first
+        view), or fit it again on returning to the tab."""
+        if self.editor is None:
+            return
+        await ui.run_javascript(
+            "return new Promise((done) => { const look = () => "
+            "document.getElementById('bfd-canvas') ? done(true) : setTimeout(look, 50); look(); })",
+            timeout=10,
+        )
+        if self.canvas_loaded:
+            ui.run_javascript("bfd.fit()")
+            return
+        await self.editor.load_canvas()
+        self.canvas_loaded = True
+
+    def plant_saved(self, path: Path) -> None:
+        """The diagram was saved: what the plant needs (series, steps) may have changed."""
+        self.ws._changed()
+        if self.ws.project is None:
+            self.setup.refresh()
+        else:
+            self.redraw()
 
     @ui.refreshable_method
     def heading(self) -> None:
@@ -319,9 +417,12 @@ class DataPage:
             return
         summary = self.ws.plant_summary(self.chosen)
         self.plant_card(summary)
-        if summary.plant is None:
+        if not summary.usable:
             return
-        quarters, suggested = self.ws.quarters(summary.plant, dt.date.today())
+        today = dt.date.today()
+        quarters, suggested = self.ws.quarters(
+            summary.effective_from or dt.date(today.year, 1, 1), today
+        )
         if p and p.file.quarter not in quarters:
             quarters.insert(0, p.file.quarter)
         if self.quarter is None:
@@ -435,7 +536,7 @@ class DataPage:
                 ui.space()
                 ui.button(
                     "Edit diagram",
-                    on_click=lambda: ui.navigate.to(f"/plant?file={quote(s.config)}"),
+                    on_click=lambda: self.open_plant(s.config),
                 ).props('flat dense icon=edit data-testid="edit-plant"').tooltip(str(s.path))
             for issue in s.issues[:10]:
                 ui.label(issue).classes("text-xs text-negative")
@@ -446,7 +547,7 @@ class DataPage:
         """A config chosen, uploaded or typed: used at once if it is valid."""
         self.chosen = config or None
         p = self.ws.project
-        if not self.chosen or not self.ws.plant_summary(self.chosen).ok:
+        if not self.chosen or not self.ws.plant_summary(self.chosen).usable:
             self.setup.refresh()
             return
         if p and p.file.config != self.chosen:
@@ -464,7 +565,7 @@ class DataPage:
 
     def choose_quarter(self, quarter: str | None) -> None:
         self.quarter = quarter
-        if quarter and self.chosen and self.ws.plant_summary(self.chosen).ok:
+        if quarter and self.chosen and self.ws.plant_summary(self.chosen).usable:
             self.apply_setup()
 
     def apply_setup(self) -> None:
@@ -488,9 +589,22 @@ class DataPage:
             self.choose_config(names[0])
 
     def new_plant(self) -> None:
-        name = self.ws.new_plant_name()
-        self.ws.root.mkdir(parents=True, exist_ok=True)
-        ui.navigate.to(f"/plant?file={quote(name)}")
+        """Start a new diagram in the folder and open it on the Plant tab."""
+        name: list[str] = []
+        if self.act(lambda: name.append(self.ws.create_plant()), ""):
+            if self.quarter is None:  # set up at once, on the suggested quarter
+                today = dt.date.today()
+                self.quarter = self.ws.quarters(dt.date(today.year, 1, 1), today)[1]
+            self.choose_config(name[0])
+            self.open_plant(name[0])
+
+    def open_plant(self, config: str) -> None:
+        if self.ws.project is None and self.chosen != config:
+            self.chosen = config
+        if self.editor is None or self.editor.path != self.plant_path():
+            self.plant.refresh()
+        if self.tabs is not None:
+            self.tabs.set_value("Plant")
 
     async def upload(self, e: events.UploadEventArguments) -> None:
         content = await e.file.read()

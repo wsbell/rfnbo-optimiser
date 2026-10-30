@@ -6,7 +6,7 @@ window.bfd = {
   silent: false,
 
   load(container, nodes, edges) {
-    if (this.editor) {
+    if (this.editor && this.editor.container === container) {
       this.silent = true;
       this.editor.clear();
       this.silent = false;
@@ -77,7 +77,8 @@ window.bfd = {
     this.fit();
   },
 
-  // Zoom and pan so every block drawn fits the canvas (never zooming in past 1:1).
+  // Zoom and pan so every block drawn fits the canvas: never past 1:1, and never below the
+  // size where labels stay readable (a long plant then scrolls: drag the canvas to pan).
   fit() {
     const ed = this.editor, box = document.getElementById("bfd-canvas");
     const show = box.classList.contains("bfd-show-inputs");
@@ -97,7 +98,7 @@ window.bfd = {
       zoom = Math.min(
         1, (box.clientWidth - 48) / (right - left), (box.clientHeight - 48) / (bottom - top),
       );
-      zoom = Math.max(ed.zoom_min, zoom);
+      zoom = Math.max(0.8, zoom);
     }
     // Drawflow scales about the canvas centre, so the pan accounts for it.
     const cx = ed.precanvas.clientWidth / 2, cy = ed.precanvas.clientHeight / 2;

@@ -74,10 +74,18 @@ class PlantSummary:
     path: Path
     plant: PlantConfig | None  # None: the file is missing, not JSON, or invalid
     issues: list[str]
+    # A draft (a plant config still being drawn) can be set up, mapped and edited, but not run.
+    draft: bool = False
+    effective_from: dt.date | None = None
 
     @property
     def ok(self) -> bool:
         return self.plant is not None
+
+    @property
+    def usable(self) -> bool:
+        """Valid, or a draft that can be set up and finished on the Plant tab."""
+        return self.plant is not None or self.draft
 
 
 @dataclass(frozen=True)
@@ -127,12 +135,23 @@ class Workspace:
         """What a plant config file holds, or why it cannot be used. Never raises."""
         path = Path(config) if Path(config).is_absolute() else self.root / config
         try:
-            cfg = load_config(path)
-        except ConfigError as exc:
-            return PlantSummary(config, path, None, [str(i) for i in exc.issues])
+            raw = json.loads(path.read_text("utf-8"))
         except (OSError, ValueError) as exc:
             return PlantSummary(config, path, None, [str(exc)])
-        return PlantSummary(config, path, cfg, [])
+        if not isinstance(raw, dict) or "blocks" not in raw:
+            return PlantSummary(config, path, None, ["not a plant config"])
+        try:
+            effective: dt.date | None = dt.date.fromisoformat(str(raw.get("effective_from")))
+        except ValueError:
+            effective = None
+        try:
+            cfg = load_config(path)
+        except ConfigError as exc:
+            issues = [str(i) for i in exc.issues]
+            return PlantSummary(config, path, None, issues, draft=True, effective_from=effective)
+        except (OSError, ValueError) as exc:
+            return PlantSummary(config, path, None, [str(exc)])
+        return PlantSummary(config, path, cfg, [], effective_from=cfg.effective_from)
 
     def add_plant_config(self, name: str, content: bytes) -> str:
         """Copy an uploaded plant config into the project folder, so the folder holds every
@@ -163,15 +182,25 @@ class Workspace:
             name = f"plant-{n}.json"
         return name
 
+    def create_plant(self) -> str:
+        """Start a new plant diagram: an empty plant config in the project folder, drawn on the
+        Plant tab. Returns its name."""
+        from rfnbo.ui.bfd_editor.document import EditorDocument
+
+        name = self.new_plant_name()
+        self.root.mkdir(parents=True, exist_ok=True)
+        EditorDocument.new().save(self.root / name)
+        return name
+
     @staticmethod
-    def quarters(cfg: PlantConfig, today: dt.date) -> tuple[list[str], str]:
+    def quarters(effective_from: dt.date, today: dt.date) -> tuple[list[str], str]:
         """The quarters a plant config can be accounted for, newest first: from the one it
         takes effect in to ``today``'s; and the one to suggest, the last complete quarter."""
 
         def key(d: dt.date) -> tuple[int, int]:
             return d.year, (d.month - 1) // 3 + 1
 
-        (y, q), last = key(cfg.effective_from), key(today)
+        (y, q), last = key(effective_from), key(today)
         out = []
         while (y, q) <= last:
             out.append(f"{y}-Q{q}")
@@ -180,14 +209,12 @@ class Workspace:
         return out, (out[1] if len(out) > 1 else out[0] if out else "")
 
     def setup(self, config: str, quarter: str) -> None:
-        """Choose the plant config (path, relative to the folder or absolute) and quarter."""
-        path = Path(config) if Path(config).is_absolute() else self.root / config
-        try:
-            load_config(path)
-        except ConfigError as exc:
-            raise WorkspaceError(f"{config}: invalid plant config: {exc}") from exc
-        except OSError as exc:
-            raise WorkspaceError(f"{config}: {exc}") from exc
+        """Choose the plant config (path, relative to the folder or absolute) and quarter. A
+        draft is accepted: data can be uploaded and mapped while it is finished; it is run only
+        once valid."""
+        summary = self.plant_summary(config)
+        if not summary.usable:
+            raise WorkspaceError(f"{config}: {'; '.join(summary.issues)}")
         try:
             if self.project is None:
                 self.project = Project.new(self.root, config, quarter)
@@ -215,6 +242,13 @@ class Workspace:
 
     def required_series(self) -> list[str]:
         return quality.required_series(self.config())
+
+    def _required_or_none(self) -> list[str]:
+        """The series the plant needs, or none while it is a draft."""
+        try:
+            return self.required_series()
+        except WorkspaceError:
+            return []
 
     def _changed(self) -> None:
         self._prepared = None
@@ -244,7 +278,7 @@ class Workspace:
         time_col = F.guess_time_column(heads) or (heads[0] if heads else "")
         taken = {s for src in p.file.sources for s in src.columns}
         auto = {
-            s: h for s, h in F.auto_map(self.required_series(), heads).items() if s not in taken
+            s: h for s, h in F.auto_map(self._required_or_none(), heads).items() if s not in taken
         }
         src = SourceFile(file=rel, format=fmt, sheet=sheet, time_column=time_col, columns=auto)
         sources = [s for s in p.file.sources if s.file != rel] + [src]
@@ -253,13 +287,17 @@ class Workspace:
         return len(sources) - 1
 
     def _best_sheet(self, path: Path) -> str:
-        """The sheet whose headers match the most series (the first sheet on a tie)."""
-        required = self.required_series()
+        """The sheet whose headers match the most series; on a tie (a draft plant needs none
+        yet), one with a time column, then the most columns, then the first."""
+        required = self._required_or_none()
         names = F.sheets(path)
-        return max(
-            names,
-            key=lambda n: (len(F.auto_map(required, F.headers(path, "excel", n))), -names.index(n)),
-        )
+
+        def key(n: str) -> tuple[int, bool, int, int]:
+            heads = F.headers(path, "excel", n)
+            matched = len(F.auto_map(required, heads))
+            return matched, F.guess_time_column(heads) is not None, len(heads), -names.index(n)
+
+        return max(names, key=key)
 
     def remove_data_file(self, index: int) -> None:
         p = self._p()
@@ -283,10 +321,14 @@ class Workspace:
         p.file = p.file.model_copy(update={"sources": sources})
         self._changed()
 
-    def map_series(self, series: str, index: int | None, header: str | None) -> None:
-        """Map ``series`` to a column of data file ``index`` (or unmap it with None)."""
+    def map_series(
+        self, series: str, index: int | None, header: str | None, require: bool = True
+    ) -> None:
+        """Map ``series`` to a column of data file ``index`` (or unmap it with None). With
+        ``require`` false the series need not be one the saved plant needs yet: the Plant tab
+        maps a meter as it is drawn."""
         p = self._p()
-        if series not in self.required_series():
+        if require and series not in self.required_series():
             raise WorkspaceError(f"{series!r} is not a series this plant needs")
         sources = []
         for i, src in enumerate(p.file.sources):
@@ -315,6 +357,29 @@ class Workspace:
         if ds.time_column in heads:
             self.set_source(index, time_column=ds.time_column)
         return n
+
+    def columns(self) -> list[tuple[int, str]]:
+        """Every data column that can feed a series: (data file index, header), time columns
+        left out."""
+        if self.project is None:
+            return []
+        out = []
+        for i, src in enumerate(self.project.file.sources):
+            try:
+                heads = self.headers(i)
+            except (OSError, ValueError):
+                continue
+            out += [(i, h) for h in heads if h and h != src.time_column]
+        return out
+
+    def column_of(self, series: str) -> tuple[int, str] | None:
+        """The data column a series is mapped to, if any."""
+        if self.project is None:
+            return None
+        for i, src in enumerate(self.project.file.sources):
+            if series in src.columns:
+                return i, src.columns[series]
+        return None
 
     def mapping(self) -> list[MappingRow]:
         p = self._p()
@@ -385,11 +450,21 @@ class Workspace:
         if self.project is None:
             return [Step("Setup", False, "choose the plant config and quarter")]
         p = self.project
+        steps = [Step("Setup", True, f"plant config {p.file.config}, quarter {p.file.quarter}")]
+        summary = self.plant_summary(p.file.config)
+        if not summary.ok:
+            n = len(summary.issues)
+            detail = (
+                f"{n} issue(s) to fix: finish the diagram and map its meters"
+                if summary.draft
+                else f"plant config: {'; '.join(summary.issues)}"
+            )
+            return [*steps, Step("Plant", False, detail, badge=str(n) if summary.draft else "!")]
         try:
             self.config()
         except WorkspaceError as exc:
-            return [Step("Setup", False, f"plant config: {exc}")]
-        steps = [Step("Setup", True, f"plant config {p.file.config}, quarter {p.file.quarter}")]
+            return [*steps, Step("Plant", False, str(exc), badge="!")]
+        steps.append(Step("Plant", True, "the diagram is valid", badge="✓"))
         rows = self.mapping()
         done = sum(r.mapped for r in rows)
         steps.append(

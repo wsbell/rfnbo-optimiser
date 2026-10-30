@@ -15,6 +15,7 @@ from rfnbo.cli import main
 from rfnbo.data import calendar as cal
 from rfnbo.project.folder import Project, prepare
 from rfnbo.trace import run as sealed
+from rfnbo.ui.bfd_editor.document import EditorDocument
 from rfnbo.ui.data.workspace import Workspace, WorkspaceError
 
 GOLDEN = Path(__file__).resolve().parents[1] / "golden"
@@ -312,16 +313,46 @@ def test_plant_config_is_chosen_from_the_folder_or_uploaded(tmp_path: Path) -> N
     ws.add_plant_config("draft.json", b'{"plant": "half drawn"}')
     assert ws.plant_configs() == ["draft.json", "tc4.plant.json"]
     draft = ws.plant_summary("draft.json")
-    assert not draft.ok and draft.issues
+    assert not draft.ok and draft.issues and not draft.draft  # no blocks: not a plant config
     assert not ws.plant_summary("missing.json").ok
     good = ws.plant_summary(name)
     assert good.ok and good.plant is not None and good.plant.timezone == "Europe/Amsterdam"
     assert ws.new_plant_name() == "plant.json"
 
-    quarters, suggested = ws.quarters(good.plant, dt.date(2026, 10, 24))
+    quarters, suggested = ws.quarters(good.plant.effective_from, dt.date(2026, 10, 24))
     assert quarters == ["2026-Q4", "2026-Q3", "2026-Q2", "2026-Q1"]  # from effective_from
     assert suggested == "2026-Q3"  # the last complete quarter
     ws.setup(name, "2026-Q4")
     ws.save()
     assert Project.load(tmp_path / "p").file.config == "tc4.plant.json"  # inside the folder
     assert ws.plant_configs() == ["draft.json", "tc4.plant.json"]
+
+
+def test_a_draft_plant_is_set_up_and_mapped_as_it_is_drawn(tmp_path: Path) -> None:
+    """One page: a new, empty diagram sets the project up; data is uploaded and its columns
+    mapped to the meters as they are drawn; the plant is run only once valid."""
+    ws = Workspace(tmp_path / "p")
+    name = ws.create_plant()
+    assert name == "plant.json" and ws.plant_summary(name).ok  # empty, so nothing is wrong
+    doc = EditorDocument.load(tmp_path / "p" / name)  # an electrolyser, still unfinished
+    doc.add_block("processing_unit", block_id="electrolyser")
+    doc.save(tmp_path / "p" / name)
+    summary = ws.plant_summary(name)
+    assert summary.draft and summary.usable and not summary.ok
+    ws.setup(name, "2026-Q4")  # a draft is accepted
+    steps = {s.tab: s for s in ws.status()}
+    assert not steps["Plant"].ok and "issue" in steps["Plant"].detail
+    assert [s.tab for s in ws.blocking(steps.values())] == ["Plant"]
+
+    i = ws.add_data_file(WORKBOOK.name, WORKBOOK.read_bytes())  # no auto-map while a draft
+    assert ws.project is not None and ws.project.file.sources[i].columns == {}
+    columns = ws.columns()
+    assert (i, "Electrolyser electricity (kWh)") in columns
+    assert all(h != ws.project.file.sources[i].time_column for _, h in columns)
+    # The Plant tab maps a meter before the saved plant needs its series.
+    ws.map_series("electrolyser_electricity_kWh", i, "Electrolyser electricity (kWh)", False)
+    assert ws.column_of("electrolyser_electricity_kWh") == (i, "Electrolyser electricity (kWh)")
+    with pytest.raises(WorkspaceError):  # a strict mapping needs the plant to be valid
+        ws.map_series("anything_kWh", i, "Electrolyser electricity (kWh)")
+    ws.map_series("electrolyser_electricity_kWh", None, None, False)
+    assert ws.column_of("electrolyser_electricity_kWh") is None

@@ -69,7 +69,9 @@ uv run rfnbo validate examples/test_plant.json
   `app.py` lays it out: runs → run → consignment → batch → 15-minute intervals.
 - `src/rfnbo/ui/data/`: the Data screen (`rfnbo data <folder>`). `workspace.py` holds all its
   state and actions with no UI imports (tested in `tests/integration/test_data_project.py`);
-  `app.py` lays it out and serves the results browser on the folder's `runs/`.
+  `app.py` lays it out and serves the results browser on the folder's `runs/`. Its Plant tab
+  embeds the diagram editor (`Editor.build_embedded`), where each meter picks its data column
+  (`Columns`); a draft plant can be set up and mapped, and is run only once valid.
 - `src/rfnbo/optimise/batching.py`: stage A. Exact DP per unit and month over 15-minute
   intervals (hourly windows from the switch date for electrolytic units), scored by the RFNBO
   in compliant batches each month can blend at or below the downstream limit (§12.1; limits

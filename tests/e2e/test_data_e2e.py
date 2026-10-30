@@ -4,6 +4,8 @@ open the sealed run in the results browser."""
 
 from __future__ import annotations
 
+import contextlib
+import json
 import os
 import subprocess
 import sys
@@ -30,6 +32,13 @@ expect = playwright.expect
 @pytest.fixture(scope="module")
 def screen(tmp_path_factory: pytest.TempPathFactory) -> Iterator[tuple[str, Path]]:
     project = tmp_path_factory.mktemp("project")
+    with _serve(project) as url:
+        yield url, project
+
+
+@contextlib.contextmanager
+def _serve(project: Path) -> Iterator[str]:
+    """``rfnbo data`` on a project folder; yields its URL."""
     port = free_port()
     proc = subprocess.Popen(
         [
@@ -59,7 +68,7 @@ def screen(tmp_path_factory: pytest.TempPathFactory) -> Iterator[tuple[str, Path
                     proc.kill()
                     raise RuntimeError(proc.communicate()[0].decode(errors="replace")) from None
                 time.sleep(0.2)
-        yield url, project
+        yield url
     finally:
         proc.terminate()
         proc.wait(timeout=10)
@@ -92,10 +101,11 @@ def test_set_up_correct_and_run_a_quarter(browser: Any, screen: tuple[str, Path]
     expect(page.get_by_test_id("message")).to_have_text(
         "plant config tc4.plant.json, quarter 2026-Q4"
     )
-    # Its diagram opens in the editor on the same server, and leads back.
+    # Its diagram opens on the Plant tab of the same page.
     page.get_by_test_id("edit-plant").click()
     expect(page.get_by_test_id("saved-state")).to_have_text("saved", timeout=30000)
-    page.get_by_test_id("back").click()
+    expect(page.locator(".drawflow-node.bfd-processing_unit").first).to_be_visible(timeout=30000)
+    page.get_by_test_id("tab-setup").click()
     expect(page.get_by_test_id("plant-summary")).to_contain_text("Test plant 4")
 
     workbook = GOLDEN / "workbooks" / "RFNBO_optimiser_test4_purchased_Q4_2026.xlsx"
@@ -109,6 +119,13 @@ def test_set_up_correct_and_run_a_quarter(browser: Any, screen: tuple[str, Path]
 
     page.get_by_test_id("tab-mapping").click()
     expect(page.get_by_test_id("mapped-count")).to_have_text("20 of 20 series mapped")
+
+    # On the Plant tab each meter shows the data column it is read from.
+    page.get_by_test_id("tab-plant").click()
+    page.locator(".drawflow-node", has_text="Liquefier").first.click()
+    expect(page.get_by_test_id("field-electricity_series")).to_contain_text(
+        "Liquefier electricity (kWh)"
+    )
     page.get_by_test_id("tab-preview").click()
     expect(page.get_by_test_id("quality")).to_have_text("No data quality errors", timeout=30000)
     expect(page.get_by_test_id("preview")).to_contain_text("2026-10-01T00:00+02:00")
@@ -195,3 +212,31 @@ def test_set_up_correct_and_run_a_quarter(browser: Any, screen: tuple[str, Path]
     ]
     assert (project / "pos.csv").read_text("utf-8").count("POS-A") == 1
     page.close()
+
+
+def test_draw_the_plant_and_map_its_meters_on_one_page(browser: Any, tmp_path: Path) -> None:
+    """One page: a new plant diagram sets the project up; the data is uploaded; a unit drawn
+    on the Plant tab reads its meters from columns picked there, mapped in the project."""
+    with _serve(tmp_path) as url:
+        page = browser.new_page(viewport={"width": 1600, "height": 1000})
+        page.goto(url + "data")
+        page.get_by_test_id("new-plant").click()
+        expect(page.get_by_test_id("saved-state")).to_have_text("saved", timeout=30000)
+        page.get_by_test_id("tab-setup").click()
+        workbook = GOLDEN / "workbooks" / "RFNBO_optimiser_test4_purchased_Q4_2026.xlsx"
+        page.locator('[data-testid="upload-data"] input[type=file]').set_input_files(str(workbook))
+        expect(page.get_by_test_id("sources")).to_contain_text("Data_15min", timeout=30000)
+
+        page.get_by_test_id("tab-plant").click()
+        page.get_by_test_id("add-block").click()
+        page.get_by_test_id("add-processing_unit").click()
+        _choose(page, "field-production_series", "Electrolyser H₂ produced (kg)")
+        expect(page.get_by_text("series processing_unit_1_production_kg")).to_be_visible()
+
+        project = json.loads((tmp_path / "project.json").read_text("utf-8"))
+        assert project["sources"][0]["columns"] == {
+            "processing_unit_1_production_kg": "Electrolyser H₂ produced (kg)"
+        }
+        plant = json.loads((tmp_path / "plant.json").read_text("utf-8"))
+        assert plant["blocks"][0]["production_series"] == "processing_unit_1_production_kg"
+        page.close()
