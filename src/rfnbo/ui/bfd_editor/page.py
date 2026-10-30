@@ -16,7 +16,6 @@ from nicegui import app, events, ui
 
 from rfnbo.ui import theme
 from rfnbo.ui.bfd_editor.document import (
-    DIRECT_TARGETS,
     KIND_LABELS,
     KINDS,
     EditorDocument,
@@ -24,6 +23,7 @@ from rfnbo.ui.bfd_editor.document import (
 )
 from rfnbo.ui.bfd_editor.fields import (
     BLOCK_FIELDS,
+    ELECTRICITY_FIELDS,
     FLOW_FIELDS,
     NULLABLE_NUMBERS,
     PLANT_FIELDS,
@@ -122,6 +122,8 @@ SERIES_SUFFIX = {
 
 def series_name(owner: str, key: str, block: dict[str, Any] | None) -> str:
     """A series name for a meter that has none yet, from what it is (stable, readable)."""
+    if key == "renewable_available_series":
+        return "renewable_available_kWh"
     if key in SERIES_SUFFIX:
         return f"{owner}_{SERIES_SUFFIX[key]}"
     if block is not None and block.get("kind") == "input":
@@ -369,10 +371,6 @@ class Editor:
         src, tgt = self.block_of(e.args["output_id"]), self.block_of(e.args["input_id"])
         if src is None or tgt is None:
             return
-        kinds = (self.doc.block(src)["kind"], self.doc.block(tgt)["kind"])
-        if kinds[0] == "processing_unit" and kinds[1] in DIRECT_TARGETS:
-            await self.link_units(src, tgt, int(e.args["output_id"]), int(e.args["input_id"]))
-            return
         try:
             flow_id = self.doc.connect(src, tgt)
         except EditorError as exc:
@@ -382,33 +380,6 @@ class Editor:
             )
             return
         self.select(("flow", flow_id))
-        self.refresh()
-
-    async def link_units(self, src: str, tgt: str, src_node: int, tgt_node: int) -> None:
-        """A unit dragged onto a unit or a distribution block: replace the drawn link with a
-        pass-through storage."""
-        ui.run_javascript(f"bfd.removeConnection({src_node}, {tgt_node})")
-        try:
-            pt = self.doc.link_units(src, tgt)
-        except EditorError as exc:
-            ui.notify(str(exc), type="negative")
-            return
-        b = self.doc.block(pt)
-        x, y = self.doc.position(pt)
-        node = {
-            "block": pt,
-            "kind": "storage_unit",
-            "inputs": 1,
-            "outputs": 1,
-            "x": x,
-            "y": y,
-            "html": self.html(b),
-        }
-        n = int(await ui.run_javascript(f"return bfd.addNode({json.dumps(node)})"))
-        self.node_of[pt] = n
-        ui.run_javascript(f"bfd.addConnection({src_node}, {n}); bfd.addConnection({n}, {tgt_node})")
-        ui.notify(f"Linked {src} → {tgt} through pass-through storage {pt}")
-        self.select(("block", pt))
         self.refresh()
 
     def on_connection_removed(self, e: events.GenericEventArguments) -> None:
@@ -509,6 +480,19 @@ class Editor:
                 spec,
                 settings.get(spec.key),
                 lambda v, k=spec.key: self.doc.update_settings(**{k: v}),
+            )
+        ui.label("Electricity").classes("rf-eyebrow mt-3")
+        ui.label(
+            "Each unit meters its electricity; within a batch, renewable power available is "
+            "matched first and the rest is grid power."
+        ).classes("rf-note")
+        electricity = self.doc.data.get("electricity") or {}
+        for spec in ELECTRICITY_FIELDS:
+            self.field(
+                spec,
+                electricity.get(spec.key),
+                lambda v, k=spec.key: self.doc.update_electricity(**{k: v}),
+                owner="electricity",
             )
 
     def block_form(self, block_id: str) -> None:

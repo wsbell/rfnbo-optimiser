@@ -123,8 +123,8 @@ def _input_to_storage(r: Raw) -> None:
     _flow(r, "f_water_el")["target"] = "h2_storage"
 
 
-def _unit_to_unit(r: Raw) -> None:
-    _flow(r, "f_h2s_nh3")["source"] = "electrolyser"
+def _unit_to_consignment(r: Raw) -> None:
+    _flow(r, "f_a_cons")["source"] = "nh3_synthesis"
 
 
 def _orphan(r: Raw) -> None:
@@ -165,6 +165,10 @@ def _no_production_series(r: Raw) -> None:
 
 def _no_electricity_series(r: Raw) -> None:
     del _block(r, "electrolyser")["electricity_series"]
+
+
+def _no_electricity_source(r: Raw) -> None:
+    _drop_flow(r, "f_grid_nh3")
 
 
 def _no_input_series(r: Raw) -> None:
@@ -315,7 +319,7 @@ def _layout_for_missing_block(r: Raw) -> None:
 CASES: dict[str, list[Callable[[Raw], None]]] = {
     "unique_ids": [_dup_block],
     "flow_endpoints": [_unknown_endpoint, _self_loop],
-    "connection_types": [_input_to_storage, _unit_to_unit, _supply_to_distribution],
+    "connection_types": [_input_to_storage, _unit_to_consignment, _supply_to_distribution],
     "no_orphans": [_orphan],
     "flow_materials": [
         _wrong_material_from_input,
@@ -324,6 +328,7 @@ CASES: dict[str, list[Callable[[Raw], None]]] = {
     ],
     "distribution_single_product": [_two_products_into_distribution],
     "unit_series": [_no_production_series, _no_electricity_series],
+    "unit_electricity_source": [_no_electricity_source],
     "flow_series": [_no_input_series, _no_transfer_series, _series_on_electricity_flow],
     "storage_series": [_no_inventory_series],
     "unit_outputs": [_no_unit_output],

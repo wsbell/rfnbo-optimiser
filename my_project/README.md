@@ -46,15 +46,18 @@ The data covers all of 2026, so any quarter can be run: change `quarter` in `pro
 | `compressor_electricity_kWh` | Compressor Power (MWh) | MWh |
 | `compressor_CH2_kg` | Compressor Flow (tonne) | tonne: the compressor's output (99.8% of its feed) |
 
-The two direct links need no column of their own: a pass-through storage holds nothing, so
-the compressor's feed is the electrolyser's production, and what is filled into trailers for the
-customer is the compressor's output.
+The plant has three blocks and no electricity blocks: electricity is set once for the plant
+(renewable power available and the grid factor, under Plant settings → Electricity), and each
+unit meters its own consumption. The two direct links (electrolyser → compressor, compressor →
+customer) need no column of their own: nothing is held between the units, so the compressor's
+feed is the electrolyser's production, and what is filled into trailers for the customer is the
+compressor's output. Each trailer load's delivered quantity is the consignment's `volume_kg`.
 
 ## Assumptions and placeholders: check these
 
 | Item | Value used | Where |
 | --- | --- | --- |
-| Grid electricity emission factor | **200 gCO2e/kWh, PLACEHOLDER** | `plant.json`, `grid_power` |
+| Grid electricity emission factor | **200 gCO2e/kWh, PLACEHOLDER** | `plant.json`, `electricity.grid_gCO2e_per_kWh` |
 | Distribution adder to the customer | **1.0 gCO2e/MJ, PLACEHOLDER** | `plant.json`, `dist_customer` |
 | Consignment | **C1: 250,000 kg CH2, ships 2026-12-15, no target (minimise GHG), PLACEHOLDER** | `consignments.json` |
 | Time stamps | UTC interval starts | `project.json` |

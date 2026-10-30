@@ -12,6 +12,7 @@ from rfnbo.config import load_config
 from rfnbo.config.schema import (
     ConsignmentOutput,
     DistributionBlock,
+    Electricity,
     EmissionFactor,
     Flow,
     InputBlock,
@@ -25,6 +26,7 @@ from rfnbo.config.schema import (
 from rfnbo.ui.bfd_editor.document import EditorDocument, EditorError
 from rfnbo.ui.bfd_editor.fields import (
     BLOCK_FIELDS,
+    ELECTRICITY_FIELDS,
     FLOW_FIELDS,
     PLANT_FIELDS,
     SETTINGS_FIELDS,
@@ -113,43 +115,95 @@ def test_plant_with_a_supplier_can_be_drawn_saved_and_reloaded(tmp_path: Path) -
         doc.connect(sup, "dist_customer_a")
 
 
-def test_unit_to_unit_link_inserts_a_pass_through_storage() -> None:
+def test_unit_to_unit_link_is_a_direct_flow() -> None:
+    """Build plan §13: a direct link is drawn as a flow; the loader puts the pass-through
+    storage in it, which the diagram never shows."""
     doc = EditorDocument.new()
     el = doc.add_block("processing_unit", block_id="electrolyser")
     doc.update_block(el, product="H2")
     comp = doc.add_block("processing_unit", block_id="compressor")
     doc.update_block(comp, product="CH2")
-    pt = doc.link_units(el, comp)
-    assert pt == "pt_electrolyser_compressor" and doc.is_pass_through(pt)
-    b = doc.block(pt)
-    assert b["product"] == "H2" and b["inventory_series"] is None
-    assert b["opening_inventory_kg"] == 0 and b["opening_ledger"] == []
-    assert [(f["source"], f["target"], f["material"]) for f in doc.flows] == [
-        (el, pt, "H2"),
-        (pt, comp, "H2"),
-    ]
+    flow = doc.connect(el, comp)
+    assert [(f["source"], f["target"], f["material"]) for f in doc.flows] == [(el, comp, "H2")]
     assert all(s["dashed"] for s in doc.edge_styles())
-    with pytest.raises(EditorError, match="already linked"):
-        doc.link_units(el, comp)
-    with pytest.raises(EditorError, match="only a processing unit is linked directly"):
-        doc.link_units(el, pt)
+    assert [b["id"] for b in doc.blocks] == [el, comp]
+    with pytest.raises(EditorError, match="already connected"):
+        doc.connect(el, comp)
+    # Issues on the added pass-through point at the drawn flow.
+    assert flow not in {b["id"] for b in doc.blocks}
+    assert all(i.ref != f"{flow}__link" for i in doc.issues())
 
 
-def test_unit_to_distribution_link_inserts_a_pass_through_storage() -> None:
+def test_unit_to_distribution_link_is_a_direct_flow() -> None:
     """A unit whose output goes straight to customers, such as a tube trailer fill."""
     doc = EditorDocument.new()
     fill = doc.add_block("processing_unit", block_id="trailer_fill")
     doc.update_block(fill, product="CH2")
     dist = doc.add_block("distribution", block_id="dist_customer_b")
-    pt = doc.link_units(fill, dist)
-    assert doc.is_pass_through(pt) and doc.block(pt)["product"] == "CH2"
-    assert [(f["source"], f["target"]) for f in doc.flows] == [(fill, pt), (pt, dist)]
-    with pytest.raises(EditorError, match="only a processing unit"):
-        doc.link_units(dist, fill)
+    doc.connect(fill, dist)
+    assert [(f["source"], f["target"]) for f in doc.flows] == [(fill, dist)]
+    with pytest.raises(EditorError, match="cannot flow into"):
+        doc.connect(dist, fill)
+
+
+SIMPLE = Path(__file__).resolve().parents[1] / "fixtures" / "simple_plant.json"
+
+
+def test_a_plant_opens_in_the_compact_form_and_saves_so(tmp_path: Path) -> None:
+    """Electricity blocks open as the plant's electricity settings, pass-through storages
+    between units as direct links (build plan §13); saved, the file stays compact and loads
+    to the same plant."""
+    doc = EditorDocument.load(SIMPLE)
+    assert not doc.dirty
+    assert [b["kind"] for b in doc.blocks] == [
+        "processing_unit",
+        "processing_unit",
+        "distribution",
+        "consignment_output",
+    ]
+    assert doc.data["electricity"]["grid_gCO2e_per_kWh"] == 200.0
+    assert doc.issues() == []
+    out = tmp_path / "plant.json"
+    assert doc.save(out) == []
+    saved = json.loads(out.read_text("utf-8"))
+    assert {b["id"] for b in saved["blocks"]} == {b["id"] for b in doc.blocks}
+    assert [(f["source"], f["target"]) for f in saved["flows"]][:2] == [
+        ("electrolyser", "compressor"),
+        ("compressor", "dist_customer"),
+    ]
+    assert list(saved)[:7] == [
+        "schema_version",
+        "plant",
+        "version",
+        "effective_from",
+        "timezone",
+        "settings",
+        "electricity",
+    ]
+    full = load_config(SIMPLE).model_dump(exclude={"layout"})
+    again = load_config(out).model_dump(exclude={"layout"})
+    assert {b["kind"] for b in again["blocks"]} == {b["kind"] for b in full["blocks"]}
+    assert len(again["flows"]) == len(full["flows"])
+
+
+def test_electricity_settings_are_edited_on_the_plant() -> None:
+    doc = EditorDocument.load(SIMPLE)
+    doc.update_electricity(grid_source="")
+    assert [(i.rule, i.ref) for i in doc.issues()] == [("schema", None)]
+    doc.update_electricity(grid_source="national grid factor 2026", renewable_available_series="")
+    assert "renewable_available_series" not in doc.data["electricity"]
+    # Grid power only: the electrolyser now has no renewable input, on the unit itself.
+    assert [(i.rule, i.ref) for i in doc.issues()] == [("unit_feeds", "electrolyser")]
+    del doc.data["electricity"]
+    assert {(i.rule, i.ref) for i in doc.issues()} == {
+        ("unit_electricity_source", "electrolyser"),
+        ("unit_electricity_source", "compressor"),
+        ("unit_feeds", "electrolyser"),
+    }
 
 
 def test_flows_are_coloured_by_product() -> None:
-    doc = EditorDocument.load(PLANT_3)
+    doc = EditorDocument(json.loads(PLANT_3.read_text(encoding="utf-8")))  # as it is
     styles = {(s["source"], s["target"]): s for s in doc.edge_styles()}
     assert styles["renewable_power", "electrolyser"]["colour"] == "#9e9e9e"
     h2 = styles["electrolyser", "h2_buffer"]["colour"]
@@ -181,7 +235,7 @@ def test_connect_infers_material_and_fills_blanks() -> None:
     ("src", "tgt"),
     [
         ("input", "storage_unit"),
-        ("processing_unit", "processing_unit"),
+        ("processing_unit", "consignment_output"),
         ("consignment_output", "distribution"),
     ],
 )
@@ -299,11 +353,13 @@ def test_flow_plant_and_settings_fields_have_editors() -> None:
     assert {s.key for s in PLANT_FIELDS} == set(PlantConfig.model_fields) - {
         "schema_version",
         "settings",
+        "electricity",  # its own form (ELECTRICITY_FIELDS)
         "blocks",
         "flows",
         "layout",
     }
     assert {s.key for s in SETTINGS_FIELDS} == set(Settings.model_fields)
+    assert {s.key for s in ELECTRICITY_FIELDS} == set(Electricity.model_fields)
 
 
 def test_dirty_until_saved(tmp_path: Path) -> None:
@@ -330,7 +386,7 @@ def test_automatic_layout_runs_in_lanes() -> None:
     """Test plant 4 laid out as drawn in the design mockup: columns by flow, the LH2 route on
     the top lane, spot sales in the middle, the CH2 route below, inputs left of x = 0."""
     golden = Path(__file__).resolve().parents[1] / "golden" / "tc4.plant.json"
-    doc = EditorDocument.load(golden)
+    doc = EditorDocument(json.loads(golden.read_text(encoding="utf-8")))  # as written
     at = doc.auto_layout()
     lanes = {}
     for block, (x, y) in at.items():

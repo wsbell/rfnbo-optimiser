@@ -157,6 +157,21 @@ def unit_series(cfg: PlantConfig) -> Iterator[Issue]:
             yield Issue("unit_series", "unit takes electricity but has no electricity series", u.id)
 
 
+def unit_electricity_source(cfg: PlantConfig) -> Iterator[Issue]:
+    """A unit that meters electricity draws it from somewhere: the plant's electricity
+    settings (build plan §13), so its kWh are never left out of its GHG."""
+    for u in cfg.blocks_of(ProcessingUnit):
+        if u.electricity_series and not any(
+            f.material == ELECTRICITY for f in cfg.flows_into(u.id)
+        ):
+            yield Issue(
+                "unit_electricity_source",
+                "unit meters electricity but the plant has no electricity settings: set the "
+                "grid emission factor (and the renewable power series) under Electricity",
+                u.id,
+            )
+
+
 def flow_series(cfg: PlantConfig) -> Iterator[Issue]:
     """Non-electricity inputs into units and transfers out of storage are metered."""
     for f in _resolvable(cfg):
@@ -412,6 +427,7 @@ RULES: tuple[Rule, ...] = (
     flow_materials,
     distribution_single_product,
     unit_series,
+    unit_electricity_source,
     flow_series,
     storage_series,
     unit_outputs,

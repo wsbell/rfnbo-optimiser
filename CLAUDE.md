@@ -38,7 +38,9 @@ uv run rfnbo validate examples/test_plant.json
 ## Layout
 
 - `src/rfnbo/config/`: pydantic block flow diagram schema (`schema.py`) and named
-  validation rules (`validate.py`).
+  validation rules (`validate.py`). The compact form (build plan §13: an `electricity`
+  section, direct unit links) is expanded on loading by `schema.expand` into the full form the
+  engine reads; `schema.compact` goes the other way where nothing is lost (the editor uses it).
 - `src/rfnbo/data/`: `calendar.py` (plant-time-zone months, clock hours, quarters, the data's
   time step), `ingest.py` (CSV/Excel → raw series, units converted by `units.py`),
   `quality.py` (grid alignment at the data's step, quality flags, `Frame` with its `interval`).

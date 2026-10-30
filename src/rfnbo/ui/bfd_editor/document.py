@@ -8,6 +8,7 @@ it concerns. The UI layer only renders this state and forwards user actions to i
 
 from __future__ import annotations
 
+import contextlib
 import copy
 import datetime as dt
 import json
@@ -16,7 +17,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from rfnbo.config.schema import PlantConfig
+from rfnbo.config.schema import Electricity, PlantConfig, compact, synthetic_owner
 from rfnbo.config.validate import ALLOWED_CONNECTIONS, Issue, validate
 
 KINDS = (
@@ -47,6 +48,7 @@ _TOP_ORDER = (
     "effective_from",
     "timezone",
     "settings",
+    "electricity",
     "blocks",
     "flows",
     "layout",
@@ -125,8 +127,10 @@ def _ordered_rows(targets: list[float], rows: int) -> list[int]:
     return out[::-1]
 
 
-# What a processing unit may be linked to directly, through an inserted pass-through storage.
+# What a processing unit may be linked to directly (build plan §13): the loader puts a
+# pass-through storage in the link, which the diagram never shows.
 DIRECT_TARGETS = ("processing_unit", "distribution")
+CONNECTIONS = ALLOWED_CONNECTIONS | {("processing_unit", k) for k in DIRECT_TARGETS}
 
 
 class EditorDocument:
@@ -175,9 +179,15 @@ class EditorDocument:
 
     @classmethod
     def from_json(cls, text: str) -> EditorDocument:
+        """A diagram from its JSON, in the compact form (build plan §13): electricity blocks
+        become the plant's electricity settings, pass-through storages between units direct
+        links, wherever that loses nothing. The engine reads both forms the same."""
         data = json.loads(text)
         if not isinstance(data, dict):
             raise EditorError("a plant config must be a JSON object")
+        # Too malformed to compact: shown as it is, with its issues.
+        with contextlib.suppress(AttributeError, TypeError, KeyError, IndexError):
+            data = compact(data)
         return cls(data)
 
     @classmethod
@@ -191,6 +201,20 @@ class EditorDocument:
         data: dict[str, Any] = self.data
         if not self.issues():
             data = PlantConfig.model_validate(self.data).model_dump(mode="json", exclude_none=True)
+            # The file keeps the compact form: what the loader added is left out again, and
+            # direct links keep their ends.
+            given = {f.get("id"): f for f in self.flows}
+            ids = {b.get("id") for b in self.blocks}
+            data["blocks"] = [b for b in data["blocks"] if b["id"] in ids]
+            data["flows"] = [
+                dict(f, source=given[f["id"]]["source"], target=given[f["id"]]["target"])
+                for f in data["flows"]
+                if f["id"] in given
+            ]
+            if self.data.get("electricity") is not None:
+                data["electricity"] = Electricity.model_validate(
+                    self.data["electricity"]
+                ).model_dump(mode="json", exclude_none=True)
             for b in data["blocks"]:  # only pass-through storages say so, keeping files short
                 if b.get("pass_through") is False:
                     del b["pass_through"]
@@ -434,7 +458,7 @@ class EditorDocument:
         """Add a flow, inferring the material it carries from its source."""
         src, tgt = self.block(source), self.block(target)
         pair = (src["kind"], tgt["kind"])
-        if pair not in ALLOWED_CONNECTIONS:
+        if pair not in CONNECTIONS:
             raise EditorError(
                 f"{_a(KIND_LABELS[pair[0]])} cannot flow into {_a(KIND_LABELS[pair[1]])}"
             )
@@ -460,43 +484,11 @@ class EditorDocument:
                 tgt["customer"] = src.get("customer", "")
         return str(flow["id"])
 
-    def link_units(self, source: str, target: str) -> str:
-        """A direct link from a unit to a unit (build plan §10.2 rule 5), or to a distribution
-        block for a unit whose output goes straight to customers (decided 2026-10-27): insert a
-        pass-through storage between the two and connect through it. Returns its id."""
-        src, tgt = self.block(source), self.block(target)
-        if src["kind"] != "processing_unit" or tgt["kind"] not in DIRECT_TARGETS:
-            raise EditorError(
-                "only a processing unit is linked directly, to a unit or a distribution block"
-            )
-        if any(
-            f.get("source") == source
-            and self.is_pass_through(str(f.get("target", "")))
-            and any(
-                g.get("source") == f.get("target") and g.get("target") == target for g in self.flows
-            )
-            for f in self.flows
-        ):
-            raise EditorError(f"{source} is already linked to {target}")
-        (sx, sy), (tx, ty) = self.position(source), self.position(target)
-        pt = self.add_block(
-            "storage_unit",
-            (sx + tx) / 2,
-            (sy + ty) / 2 + 70,
-            block_id=self._new_id(f"pt_{source}_{target}", self._ids(), bare=True),
-            name=f"Direct link {source} → {target}",
-        )
-        block = self.block(pt)
-        block.update(
-            product=src.get("product", ""),
-            pass_through=True,
-            inventory_series=None,
-            opening_inventory_kg=0.0,
-            opening_ledger=[],
-        )
-        self.connect(source, pt)
-        self.connect(pt, target)
-        return pt
+    def is_direct(self, flow: dict[str, Any]) -> bool:
+        kind = {b.get("id"): b.get("kind") for b in self.blocks}
+        return (kind.get(flow.get("source")), kind.get(flow.get("target"))) in {
+            ("processing_unit", k) for k in DIRECT_TARGETS
+        }
 
     def is_pass_through(self, block_id: str) -> bool:
         return any(
@@ -505,7 +497,8 @@ class EditorDocument:
         )
 
     def edge_styles(self) -> list[dict[str, Any]]:
-        """Colour of each flow (by material) and whether it is drawn dashed (pass-through)."""
+        """Colour of each flow (by material) and whether it is drawn dashed (a direct link
+        between units, or through a pass-through storage)."""
         materials = sorted({str(f.get("material", "")) for f in self.flows} - {"electricity", ""})
         colour = {m: PALETTE[i % len(PALETTE)] for i, m in enumerate(materials)}
         colour["electricity"] = ELECTRICITY_COLOUR
@@ -514,7 +507,8 @@ class EditorDocument:
                 "source": f.get("source"),
                 "target": f.get("target"),
                 "colour": colour.get(str(f.get("material", "")), "#555555"),
-                "dashed": self.is_pass_through(str(f.get("source", "")))
+                "dashed": self.is_direct(f)
+                or self.is_pass_through(str(f.get("source", "")))
                 or self.is_pass_through(str(f.get("target", ""))),
             }
             for f in self.flows
@@ -558,6 +552,15 @@ class EditorDocument:
     def update_settings(self, **fields: Any) -> None:
         self.data.setdefault("settings", {}).update(fields)
 
+    def update_electricity(self, **fields: Any) -> None:
+        """The plant's electricity settings (build plan §13); a blank series means grid only."""
+        section = self.data.setdefault("electricity", {})
+        for k, v in fields.items():
+            if v is None or v == "":
+                section.pop(k, None)
+            else:
+                section[k] = v
+
     def update_plant(self, **fields: Any) -> None:
         unknown = set(fields) - {"plant", "version", "effective_from", "timezone", "settings"}
         if unknown:
@@ -572,7 +575,10 @@ class EditorDocument:
             cfg = PlantConfig.model_validate(self.data)
         except ValidationError as exc:
             return [self._schema_issue(e) for e in exc.errors()]
-        return validate(cfg)
+        except ValueError as exc:  # the compact form could not be expanded
+            return [Issue("schema", str(exc), None)]
+        # Issues on what the loader added belong to what it was added for.
+        return [Issue(i.rule, i.message, synthetic_owner(i.ref, self.data)) for i in validate(cfg)]
 
     def _schema_issue(self, err: Any) -> Issue:
         loc = list(err["loc"])

@@ -759,3 +759,40 @@ Consequences:
   a non-compliant part from the 17.83 H₂); its consignments still cannot be met, as they average
   September with October NH₃. Test case 2's NH₃ write-off is the workbook's again. Test cases 3
   and 4 are unchanged: each month holds one part per source.
+
+## 13. Compact plant config: electricity settings and direct links (decided 2026-10-30)
+
+The block flow diagram showed modelling devices rather than the plant: an electricity input
+block with a flow into every unit for the renewable pool and another for the grid, and a
+pass-through storage block in every direct unit → unit or unit → customer link. The plant
+config gains a compact form; the loader expands it into the full form the engine has always
+read, so calculation, optimisation and checks are unchanged and both forms load.
+
+| # | Question | Decision |
+| --- | --- | --- |
+| 1 | Electricity | An `electricity` section of the plant config, not blocks: the renewable power available series (kWh per interval; blank for grid power only) and the grid emission factor (gCO₂e/kWh) with its source. Every processing unit meters its total electricity (`electricity_series`), agnostic of where it came from; within a batch, renewable power available is matched first and the rest is grid power. Batch boundaries and the per-interval split of the pool between units stay optimiser decisions. Every unit that meters electricity draws on the pool (a plant where a unit must take grid power only keeps the full form) |
+| 2 | Grid emission factor | One constant for a run; it may change from run to run (set it before the run; the sealed run records it with the config) |
+| 3 | Direct links | A unit is linked to a unit or a distribution block by a plain flow. The loader inserts the pass-through storage (§10.2 rule 5, §10.3 decision 8) with id `<flow id>__link`; the diagram never shows it, and its checks are reported on the flow |
+| 4 | Distribution meters | A distribution block has no metered series. A trailer load's delivered quantity is the consignment's `volume_kg` (already an input), so no time series is needed. A storage feeding a distribution block keeps its outflow meter for now (it is the storage's balance; open, §13.1) |
+| 5 | Pipeline losses | Not tracked: a difference between a unit's output and what the customer's meter records is ignored (§2.7: losses are not modelled) |
+| 6 | Pipeline delivery | One pipeline. The optimiser assigns RFNBO batches to the pipeline's time intervals and decides which output each goes to. **Open:** what an output of the pipeline is and how its consignments are defined (§13.1) |
+
+Named rule added: `unit_electricity_source` (a unit that meters electricity draws it from the
+plant's electricity settings or an electricity input). Ids the loader adds are reserved:
+`renewable_power`, `grid_power`, `<unit>__renewable_power`, `<unit>__grid_power`,
+`<flow>__link`, `<flow>__out`. The editor opens a full-form file in the compact form where
+nothing is lost (`schema.compact`) and saves the compact form. The golden plants stay in the
+full form, so their fixtures (which name the pass-through storages) are unchanged; they also
+validate when compacted.
+
+### 13.1 Open: pipeline outputs
+
+Decision 6 needs, before it is built: what the pipeline's outputs are (customers or offtake
+points along it, each a distribution block with its own fixed adder?), whether each output's
+customer meter is a series (kg per interval) that bounds what RFNBO can be assigned to it in
+each interval, whether RFNBO may be assigned to an interval before the batch that made it ends,
+and how a pipeline consignment is defined (a period's metered delivery, with its target).
+Also open: whether a real storage (one with an inventory meter) feeding a distribution block
+still needs a meter on that outflow, or whether the outflow is taken as the storage's balance
+(inflows less the change in inventory), losses included.
+

@@ -10,7 +10,7 @@ live in :mod:`rfnbo.config.validate`, so each rule can be reported by name.
 from __future__ import annotations
 
 import datetime as dt
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -224,6 +224,242 @@ class Settings(_Model):
         return self.fossil_comparator_gCO2e_per_MJ * (1.0 - self.required_saving)
 
 
+class Electricity(_Model):
+    """The plant's electricity, as settings rather than blocks (decided 2026-10-30, build plan
+    §13): every processing unit meters its total consumption (``electricity_series``); within a
+    batch, renewable power available is matched first and the rest is grid power."""
+
+    renewable_available_series: str | None = None  # kWh per interval; None: grid only
+    renewable_gCO2e_per_kWh: float = Field(default=0.0, ge=0)
+    renewable_source: str = Field(
+        default="EU 2023/1185: matched renewable electricity counts as zero", min_length=1
+    )
+    # Constant for a run; set it again before the next run if it changes.
+    grid_gCO2e_per_kWh: float = Field(ge=0)
+    grid_source: str = Field(min_length=1)
+
+    @field_validator("renewable_available_series")
+    @classmethod
+    def _blank_is_none(cls, v: str | None) -> str | None:
+        return v or None
+
+
+# Blocks and flows the loader adds for the compact form (:func:`expand`); their ids are
+# reserved.
+RENEWABLE_ID = "renewable_power"
+GRID_ID = "grid_power"
+LINK_SUFFIX = "__link"  # pass-through storage of a direct link, after the link's flow id
+OUT_SUFFIX = "__out"  # its outflow
+_DIRECT = {("processing_unit", "processing_unit"), ("processing_unit", "distribution")}
+
+
+def expand(data: dict[str, Any]) -> dict[str, Any]:
+    """The compact plant config (an ``electricity`` section and direct unit links) in the full
+    form the engine reads: electricity input blocks with a flow into each unit that meters
+    electricity, and a pass-through storage in each direct link (§10.2 rule 5). New blocks and
+    flows go after the ones given, so positions in the file still name the same items."""
+    blocks = [b for b in data.get("blocks", []) if isinstance(b, dict)]
+    flows = [f for f in data.get("flows", []) if isinstance(f, dict)]
+    kind = {b.get("id"): b.get("kind") for b in blocks}
+    taken = set(kind) | {f.get("id") for f in flows}
+    direct = [  # a unit linked to itself is left for flow_endpoints to report
+        f
+        for f in flows
+        if (kind.get(f.get("source")), kind.get(f.get("target"))) in _DIRECT
+        and f.get("source") != f.get("target")
+    ]
+    elec = data.get("electricity")
+    if elec is None and not direct:
+        return data
+    out = dict(data)
+    out_blocks, out_flows = list(data.get("blocks", [])), list(data.get("flows", []))
+
+    def reserve(i: str) -> str:
+        if i in taken:
+            raise ValueError(f"id {i!r} is reserved for the compact plant config")
+        taken.add(i)
+        return i
+
+    for f in direct:
+        fid = str(f.get("id"))
+        src = next(b for b in blocks if b.get("id") == f.get("source"))
+        link = reserve(fid + LINK_SUFFIX)
+        out_blocks.append(
+            {
+                "kind": "storage_unit",
+                "id": link,
+                "name": f"Direct link {f.get('source')} → {f.get('target')}",
+                "product": src.get("product") or f.get("material", ""),
+                "pass_through": True,
+                "opening_inventory_kg": 0.0,
+            }
+        )
+        out_flows[out_flows.index(f)] = dict(f, target=link)
+        out_flows.append(
+            {
+                "id": reserve(fid + OUT_SUFFIX),
+                "source": link,
+                "target": f.get("target"),
+                "material": f.get("material", ""),
+            }
+        )
+    if elec is not None:
+        if not isinstance(elec, dict):
+            raise ValueError("electricity must be an object")
+        if any(b.get("kind") == "input" and b.get("material") == ELECTRICITY for b in blocks):
+            raise ValueError(
+                "electricity is set in the electricity section; remove the electricity input blocks"
+            )
+        start = data.get("effective_from")
+        users = [
+            str(b.get("id"))
+            for b in blocks
+            if b.get("kind") == "processing_unit" and b.get("electricity_series")
+        ]
+        sources = [
+            (
+                GRID_ID,
+                "Grid electricity",
+                False,
+                None,
+                elec.get("grid_gCO2e_per_kWh"),
+                elec.get("grid_source"),
+            )
+        ]
+        if elec.get("renewable_available_series"):
+            sources.insert(
+                0,
+                (
+                    RENEWABLE_ID,
+                    "Renewable electricity",
+                    True,
+                    elec["renewable_available_series"],
+                    elec.get("renewable_gCO2e_per_kWh", 0.0),
+                    elec.get(
+                        "renewable_source", Electricity.model_fields["renewable_source"].default
+                    ),
+                ),
+            )
+        for bid, name, renewable, series, value, source in sources:
+            block: dict[str, Any] = {
+                "kind": "input",
+                "id": reserve(bid),
+                "name": name,
+                "material": ELECTRICITY,
+                "quantity_unit": "kWh",
+                "renewable": renewable,
+                "emission_factors": [
+                    {"value": value, "unit": "gCO2e/kWh", "valid_from": start, "source": source}
+                ],
+            }
+            if series:
+                block["series"] = series
+            out_blocks.append(block)
+            for u in users:
+                out_flows.append(
+                    {
+                        "id": reserve(f"{u}__{bid}"),
+                        "source": bid,
+                        "target": u,
+                        "material": ELECTRICITY,
+                    }
+                )
+        Electricity.model_validate(elec)  # its own errors, by field
+        out.pop("electricity")
+    out["blocks"], out["flows"] = out_blocks, out_flows
+    return out
+
+
+def compact(data: dict[str, Any]) -> dict[str, Any]:
+    """The full form in the compact one where nothing is lost: electricity input blocks
+    become the ``electricity`` section (one renewable input with a constant factor, one grid
+    input with a constant factor, every unit that meters electricity fed by both and no other
+    unit fed electricity), and each pass-through storage between a unit and a unit or a
+    distribution block becomes a direct link. Anything else is left as it is."""
+    out = dict(data)
+    blocks = [dict(b) for b in data.get("blocks", [])]
+    flows = [dict(f) for f in data.get("flows", [])]
+    layout = dict(data.get("layout", {}))
+    by_id = {b.get("id"): b for b in blocks}
+
+    # Pass-through storages between a unit and a unit or a distribution block.
+    for b in list(blocks):
+        if b.get("kind") != "storage_unit" or not b.get("pass_through"):
+            continue
+        into = [f for f in flows if f.get("target") == b["id"]]
+        outof = [f for f in flows if f.get("source") == b["id"]]
+        if len(into) != 1 or len(outof) != 1 or outof[0].get("series"):
+            continue
+        pair = (
+            by_id.get(into[0].get("source"), {}).get("kind"),
+            by_id.get(outof[0].get("target"), {}).get("kind"),
+        )
+        if pair not in _DIRECT or b.get("opening_ledger") or b.get("opening_inventory_kg"):
+            continue
+        into[0]["target"] = outof[0]["target"]
+        flows.remove(outof[0])
+        blocks.remove(b)
+        layout.pop(b["id"], None)
+
+    # Electricity input blocks.
+    elec = [b for b in blocks if b.get("kind") == "input" and b.get("material") == ELECTRICITY]
+    ren = [b for b in elec if b.get("renewable")]
+    grid = [b for b in elec if not b.get("renewable")]
+    users = {
+        b["id"]
+        for b in blocks
+        if b.get("kind") == "processing_unit" and b.get("electricity_series")
+    }
+    fed = {e["id"]: {f.get("target") for f in flows if f.get("source") == e["id"]} for e in elec}
+    if (
+        not data.get("electricity")
+        and len(grid) == 1
+        and len(ren) <= 1
+        and all(len(e.get("emission_factors", [])) == 1 for e in elec)
+        and all(fed[e["id"]] == users for e in elec)
+        and not any(e.get("renewable") and not e.get("series") for e in elec)
+    ):
+        g = grid[0]["emission_factors"][0]
+        section: dict[str, Any] = {}
+        if ren:
+            r = ren[0]["emission_factors"][0]
+            section |= {
+                "renewable_available_series": ren[0]["series"],
+                "renewable_gCO2e_per_kWh": r.get("value", 0.0),
+                "renewable_source": r.get("source", ""),
+            }
+        section |= {"grid_gCO2e_per_kWh": g.get("value"), "grid_source": g.get("source", "")}
+        ids = {e["id"] for e in elec}
+        blocks = [b for b in blocks if b.get("id") not in ids]
+        flows = [f for f in flows if f.get("source") not in ids]
+        for i in ids:
+            layout.pop(i, None)
+        out["electricity"] = section
+    out["blocks"], out["flows"] = blocks, flows
+    if "layout" in data:
+        out["layout"] = layout
+    return out
+
+
+def synthetic_owner(ref: str | None, data: dict[str, Any]) -> str | None:
+    """The block or flow of the compact config a loader-made item stands for (None: the
+    electricity section)."""
+    if ref is None:
+        return None
+    given = {x.get("id") for x in [*data.get("blocks", []), *data.get("flows", [])]}
+    if ref in given:
+        return ref
+    for suffix in (LINK_SUFFIX, OUT_SUFFIX):
+        if ref.endswith(suffix) and ref[: -len(suffix)] in given:
+            return ref[: -len(suffix)]
+    if ref in (RENEWABLE_ID, GRID_ID):
+        return None
+    unit, _, src = ref.rpartition("__")
+    if src in (RENEWABLE_ID, GRID_ID) and unit in given:
+        return unit
+    return ref
+
+
 class Position(_Model):
     """Where a block sits on the diagram canvas (presentation only)."""
 
@@ -240,11 +476,18 @@ class PlantConfig(_Model):
     effective_from: dt.date
     timezone: str
     settings: Settings = Field(default_factory=Settings)
+    # Read in the compact form only: the loader turns it into electricity input blocks.
+    electricity: Electricity | None = None
     blocks: list[Block]
     flows: list[Flow]
     # Diagram positions written by the editor. Presentation only: never read by the engine
     # and left out of the config hash of a sealed run.
     layout: dict[str, Position] = Field(default_factory=dict)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _expand(cls, data: Any) -> Any:
+        return expand(data) if isinstance(data, dict) else data
 
     @field_validator("timezone")
     @classmethod

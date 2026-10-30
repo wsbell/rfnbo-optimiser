@@ -17,6 +17,7 @@ rfnbo results <dir> [--port 8081] [--no-browser]
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import sys
 from collections.abc import Callable
@@ -37,9 +38,11 @@ def _validate(args: argparse.Namespace) -> int:
         for issue in exc.issues:
             print(f"  {issue}", file=sys.stderr)
         return 1
+    # Counted as written: the compact form's added blocks and flows are not the user's.
+    raw = json.loads(Path(args.path).read_text(encoding="utf-8"))
     print(
         f"{args.path}: valid ({cfg.plant} v{cfg.version}, effective {cfg.effective_from}, "
-        f"{len(cfg.blocks)} blocks, {len(cfg.flows)} flows)"
+        f"{len(raw['blocks'])} blocks, {len(raw['flows'])} flows)"
     )
     return 0
 

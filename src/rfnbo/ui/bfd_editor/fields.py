@@ -31,7 +31,12 @@ class TableSpec:
 
 BLOCK_FIELDS: dict[str, tuple[FieldSpec | TableSpec, ...]] = {
     "input": (
-        FieldSpec("material", "Material", "text", hint="electricity, water, N2, ..."),
+        FieldSpec(
+            "material",
+            "Material",
+            "text",
+            hint="water, N2, ... (electricity is set under the plant's Electricity)",
+        ),
         FieldSpec("quantity_unit", "Quantity unit", "select", ("kWh", "kg")),
         FieldSpec("renewable", "Renewable electricity", "bool"),
         FieldSpec(
@@ -127,6 +132,23 @@ SETTINGS_FIELDS: tuple[FieldSpec, ...] = (
     FieldSpec(
         "balance_tolerance_kg_per_interval", "Meter-balance tolerance (kg/interval)", "number"
     ),
+)
+ELECTRICITY_FIELDS: tuple[FieldSpec, ...] = (
+    FieldSpec(
+        "renewable_available_series",
+        "Renewable power available series (kWh)",
+        "optional_text",
+        hint="blank: grid power only",
+    ),
+    FieldSpec("renewable_gCO2e_per_kWh", "Renewable emission factor (gCO2e/kWh)", "number"),
+    FieldSpec("renewable_source", "Renewable factor source", "text"),
+    FieldSpec(
+        "grid_gCO2e_per_kWh",
+        "Grid emission factor (gCO2e/kWh)",
+        "number",
+        hint="constant for a run; change it before the next run if it changes",
+    ),
+    FieldSpec("grid_source", "Grid factor source", "text"),
 )
 # Nullable number columns: a blank cell means "not stated", never zero.
 NULLABLE_NUMBERS = {("opening_ledger", "rfnbo_share")}

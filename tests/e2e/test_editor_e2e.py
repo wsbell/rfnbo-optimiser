@@ -1,6 +1,5 @@
 """Phases 2 and 11 acceptance, in a real browser: test plants 1 and 3 can be drawn, saved,
-reloaded and pass validation; a unit dragged onto a unit is linked through a pass-through
-storage.
+reloaded and pass validation; a unit dragged onto a unit is a direct link (build plan §13).
 
 Needs the ``ui`` extra and a Chromium for Playwright; skipped otherwise. Set
 ``RFNBO_CHROMIUM`` to use a specific Chromium binary.
@@ -26,7 +25,7 @@ pytest.importorskip("nicegui")
 playwright = pytest.importorskip("playwright.sync_api")
 
 from rfnbo.config import load_config  # noqa: E402
-from rfnbo.config.schema import PlantConfig  # noqa: E402
+from rfnbo.config.schema import PlantConfig, compact  # noqa: E402
 from tests.conftest import EXAMPLE  # noqa: E402
 from tests.e2e.conftest import free_port  # noqa: E402
 
@@ -201,10 +200,12 @@ def test_test_plant_drawn_saved_reloaded_and_valid(
     assert saved.model_dump(exclude={"layout"}) == spec.model_dump(exclude={"layout"})
     assert set(saved.layout) == {b.id for b in spec.blocks}
 
+    # Reopened, it shows the compact form (build plan §13) where that loses nothing.
+    small = compact(json.loads(path.read_text(encoding="utf-8")))
     page.reload()
     page.wait_for_function("window.bfd && window.bfd.editor")
-    expect(page.locator(".drawflow-node")).to_have_count(len(spec.blocks))
-    expect(page.locator(".drawflow svg.connection")).to_have_count(len(spec.flows))
+    expect(page.locator(".drawflow-node")).to_have_count(len(small["blocks"]))
+    expect(page.locator(".drawflow svg.connection")).to_have_count(len(small["flows"]))
     expect(page.get_by_test_id("issue-summary")).to_have_text("No issues: the diagram is valid")
     page.close()
 
@@ -263,9 +264,8 @@ def test_editing_an_existing_plant(browser: Any, editor: tuple[str, Path]) -> No
     page.close()
 
 
-def test_unit_to_unit_link_adds_a_pass_through_storage(
-    browser: Any, editor: tuple[str, Path]
-) -> None:
+def test_unit_to_unit_link_is_a_direct_flow(browser: Any, editor: tuple[str, Path]) -> None:
+    """Build plan §13: no pass-through block on the diagram; the link is drawn dashed."""
     url, path = editor
     page = _open(browser, url)
     for block_id, product in (("electrolyser", "H2"), ("compressor", "CH2")):
@@ -279,22 +279,13 @@ def test_unit_to_unit_link_adds_a_pass_through_storage(
         _node(page, "electrolyser").locator(".output_1"),
         _node(page, "compressor").locator(".input_1"),
     )
-    expect(
-        page.get_by_text("through pass-through storage pt_electrolyser_compressor")
-    ).to_be_visible()
-    expect(page.locator(".drawflow-node")).to_have_count(3)
-    expect(page.locator(".drawflow svg.connection")).to_have_count(2)
-    expect(page.locator(".drawflow svg.connection.bfd-dashed")).to_have_count(2)
-    expect(_node(page, "pt_electrolyser_compressor")).to_have_class(re.compile("bfd-pass_through"))
+    expect(page.locator(".drawflow-node")).to_have_count(2)
+    expect(page.locator(".drawflow svg.connection.bfd-dashed")).to_have_count(1)
     page.get_by_test_id("save").click()
     expect(page.get_by_text(re.compile(r"Saved plant\.json"))).to_be_visible()
     saved = json.loads(path.read_text(encoding="utf-8"))
-    pt = next(b for b in saved["blocks"] if b["id"] == "pt_electrolyser_compressor")
-    assert pt["pass_through"] is True and pt["product"] == "H2"
-    assert {(f["source"], f["target"]) for f in saved["flows"]} == {
-        ("electrolyser", "pt_electrolyser_compressor"),
-        ("pt_electrolyser_compressor", "compressor"),
-    }
+    assert [b["id"] for b in saved["blocks"]] == ["electrolyser", "compressor"]
+    assert [(f["source"], f["target"]) for f in saved["flows"]] == [("electrolyser", "compressor")]
     page.close()
 
 
