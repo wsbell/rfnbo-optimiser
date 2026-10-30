@@ -128,7 +128,8 @@ class Bound:
 @dataclass
 class OptimisationResult:
     optimised: Outcome
-    baseline: Outcome
+    # One batch per unit and month, first in first out: only when a comparison is asked for.
+    baseline: Outcome | None
     batching: BatchingResult
     shortfalls: list[allocate.Shortfall] = field(default_factory=list)
     log: list[str] = field(default_factory=list)
@@ -295,17 +296,20 @@ def optimise(
     batching: BatchingResult | None = None,
     batch_materiality_MJ: float = MATERIALITY_MJ,
     pos: Sequence[ProofOfSustainability] = (),
+    compare: bool = False,
 ) -> OptimisationResult:
+    """Optimise the decisions for a quarter. With ``compare`` the baseline (one batch per unit
+    and month, first in first out) is calculated too, for comparison."""
     if batching is None:
         batching = optimise_batching(cfg, frame, materiality_MJ=batch_materiality_MJ)
-        res = optimise(cfg, frame, consignments, batching, batch_materiality_MJ, pos)
+        res = optimise(cfg, frame, consignments, batching, batch_materiality_MJ, pos, compare)
         caps = consignment_caps(cfg, consignments, res.shortfalls)
         if not caps:
             return res
         # A consignment cannot be met: batch again aiming below its limit, not only below the
         # threshold (without averaging, §12, only low-GHG parts can meet a tight target).
         capped = optimise_batching(cfg, frame, materiality_MJ=batch_materiality_MJ, caps=caps)
-        again = optimise(cfg, frame, consignments, capped, batch_materiality_MJ, pos)
+        again = optimise(cfg, frame, consignments, capped, batch_materiality_MJ, pos, compare)
         note = f"stage A again with caps {caps}"
         if _met(again, consignments) > _met(res, consignments) or (
             _met(again, consignments) == _met(res, consignments)
@@ -394,8 +398,9 @@ def optimise(
             fed = _feed_all(cfg, frame, base.model_copy(update={"consignments": []}), {}, None, log)
             best = _assemble(cfg, frame, fed)
 
-    base_decisions = baseline_decisions(cfg, frame, consignments, pos)
-    baseline = _assemble(cfg, frame, base_decisions)
+    baseline = None
+    if compare:
+        baseline = _assemble(cfg, frame, baseline_decisions(cfg, frame, consignments, pos))
     return OptimisationResult(best, baseline, batching, shortfalls, log)
 
 

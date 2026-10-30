@@ -1,7 +1,7 @@
 # CLAUDE.md
 
-RFNBO GHG and mass balance optimiser: retrospective accounting of one quarter of 15-minute
-plant data under Delegated Regulations (EU) 2023/1184 and 2023/1185 and certification-scheme
+RFNBO GHG and mass balance optimiser: retrospective accounting of one quarter of plant data,
+at the data's own time step (15-minute, hourly, ...; build plan §10.3 decision 10), under Delegated Regulations (EU) 2023/1184 and 2023/1185 and certification-scheme
 mass balance rules. The build plan (`docs/build-plan.md`) and scope document define the domain
 rules; follow them. Phases 10–15 (multi-step networks) follow the decisions in §10.3.
 
@@ -19,7 +19,8 @@ uv run rfnbo validate examples/test_plant.json
 ## Conventions
 
 - Metric units only: kg, kWh, MJ, gCO₂e/MJ. Every quantity field carries its unit in its name
-  (`rfnbo_kg`, `lhv_MJ_per_kg`, `fixed_adder_gCO2e_per_MJ`).
+  (`rfnbo_kg`, `lhv_MJ_per_kg`, `fixed_adder_gCO2e_per_MJ`). Data in other units is converted
+  on reading to the series' unit (`data/units.py`), and each conversion reported.
 - Store timestamps in UTC (interval start); derive months, hours and quarters only via
   `rfnbo.data.calendar` using the plant time zone.
 - The calculator is pure and deterministic. No randomness, no wall-clock reads.
@@ -38,8 +39,9 @@ uv run rfnbo validate examples/test_plant.json
 
 - `src/rfnbo/config/`: pydantic block flow diagram schema (`schema.py`) and named
   validation rules (`validate.py`).
-- `src/rfnbo/data/`: `calendar.py` (plant-time-zone months, clock hours, quarters),
-  `ingest.py` (CSV/Excel → raw series), `quality.py` (grid alignment, quality flags, `Frame`).
+- `src/rfnbo/data/`: `calendar.py` (plant-time-zone months, clock hours, quarters, the data's
+  time step), `ingest.py` (CSV/Excel → raw series, units converted by `units.py`),
+  `quality.py` (grid alignment at the data's step, quality flags, `Frame` with its `interval`).
 - `src/rfnbo/model/entities.py`: decision sets (batches, feed, renewable split, consignments,
   aggregated batches, write-offs) as JSON-serialisable pydantic models.
 - `src/rfnbo/calc/`: `batch.py` (a downstream batch's RFNBO is split into parts, one per source
@@ -72,7 +74,7 @@ uv run rfnbo validate examples/test_plant.json
   `app.py` lays it out and serves the results browser on the folder's `runs/`. Its Plant tab
   embeds the diagram editor (`Editor.build_embedded`), where each meter picks its data column
   (`Columns`); a draft plant can be set up and mapped, and is run only once valid.
-- `src/rfnbo/optimise/batching.py`: stage A. Exact DP per unit and month over 15-minute
+- `src/rfnbo/optimise/batching.py`: stage A. Exact DP per unit and month over the data's
   intervals (hourly windows from the switch date for electrolytic units), scored by the RFNBO
   in compliant batches each month can blend at or below the downstream limit (§12.1; limits
   back-propagated through units in series; `caps` tighten them to a consignment's limit), μ
@@ -89,7 +91,7 @@ uv run rfnbo validate examples/test_plant.json
   holds each aggregated batch's (month, source) average to the consignment's limit.
   `pipeline.py` runs A → B → C with B↔C feedback and relaxation when a consignment cannot be
   met, then stage A again with the unmet consignments' limits as caps; `baseline.py` is one
-  batch per month, FIFO; `lp.py` wraps HiGHS with fixed, recorded
+  batch per month, FIFO, calculated only for `--compare` (decision 12); `lp.py` wraps HiGHS with fixed, recorded
   options (`solver_info()` goes into every sealed run).
 - `src/rfnbo/report/`: `tables.py` builds every report table from a calculated run (never
   from solver output); `excel.py` and `csv_export.py` write them; `build.py` reports a sealed

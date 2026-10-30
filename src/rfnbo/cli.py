@@ -8,7 +8,7 @@ rfnbo verify <run-dir>
 rfnbo batch --config C --source S --data D --quarter 2026-Q4 --out decisions.json
 rfnbo optimise --config C --source S --data D --quarter 2026-Q4
                --consignments requirements.json --out DIR [--pos pos.csv]
-rfnbo optimise --project DIR [--label NAME]
+rfnbo optimise --project DIR [--label NAME] [--compare]
 rfnbo data DIR [--port 8082] [--no-browser]
 rfnbo report <run-dir> --out DIR [--baseline <run-dir>] [--csv]
 rfnbo results <dir> [--port 8081] [--no-browser]
@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import re
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 from rfnbo.calc import CalculationError, calculate
@@ -137,7 +138,7 @@ def _optimise(args: argparse.Namespace) -> int:
     from pydantic import TypeAdapter
 
     from rfnbo.model.entities import ConsignmentSpec, ProofOfSustainability
-    from rfnbo.optimise.pipeline import OptimisationResult, optimise
+    from rfnbo.optimise.pipeline import Objectives, OptimisationResult, optimise
     from rfnbo.project.run import Sealed, seal_optimisation
 
     result: OptimisationResult
@@ -152,7 +153,7 @@ def _optimise(args: argparse.Namespace) -> int:
             prep = prepare(project)
             for f in prep.flags:
                 print(f"  {f}", file=sys.stderr)
-            result, out = run_project(project, args.label, prep)
+            result, out = run_project(project, args.label, prep, compare=args.compare)
         except (ProjectError, ConfigError, ValueError) as exc:
             print(f"{args.project}: {exc}", file=sys.stderr)
             return 1
@@ -195,26 +196,32 @@ def _optimise(args: argparse.Namespace) -> int:
                     print(f"  {issue}", file=sys.stderr)
                 return 1
         result = optimise(
-            cfg, frame, consignments, batch_materiality_MJ=args.batch_materiality_MJ, pos=records
+            cfg,
+            frame,
+            consignments,
+            batch_materiality_MJ=args.batch_materiality_MJ,
+            pos=records,
+            compare=args.compare,
         )
         out = seal_optimisation(result, args.out, flags)
 
     vb = result.value_bound()
     bound = result.bound()
-    print(f"{'':>24} {'optimised':>18} {'baseline':>18}")
-    o, b = result.optimised.objectives, result.baseline.objectives
-    print(f"{'consignments met':>24} {o.consignments_met!s:>18} {b.consignments_met!s:>18}")
-    print(f"{'carried value (MJ)':>24} {o.carried_value_MJ:>18,.1f} {b.carried_value_MJ:>18,.1f}")
-    print(f"{'final RFNBO (kg)':>24} {o.final_rfnbo_kg:>18,.1f} {b.final_rfnbo_kg:>18,.1f}")
-    print(
-        f"{'carried GHG (g)':>24} {o.carried_emissions_g:>18,.0f} {b.carried_emissions_g:>18,.0f}"
-    )
-    print(f"{'batches':>24} {o.batches:>18,} {b.batches:>18,}")
+    columns = [("result", result.optimised.objectives)]
+    if result.baseline is not None:
+        columns.append(("baseline", result.baseline.objectives))
+    rows: list[tuple[str, Callable[[Objectives], str]]] = [
+        ("consignments met", lambda o: str(o.consignments_met)),
+        ("carried value (MJ)", lambda o: f"{o.carried_value_MJ:,.1f}"),
+        ("final RFNBO (kg)", lambda o: f"{o.final_rfnbo_kg:,.1f}"),
+        ("carried GHG (g)", lambda o: f"{o.carried_emissions_g:,.0f}"),
+        ("batches", lambda o: f"{o.batches:,}"),
+    ]
     if records:
-        print(
-            f"{'PoS written off (kg)':>24} {o.pos_written_off_kg:>18,.1f} "
-            f"{b.pos_written_off_kg:>18,.1f}"
-        )
+        rows.append(("PoS written off (kg)", lambda o: f"{o.pos_written_off_kg:,.1f}"))
+    print(f"{'':>24}" + "".join(f" {name:>18}" for name, _ in columns))
+    for label, show in rows:
+        print(f"{label:>24}" + "".join(f" {show(o):>18}" for _, o in columns))
     if bound is not None:
         print(f"upper bound for this batching {bound.upper_kg:,.1f} kg (gap {bound.gap:.4%})")
     print(f"carried value bound {vb.upper_MJ:,.1f} MJ (gap {vb.gap:.4%})")
@@ -223,10 +230,11 @@ def _optimise(args: argparse.Namespace) -> int:
             f"  {s.consignment} not met: {s.reason}; achievable {s.achievable_kg:,.1f} kg",
             file=sys.stderr,
         )
-    print(
-        f"sealed to {out.out}/optimised and {out.out}/baseline; "
-        f"comparison in {out.out}/comparison.json"
-    )
+    if result.baseline is not None:
+        print(f"sealed to {out.out}/optimised and {out.out}/baseline")
+    else:
+        print(f"sealed to {out.out}/optimised")
+    print(f"summary: {out.out}/summary.json")
     print(f"report: {out.report}")
     if not result.feasible:
         return 3
@@ -296,7 +304,7 @@ def main(argv: list[str] | None = None) -> int:
     r = sub.add_parser("run", help="calculate a decision set and seal the run")
     r.add_argument("--config", required=True)
     r.add_argument("--source", required=True, help="data source spec (column mapping) JSON")
-    r.add_argument("--data", required=True, help="15-minute data file (CSV or Excel)")
+    r.add_argument("--data", required=True, help="data file (CSV or Excel), at its own time step")
     r.add_argument("--decisions", required=True)
     r.add_argument("--quarter", required=True, help="e.g. 2026-Q4")
     r.add_argument("--out", required=True, help="directory for the sealed run")
@@ -327,6 +335,11 @@ def main(argv: list[str] | None = None) -> int:
         help="a project folder (rfnbo data): every input from its files, sealed under runs/",
     )
     o.add_argument("--label", help="with --project: folder name under runs/")
+    o.add_argument(
+        "--compare",
+        action="store_true",
+        help="also calculate and seal the baseline (one batch per unit and month, FIFO)",
+    )
     o.add_argument("--config")
     o.add_argument("--source")
     o.add_argument("--data")
@@ -352,7 +365,7 @@ def main(argv: list[str] | None = None) -> int:
     rp.add_argument("--csv", action="store_true", help="also write one CSV per table")
     rp.set_defaults(fn=_report)
 
-    rs = sub.add_parser("results", help="browse sealed runs down to 15-minute data")
+    rs = sub.add_parser("results", help="browse sealed runs down to the interval data")
     rs.add_argument("root", help="a sealed run, or a folder containing sealed runs")
     rs.add_argument("--port", type=int, default=8081)
     rs.add_argument("--no-browser", action="store_true")

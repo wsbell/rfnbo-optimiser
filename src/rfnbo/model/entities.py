@@ -1,6 +1,6 @@
 """Decision sets: everything the optimiser chooses, in a form the calculator can re-run.
 
-A decision set plus the plant config and the 15-minute data fully determine every reported
+A decision set plus the plant config and the interval data fully determine every reported
 number. Decision sets are plain JSON so auditors can inspect and re-run them.
 """
 

@@ -59,7 +59,7 @@ def _consignments(ca_target: float = 5.0) -> list[ConsignmentSpec]:
 def _optimised(case: str) -> OptimisationResult:
     cfg, frame, _ = _inputs()
     if case == "base":
-        return optimise(cfg, frame, _decisions().consignments)
+        return optimise(cfg, frame, _decisions().consignments, compare=True)
     if case == "v2_shortfall":
         data = R.build_data(dec_renewable_kWh=R.V2_DEC_RENEWABLE_KWH, spot=False)
         return optimise(cfg, _frame(data), _consignments())

@@ -1,17 +1,40 @@
 """Plant-time-zone calendar.
 
-Timestamps are stored in UTC and mark the *start* of a 15-minute interval. Months, clock
-hours and quarters are derived here, and only here, from the plant time zone, so a UTC
-month boundary is never mistaken for a local one and DST days have 92 or 100 intervals.
+Timestamps are stored in UTC and mark the *start* of an interval. The interval is the data's
+own time step (15 minutes, an hour, ...; decided 2026-10-30): it must divide an hour, so that
+clock hours, months and quarters start on an interval. Months, clock hours and quarters are
+derived here, and only here, from the plant time zone, so a UTC month boundary is never
+mistaken for a local one and DST days have 92 or 100 15-minute intervals.
 """
 
 from __future__ import annotations
 
 import datetime as dt
+from collections import Counter
+from collections.abc import Sequence
+from itertools import pairwise
 from zoneinfo import ZoneInfo
 
-INTERVAL = dt.timedelta(minutes=15)
+INTERVAL = dt.timedelta(minutes=15)  # the default step, when data does not set one
 UTC = dt.UTC
+HOUR = dt.timedelta(hours=1)
+# Steps that divide an hour, so every clock hour, month and quarter starts on an interval.
+STEPS = tuple(dt.timedelta(minutes=m) for m in (1, 2, 3, 4, 5, 6, 10, 12, 15, 20, 30, 60))
+
+
+def detect_step(timestamps: Sequence[dt.datetime]) -> dt.timedelta:
+    """The data's time step: the commonest gap between consecutive timestamps (gaps from
+    missing rows are rarer). Raises unless it is one of :data:`STEPS`."""
+    gaps = Counter(b - a for a, b in pairwise(timestamps) if b > a)
+    if not gaps:
+        raise ValueError("cannot tell the data's time step from fewer than two timestamps")
+    step = max(gaps, key=lambda g: (gaps[g], -g.total_seconds()))
+    if step not in STEPS:
+        raise ValueError(
+            f"time step {step} does not divide an hour; use 1 to 60 minutes "
+            f"({', '.join(str(int(s.total_seconds() // 60)) for s in STEPS)})"
+        )
+    return step
 
 
 def _require_utc(ts: dt.datetime) -> None:
@@ -78,18 +101,22 @@ def quarter_bounds(year: int, quarter: int, tz: str) -> tuple[dt.datetime, dt.da
     return start, end
 
 
-def intervals(start: dt.datetime, end: dt.datetime) -> list[dt.datetime]:
-    """UTC starts of every 15-minute interval in [start, end)."""
+def intervals(
+    start: dt.datetime, end: dt.datetime, step: dt.timedelta = INTERVAL
+) -> list[dt.datetime]:
+    """UTC starts of every interval of ``step`` in [start, end)."""
     _require_utc(start)
     _require_utc(end)
-    if (end - start) % INTERVAL:
-        raise ValueError("range is not a whole number of 15-minute intervals")
-    n = (end - start) // INTERVAL
-    return [start + i * INTERVAL for i in range(n)]
+    if (end - start) % step:
+        raise ValueError(f"range is not a whole number of {step} intervals")
+    n = (end - start) // step
+    return [start + i * step for i in range(n)]
 
 
-def quarter_intervals(year: int, quarter: int, tz: str) -> list[dt.datetime]:
-    return intervals(*quarter_bounds(year, quarter, tz))
+def quarter_intervals(
+    year: int, quarter: int, tz: str, step: dt.timedelta = INTERVAL
+) -> list[dt.datetime]:
+    return intervals(*quarter_bounds(year, quarter, tz), step=step)
 
 
 def from_local(ts: dt.datetime, tz: str) -> dt.datetime:

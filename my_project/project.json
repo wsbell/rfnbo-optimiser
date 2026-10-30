@@ -3,17 +3,24 @@
  "quarter": "2026-Q4",
  "sources": [
   {
-   "file": "data/test_data_15min.csv",
-   "format": "csv",
-   "sheet": null,
-   "time_column": "Start (UTC)",
+   "file": "data/test_data.xlsx",
+   "format": "excel",
+   "sheet": "Sheet1",
+   "time_column": "Time",
    "timestamps": "UTC",
    "columns": {
-    "solar_available_kWh": "Solar power available (kWh)",
-    "electrolyser_electricity_kWh": "Electrolyser power (kWh)",
-    "electrolyser_H2_kg": "H2 production (kg)",
-    "compressor_electricity_kWh": "Compressor power (kWh)",
-    "compressor_CH2_kg": "Compressor flow (kg)"
+    "solar_available_kWh": "Solar Power (MWh)",
+    "electrolyser_electricity_kWh": "Electrolyser Power (MWh)",
+    "electrolyser_H2_kg": "H2 Production (tonne)",
+    "compressor_electricity_kWh": "Compressor Power (MWh)",
+    "compressor_CH2_kg": "Compressor Flow (tonne)"
+   },
+   "units": {
+    "solar_available_kWh": "MWh",
+    "electrolyser_electricity_kWh": "MWh",
+    "electrolyser_H2_kg": "tonne",
+    "compressor_electricity_kWh": "MWh",
+    "compressor_CH2_kg": "tonne"
    }
   }
  ],

@@ -266,13 +266,27 @@ def prepare(project: Project) -> Prepared:
     shas: list[str] = []
     align_flags: list[QualityFlag] = []
     index: tuple[Any, ...] | None = None
+    step = None
     for src in project.file.sources:
         if not src.columns:
             continue
         spec = DataSource.model_validate(src.model_dump(exclude={"file"}))
         raw = ingest.load(project.path(src.file), spec)
-        frame, flags = quality.align(raw, year, q, cfg.timezone)
-        align_flags += flags + [QualityFlag("non_numeric", "error", n) for n in raw.notes]
+        try:
+            frame, flags = quality.align(raw, year, q, cfg.timezone)
+        except ValueError as exc:
+            raise ProjectError(f"{src.file}: {exc}") from exc
+        if step is not None and frame.interval != step:
+            raise ProjectError(
+                f"{src.file} has a {frame.interval} time step, the other data {step}: "
+                "every data file of a project has the same step"
+            )
+        step = frame.interval
+        align_flags += (
+            quality.read_notes(raw)
+            + flags
+            + [QualityFlag("non_numeric", "error", n) for n in raw.notes]
+        )
         index = frame.index
         shas.append(raw.sha256)
         for name, values in frame.series.items():
@@ -281,7 +295,8 @@ def prepare(project: Project) -> Prepared:
             series[name] = values
     if index is None:
         raise ProjectError("no column of any data file is mapped to a series")
-    original = Frame(index, series, cfg.timezone, f"{year:04d}-Q{q}", tuple(shas))
+    assert step is not None
+    original = Frame(index, series, cfg.timezone, f"{year:04d}-Q{q}", tuple(shas), step)
     corrected, applied = apply(original, project.corrections)
     before = align_flags + quality.check(cfg, original)
     after_check = quality.check(cfg, corrected)

@@ -22,7 +22,7 @@ from rfnbo.config import ConfigError, load_config
 from rfnbo.config.schema import ConsignmentOutput, OpeningLedgerEntry, PlantConfig, StorageUnit
 from rfnbo.config.validate import Issue
 from rfnbo.data import calendar as cal
-from rfnbo.data import quality
+from rfnbo.data import quality, units
 from rfnbo.data.ingest import DataSource
 from rfnbo.model.entities import ConsignmentSpec, ProofOfSustainability
 from rfnbo.model.pos import pos_rules
@@ -39,6 +39,19 @@ def _errors(exc: ValidationError) -> str:
     return "; ".join(
         f"{'.'.join(str(x) for x in e['loc']) or 'value'}: {e['msg']}" for e in exc.errors()
     )
+
+
+def _unit(series: str, header: str) -> str | None:
+    """The unit a header names, when the series is named in a unit it converts to. A column
+    of the wrong kind (a mass column for an energy series) is refused."""
+    unit = units.from_header(header)
+    if unit is None or units.target_of(series) is None:
+        return None
+    try:
+        units.factor(unit, series, cal.INTERVAL)
+    except ValueError as exc:
+        raise WorkspaceError(f"column {header!r}: {exc}") from exc
+    return unit
 
 
 def _put[T: (ConsignmentSpec, ProofOfSustainability)](
@@ -280,7 +293,14 @@ class Workspace:
         auto = {
             s: h for s, h in F.auto_map(self._required_or_none(), heads).items() if s not in taken
         }
-        src = SourceFile(file=rel, format=fmt, sheet=sheet, time_column=time_col, columns=auto)
+        src = SourceFile(
+            file=rel,
+            format=fmt,
+            sheet=sheet,
+            time_column=time_col,
+            columns=auto,
+            units={s: u for s, h in auto.items() if (u := _unit(s, h))},
+        )
         sources = [s for s in p.file.sources if s.file != rel] + [src]
         p.file = p.file.model_copy(update={"sources": sources})
         self._changed()
@@ -333,13 +353,38 @@ class Workspace:
         sources = []
         for i, src in enumerate(p.file.sources):
             cols = {k: v for k, v in src.columns.items() if k != series}
+            found = {k: v for k, v in src.units.items() if k != series}
             if i == index and header is not None:
                 if header not in self.headers(i):
                     raise WorkspaceError(f"{src.file} has no column {header!r}")
                 cols[series] = header
-            sources.append(src.model_copy(update={"columns": cols}))
+                if unit := _unit(series, header):  # the header's unit, converted on reading
+                    found[series] = unit
+            sources.append(src.model_copy(update={"columns": cols, "units": found}))
         p.file = p.file.model_copy(update={"sources": sources})
         self._changed()
+
+    def set_unit(self, series: str, unit: str | None) -> None:
+        """The unit a mapped series' column is in (converted on reading), or None to read it
+        as it is."""
+        p = self._p()
+        if unit is not None:
+            try:
+                units.factor(unit, series, cal.INTERVAL)
+            except ValueError as exc:
+                raise WorkspaceError(str(exc)) from exc
+        sources = []
+        for src in p.file.sources:
+            found = {k: v for k, v in src.units.items() if k != series}
+            if series in src.columns and unit is not None:
+                found[series] = unit
+            sources.append(src.model_copy(update={"units": found}))
+        p.file = p.file.model_copy(update={"sources": sources})
+        self._changed()
+
+    def unit_of(self, series: str) -> str | None:
+        p = self._p()
+        return next((s.units[series] for s in p.file.sources if series in s.units), None)
 
     def import_mapping(self, index: int, spec: dict[str, Any]) -> int:
         """Take a column mapping from a saved source spec (as ``rfnbo run --source``): every
@@ -356,6 +401,9 @@ class Workspace:
                 n += 1
         if ds.time_column in heads:
             self.set_source(index, time_column=ds.time_column)
+        for series, unit in ds.units.items():
+            if series in ds.columns and ds.columns[series] in heads:
+                self.set_unit(series, unit)
         return n
 
     def columns(self) -> list[tuple[int, str]]:

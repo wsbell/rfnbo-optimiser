@@ -113,7 +113,7 @@ def test_trace_a_consignment_to_15_minute_data(
     page.get_by_test_id("crumb-1").click()
     _link(page, "C1").click()
     _link(page, "N-2026-09").click()
-    expect(page.get_by_test_id("opening-note")).to_contain_text("no 15-minute data")
+    expect(page.get_by_test_id("opening-note")).to_contain_text("no interval data")
     page.close()
 
 

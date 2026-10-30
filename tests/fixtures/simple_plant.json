@@ -1,0 +1,111 @@
+{
+  "schema_version": 1,
+  "plant": "Simple test plant (electrolyser and compressor, solar)",
+  "version": "1",
+  "effective_from": "2026-01-01",
+  "timezone": "Europe/London",
+  "settings": {
+    "fossil_comparator_gCO2e_per_MJ": 94.0,
+    "required_saving": 0.7,
+    "hourly_correlation_from": "2030-01-01",
+    "balance_tolerance_kg_per_interval": 1.0
+  },
+  "blocks": [
+    {
+      "id": "solar_power",
+      "name": "Solar electricity",
+      "kind": "input",
+      "material": "electricity",
+      "quantity_unit": "kWh",
+      "renewable": true,
+      "emission_factors": [
+        {
+          "value": 0.0,
+          "unit": "gCO2e/kWh",
+          "valid_from": "2026-01-01",
+          "source": "EU 2023/1185: matched renewable electricity counts as zero"
+        }
+      ],
+      "series": "solar_available_kWh"
+    },
+    {
+      "id": "grid_power",
+      "name": "Grid electricity",
+      "kind": "input",
+      "material": "electricity",
+      "quantity_unit": "kWh",
+      "renewable": false,
+      "emission_factors": [
+        {
+          "value": 200.0,
+          "unit": "gCO2e/kWh",
+          "valid_from": "2026-01-01",
+          "source": "PLACEHOLDER: replace with the grid emission factor you are required to use"
+        }
+      ]
+    },
+    {
+      "id": "electrolyser",
+      "name": "Electrolyser",
+      "kind": "processing_unit",
+      "product": "H2",
+      "lhv_MJ_per_kg": 120.0,
+      "electricity_adds_to_lhv": true,
+      "fixed_adder_gCO2e_per_MJ": 0.0,
+      "production_series": "electrolyser_H2_kg",
+      "electricity_series": "electrolyser_electricity_kWh"
+    },
+    {
+      "id": "pt_electrolyser_compressor",
+      "name": "Direct link electrolyser to compressor",
+      "kind": "storage_unit",
+      "product": "H2",
+      "pass_through": true,
+      "opening_inventory_kg": 0.0
+    },
+    {
+      "id": "compressor",
+      "name": "Compressor",
+      "kind": "processing_unit",
+      "product": "CH2",
+      "lhv_MJ_per_kg": 120.0,
+      "electricity_adds_to_lhv": false,
+      "fixed_adder_gCO2e_per_MJ": 0.0,
+      "production_series": "compressor_CH2_kg",
+      "electricity_series": "compressor_electricity_kWh"
+    },
+    {
+      "id": "pt_compressor_customer",
+      "name": "Tube trailer fill, straight to the customer",
+      "kind": "storage_unit",
+      "product": "CH2",
+      "pass_through": true,
+      "opening_inventory_kg": 0.0
+    },
+    {
+      "id": "dist_customer",
+      "name": "Distribution to the customer (CH2 tube trailers)",
+      "kind": "distribution",
+      "customer": "Customer",
+      "fixed_adder_gCO2e_per_MJ": 1.0
+    },
+    {
+      "id": "consignment_customer",
+      "name": "Consignments to the customer",
+      "kind": "consignment_output",
+      "customer": "Customer",
+      "distribution_block": "dist_customer"
+    }
+  ],
+  "flows": [
+    {"id": "f_solar_el", "source": "solar_power", "target": "electrolyser", "material": "electricity"},
+    {"id": "f_solar_comp", "source": "solar_power", "target": "compressor", "material": "electricity"},
+    {"id": "f_grid_el", "source": "grid_power", "target": "electrolyser", "material": "electricity"},
+    {"id": "f_grid_comp", "source": "grid_power", "target": "compressor", "material": "electricity"},
+    {"id": "f_el_pt", "source": "electrolyser", "target": "pt_electrolyser_compressor", "material": "H2"},
+    {"id": "f_pt_comp", "source": "pt_electrolyser_compressor", "target": "compressor", "material": "H2"},
+    {"id": "f_comp_fill", "source": "compressor", "target": "pt_compressor_customer", "material": "CH2"},
+    {"id": "f_fill_dist", "source": "pt_compressor_customer", "target": "dist_customer", "material": "CH2"},
+    {"id": "f_dist_cons", "source": "dist_customer", "target": "consignment_customer", "material": "CH2"}
+  ]
+}

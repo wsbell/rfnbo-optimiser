@@ -1,8 +1,9 @@
 """Stage A: batch boundaries for units where electricity adds to product LHV (build plan §6).
 
-For each unit and calendar month, an exact dynamic programme over the 15-minute intervals
-chooses where batches start and end. Every candidate batch [s, e) inside the allowed window
-(the month; one clock hour from the hourly-correlation switch) is scored from prefix sums:
+For each unit and calendar month, an exact dynamic programme over the data's intervals
+(15 minutes, an hour, ...) chooses where batches start and end. Every candidate batch [s, e)
+inside the allowed window (the month; one clock hour from the hourly-correlation switch) is
+scored from prefix sums:
 
     value = RFNBO_MJ · (1 − μ · (GHG − L))      floored at 0, then minus ε per batch
 

@@ -2,7 +2,7 @@
 
 A sealed run is a directory that holds everything needed to reproduce a run exactly:
 
-    frame.csv       the aligned 15-minute data the calculator used (UTC, full precision)
+    frame.csv       the aligned interval data the calculator used (UTC, full precision)
     batches.jsonl   one traceability record per batch (build plan §5)
     run.json        config, decisions, provenance, environment, hashes and all results
 

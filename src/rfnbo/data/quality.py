@@ -17,7 +17,7 @@ from rfnbo.config.schema import InputBlock, PlantConfig, ProcessingUnit, RfnboSu
 from rfnbo.data import calendar as cal
 from rfnbo.data.ingest import FloatArray, RawData
 
-Severity = Literal["error", "warning"]
+Severity = Literal["error", "warning", "info"]  # info: what was done to the data, e.g. units
 _SHOW = 5  # timestamps listed per flag
 
 
@@ -40,13 +40,15 @@ class QualityFlag:
 
 @dataclass(frozen=True)
 class Frame:
-    """Series on a complete, ordered 15-minute UTC grid for one quarter."""
+    """Series on a complete, ordered UTC grid for one quarter, at the data's own time step
+    (``interval``: 15 minutes, an hour, ...). Values are amounts per interval (kWh, kg)."""
 
     index: tuple[dt.datetime, ...]
     series: Mapping[str, FloatArray]
     timezone: str
     quarter: str
     source_sha256: tuple[str, ...] = field(default=())
+    interval: dt.timedelta = cal.INTERVAL
 
     def __len__(self) -> int:
         return len(self.index)
@@ -55,16 +57,16 @@ class Frame:
         """Grid position of an interval start, or ``len(self)`` for the period end."""
         start, n = self.index[0], len(self.index)
         offset = ts - start
-        if offset % cal.INTERVAL:
-            raise ValueError(f"{ts.isoformat()} is not on the 15-minute grid")
-        i = offset // cal.INTERVAL
+        if offset % self.interval:
+            raise ValueError(f"{ts.isoformat()} is not on the {self.interval} grid")
+        i = offset // self.interval
         if not 0 <= i <= n:
             raise ValueError(f"{ts.isoformat()} is outside {self.quarter}")
         return i
 
     @property
     def end(self) -> dt.datetime:
-        return self.index[-1] + cal.INTERVAL
+        return self.index[-1] + self.interval
 
 
 def required_series(cfg: PlantConfig) -> list[str]:
@@ -80,9 +82,17 @@ def required_series(cfg: PlantConfig) -> list[str]:
     return list(dict.fromkeys(names))
 
 
-def align(raw: RawData, year: int, quarter: int, tz: str) -> tuple[Frame, list[QualityFlag]]:
-    grid = cal.quarter_intervals(year, quarter, tz)
-    start, end = grid[0], grid[-1] + cal.INTERVAL
+def align(
+    raw: RawData, year: int, quarter: int, tz: str, step: dt.timedelta | None = None
+) -> tuple[Frame, list[QualityFlag]]:
+    """Put the data on the quarter's grid at its own time step (``step``, else detected from
+    the timestamps: hourly data stays hourly, 15-minute data 15-minute)."""
+    step = step or cal.detect_step(raw.timestamps)
+    try:
+        grid = cal.quarter_intervals(year, quarter, tz, step)
+    except ValueError as exc:
+        raise ValueError(f"{year}-Q{quarter} in {tz} does not start on a {step} interval") from exc
+    start, end = grid[0], grid[-1] + step
     n = len(grid)
     flags: list[QualityFlag] = []
 
@@ -90,16 +100,16 @@ def align(raw: RawData, year: int, quarter: int, tz: str) -> tuple[Frame, list[Q
     off_grid: list[dt.datetime] = []
     outside: list[dt.datetime] = []
     for r, ts in enumerate(raw.timestamps):
-        if (ts - start) % cal.INTERVAL:
+        if (ts - start) % step:
             off_grid.append(ts)
         elif not start <= ts < end:
             outside.append(ts)
         else:
-            rows_for.setdefault((ts - start) // cal.INTERVAL, []).append(r)
+            rows_for.setdefault((ts - start) // step, []).append(r)
 
     if off_grid:
         flags.append(
-            _flag("off_grid_timestamp", "error", "timestamp not on the 15-minute grid", off_grid)
+            _flag("off_grid_timestamp", "error", f"timestamp not on the {step} grid", off_grid)
         )
     if outside:
         flags.append(
@@ -130,6 +140,7 @@ def align(raw: RawData, year: int, quarter: int, tz: str) -> tuple[Frame, list[Q
         timezone=tz,
         quarter=f"{year:04d}-Q{quarter}",
         source_sha256=(raw.sha256,),
+        interval=step,
     )
     return frame, flags
 
@@ -218,7 +229,13 @@ def prepare(
 ) -> tuple[Frame, list[QualityFlag]]:
     frame, flags = align(raw, year, quarter, cfg.timezone)
     notes = [QualityFlag("non_numeric", "error", note) for note in raw.notes]
-    return frame, flags + notes + check(cfg, frame)
+    return frame, read_notes(raw) + flags + notes + check(cfg, frame)
+
+
+def read_notes(raw: RawData) -> list[QualityFlag]:
+    """What reading did to the data (units converted, blank rows skipped), as info flags: they
+    are listed with every run and sealed with it."""
+    return [QualityFlag("data_read", "info", note) for note in raw.conversions]
 
 
 def has_errors(flags: list[QualityFlag]) -> bool:

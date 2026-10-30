@@ -24,7 +24,9 @@ from tests.golden.test_golden import _run
 def _pipeline(case: str) -> OptimisationResult:
     ref, _, _ = _run(case)
     batching, _ = _batched(case)
-    return optimise(ref.config, ref.frame, ref.decisions.consignments, batching=batching)
+    return optimise(
+        ref.config, ref.frame, ref.decisions.consignments, batching=batching, compare=True
+    )
 
 
 @pytest.mark.parametrize("case", ["tc1", "tc2"])

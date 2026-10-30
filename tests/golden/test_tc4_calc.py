@@ -384,7 +384,7 @@ def _optimised(case: str) -> OptimisationResult:
         s["lh2_shipped_spot_kg"] = spot
         s["lh2_storage_inventory_kg"] = frame.series["lh2_storage_inventory_kg"] - np.cumsum(spot)
         frame = Frame(frame.index, s, frame.timezone, frame.quarter)
-    return optimise(cfg, frame, d.consignments, pos=d.pos)
+    return optimise(cfg, frame, d.consignments, pos=d.pos, compare=True)
 
 
 def test_optimiser_matches_the_hand_calculation() -> None:

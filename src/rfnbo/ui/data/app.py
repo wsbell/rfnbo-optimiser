@@ -58,10 +58,11 @@ CARDS = (
     ("Opening ledger", "The quarter's opening position: a previous sealed run, or by hand"),
     (
         "Run",
-        "Optimise the quarter and seal it with its baseline under runs/. The same folder runs "
+        "Optimise the quarter and seal the result under runs/. The same folder runs "
         "from the command line: rfnbo optimise --project <folder>.",
     ),
 )
+UNIT_CHOICES = ("Wh", "kWh", "MWh", "GWh", "kW", "MW", "g", "kg", "t", "kg/h", "t/h")
 TONE = {"positive": "success", "negative": "danger", "grey-7": "neutral"}
 
 # A form's fields, built in the current layout context; returns a reader of their values.
@@ -634,14 +635,25 @@ class DataPage:
                 ("series", "Series the plant needs", ""),
                 ("file", "File", ""),
                 ("header", "Column", ""),
+                ("unit", "Column's unit", ""),
             ],
             [
-                {"series": r.series, "file": r.file or "—", "header": r.header or "not mapped"}
+                {
+                    "series": r.series,
+                    "file": r.file or "—",
+                    "header": r.header or "not mapped",
+                    "unit": (self.ws.unit_of(r.series) or "as named") if r.mapped else "",
+                }
                 for r in rows
             ],
             testid="mapping",
             page=50,
         )
+        ui.label(
+            "A column in another unit than its series is converted on reading: MWh to kWh, "
+            "tonnes to kg, and a rate (MW, t/h) times the time step. The unit is read from the "
+            'column header, e.g. "Solar power (MWh)"; set it here if the header has none.'
+        ).classes("rf-note")
         p = self.ws.project
         if not p or not p.file.sources:
             return
@@ -664,6 +676,28 @@ class DataPage:
                     lambda: self.ws.map_series(series.value, None, None), "unmapped"
                 ),
             ).props("flat")
+        with ui.row().classes("items-end gap-2"):
+            unit_series = ui.select(
+                [r.series for r in rows if r.mapped], label="Mapped series"
+            ).classes("w-72")
+            unit = (
+                ui.select(
+                    {"": "as named (no conversion)"} | {u: u for u in UNIT_CHOICES},
+                    value="",
+                    label="Column's unit",
+                )
+                .classes("w-56")
+                .props('data-testid="unit"')
+            )
+            theme.secondary(
+                ui.button(
+                    "Set unit",
+                    on_click=lambda: self.act(
+                        lambda: self.ws.set_unit(unit_series.value, unit.value or None),
+                        "unit set",
+                    ),
+                )
+            )
 
     @ui.refreshable_method
     def preview(self) -> None:

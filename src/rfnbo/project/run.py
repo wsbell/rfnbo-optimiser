@@ -30,13 +30,16 @@ def seal_optimisation(
     flags: Sequence[QualityFlag] = (),
     corrections: Sequence[dict[str, Any]] = (),
 ) -> Sealed:
-    """Seal the optimised and baseline runs under ``out``, write ``comparison.json`` and the
-    report."""
+    """Seal the optimised run under ``out`` (and the baseline beside it when one was
+    calculated for comparison), write ``summary.json`` and the report."""
     from rfnbo.report.build import report_sealed
 
     out = Path(out)
+    outcomes = [("optimised", result.optimised)]
+    if result.baseline is not None:
+        outcomes.append(("baseline", result.baseline))
     ids = {}
-    for name, outcome in (("optimised", result.optimised), ("baseline", result.baseline)):
+    for name, outcome in outcomes:
         d = sealed.seal(outcome.run, out / name, flags, corrections)
         ids[name] = sealed.load_record(d)["run_id"]
     bound, vb = result.bound(), result.value_bound()
@@ -58,7 +61,7 @@ def seal_optimisation(
                 "pos_written_off_kg": o.objectives.pos_written_off_kg,
                 "failed_checks": len(o.run.failures),
             }
-            for name, o in (("optimised", result.optimised), ("baseline", result.baseline))
+            for name, o in outcomes
         },
         "bound": None
         if bound is None
@@ -67,8 +70,9 @@ def seal_optimisation(
         "corrections": len(corrections),
         "log": result.log,
     }
-    (out / "comparison.json").write_text(json.dumps(summary, indent=1) + "\n", encoding="utf-8")
-    written = report_sealed(out / "optimised", out, baseline_dir=out / "baseline")
+    (out / "summary.json").write_text(json.dumps(summary, indent=1) + "\n", encoding="utf-8")
+    baseline = out / "baseline" if result.baseline is not None else None
+    written = report_sealed(out / "optimised", out, baseline_dir=baseline)
     return Sealed(out, ids, written.xlsx, summary)
 
 
@@ -85,7 +89,10 @@ def run_label(project: Project, label: str | None) -> str:
 
 
 def run_project(
-    project: Project, label: str | None = None, prepared: Prepared | None = None
+    project: Project,
+    label: str | None = None,
+    prepared: Prepared | None = None,
+    compare: bool = False,
 ) -> tuple[OptimisationResult, Sealed]:
     """Optimise the project's quarter and seal it under ``runs/<label>``. Refuses to run on
     data with quality errors (nothing is filled silently) or invalid PoS records."""
@@ -106,6 +113,7 @@ def run_project(
         project.consignments,
         batch_materiality_MJ=project.file.batch_materiality_MJ,
         pos=project.pos,
+        compare=compare,
     )
     out = project.root / RUNS_DIR / run_label(project, label)
     return result, seal_optimisation(result, out, prep.flags, prep.correction_records())

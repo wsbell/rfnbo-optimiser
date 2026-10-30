@@ -1,4 +1,4 @@
-"""Read 15-minute plant data from CSV or Excel.
+"""Read plant data from CSV or Excel, at its own time step (15 minutes, an hour, ...).
 
 Ingestion only reads and labels: blank or non-numeric cells become NaN and are noted,
 never filled. Alignment to the interval grid and quality flags are in
@@ -20,6 +20,9 @@ import numpy as np
 import numpy.typing as npt
 from pydantic import BaseModel, ConfigDict, Field
 
+from rfnbo.data import calendar as cal
+from rfnbo.data import units
+
 FloatArray = npt.NDArray[np.float64]
 
 
@@ -38,6 +41,9 @@ class DataSource(BaseModel):
     # Timestamps without an offset are read as UTC; offsets other than UTC are rejected.
     timestamps: Literal["UTC"] = "UTC"
     columns: dict[str, str] = Field(min_length=1)  # series name -> column header
+    # series name -> the column's unit (e.g. "MWh", "t/h"), converted on reading to the unit
+    # the series is named in (rfnbo.data.units); a series not listed is read as it is.
+    units: dict[str, str] = Field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -49,6 +55,7 @@ class RawData:
     source_file: str
     sha256: str
     notes: tuple[str, ...]  # e.g. non-numeric cells read as NaN
+    conversions: tuple[str, ...] = ()  # units converted, rows skipped: reported, never silent
 
 
 def file_sha256(path: str | Path) -> str:
@@ -101,7 +108,9 @@ def _read_csv(path: str | Path) -> tuple[list[str], Iterable[Sequence[object]]]:
 
 def _parse_timestamp(value: object) -> dt.datetime:
     if isinstance(value, dt.datetime):
-        ts = value
+        # Excel keeps times as fractions of a day: they can read back a millisecond off
+        # (22:59:59.998). Rounded to the second; data steps are whole minutes.
+        ts = (value + dt.timedelta(microseconds=500_000)).replace(microsecond=0)
     elif isinstance(value, str):
         text = value.strip().replace("Z", "+00:00")
         ts = dt.datetime.fromisoformat(text)
@@ -142,14 +151,24 @@ def _build(
     if missing:
         raise IngestError(f"{path}: missing column(s) {missing}")
 
-    rows = list(rows)
     t_col = pos[source.time_column]
+    data_cols = [pos[c] for c in source.columns.values()]
+    kept: list[Sequence[object]] = []
     timestamps: list[dt.datetime] = []
+    blank: list[int] = []
     for n, row in enumerate(rows, start=2):
+        when = row[t_col] if t_col < len(row) else None
+        if when in (None, "") and not any(
+            _parse_number(row[c] if c < len(row) else None) is not None for c in data_cols
+        ):
+            blank.append(n)  # a trailing or spacer row: no time and no numbers
+            continue
         try:
-            timestamps.append(_parse_timestamp(row[t_col] if t_col < len(row) else None))
+            timestamps.append(_parse_timestamp(when))
         except ValueError as exc:
             raise IngestError(f"{path}: row {n}: {exc}") from exc
+        kept.append(row)
+    rows = kept
 
     notes: list[str] = []
     series: dict[str, FloatArray] = {}
@@ -169,10 +188,35 @@ def _build(
             notes.append(f"{name}: {bad} non-numeric cell(s) read as missing")
         series[name] = values
 
+    conversions: list[str] = []
+    if source.units:
+        step = cal.detect_step(timestamps)
+        for name, unit in sorted(source.units.items()):
+            if name not in series:
+                continue
+            try:
+                f = units.factor(unit, name, step)
+            except ValueError as exc:
+                raise IngestError(f"{path}: column {source.columns[name]!r}: {exc}") from exc
+            if f != 1.0:
+                series[name] = series[name] * f
+                conversions.append(
+                    f"{name}: column {source.columns[name]!r} in {unit}, "
+                    f"x {f:g} per {step} interval"
+                )
+    if blank:
+        conversions.append(f"rows without a time or numbers skipped: {_rows(blank)}")
+
     return RawData(
         timestamps=tuple(timestamps),
         series=series,
         source_file=str(path),
         sha256=file_sha256(path),
         notes=tuple(notes),
+        conversions=tuple(conversions),
     )
+
+
+def _rows(numbers: list[int]) -> str:
+    shown = ", ".join(str(n) for n in numbers[:5])
+    return shown + (f" and {len(numbers) - 5} more" if len(numbers) > 5 else "")

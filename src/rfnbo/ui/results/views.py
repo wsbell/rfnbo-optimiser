@@ -2,7 +2,7 @@
 
 Every page is built from a sealed run re-calculated by the calculator, so what a user sees is
 what an auditor would recompute. The drill-down goes run → consignment → aggregated batch →
-batch (and its upstream feed batches) → the 15-minute intervals behind the batch, whose totals
+batch (and its upstream feed batches) → the intervals behind the batch, whose totals
 are checked against the batch record.
 """
 
@@ -308,7 +308,7 @@ class IntervalView:
 
 
 def interval_view(run: RunResult, batch_id: str) -> IntervalView:
-    """The 15-minute data behind a batch, with totals checked against the batch record."""
+    """The interval data behind a batch, with totals checked against the batch record."""
     b = run.batches.get(batch_id)
     if b is None:
         raise NotFound(f"no produced batch {batch_id!r} (opening entries have no intervals)")
@@ -394,7 +394,7 @@ def interval_view(run: RunResult, batch_id: str) -> IntervalView:
         if b.kind == "electrolytic"
         else f"RFNBO share = RFNBO feed energy ÷ feed energy consumed = {b.rfnbo_share:.6f}."
     )
-    table = T.Table(f"Intervals {b.id}", f"15-minute data behind {b.id}", tuple(cols), rows)
+    table = T.Table(f"Intervals {b.id}", f"Interval data behind {b.id}", tuple(cols), rows)
     return IntervalView(b, table, totals, checks, note)
 
 

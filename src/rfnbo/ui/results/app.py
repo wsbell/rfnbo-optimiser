@@ -1,4 +1,4 @@
-"""Results browser pages (NiceGUI): runs → run → consignment → batch → 15-minute intervals.
+"""Results browser pages (NiceGUI): runs → run → consignment → batch → intervals.
 
 All content comes from :mod:`rfnbo.ui.results.views`, which re-calculates sealed runs with the
 calculator; this module only lays it out, in the shared look (:mod:`rfnbo.ui.theme`).
@@ -416,7 +416,7 @@ def batch_page(run_id: str, batch_id: str) -> None:
                 ui.label(
                     f"Produced in {view['month']}, carried into this quarter with GHG "
                     f"{fmt(view['ghg'], 'gCO2e/MJ')} gCO2e/MJ and {fmt(view['rfnbo_kg'])} kg "
-                    "RFNBO. It has no 15-minute data in this run; trace it in the prior "
+                    "RFNBO. It has no interval data in this run; trace it in the prior "
                     "quarter's sealed run."
                 ).props('data-testid="opening-note"')
         else:
@@ -433,7 +433,7 @@ def batch_page(run_id: str, batch_id: str) -> None:
                     "success" if rec["compliant"] else "danger",
                 )
                 ui.link(
-                    "15-minute data behind this batch →",
+                    "Interval data behind this batch →",
                     f"/run/{run_id}/batch/{batch_id}/intervals",
                 ).props('data-testid="intervals-link"')
             theme.kpis(
@@ -524,11 +524,11 @@ def intervals_page(run_id: str, batch_id: str) -> None:
             RUNS,
             (run_id, f"/run/{run_id}"),
             (batch_id, f"/run/{run_id}/batch/{batch_id}"),
-            ("15-minute data", None),
+            ("Interval data", None),
         ]
     )
     with theme.page():
-        with theme.title(f"{batch_id}: 15-minute data"):
+        with theme.title(f"{batch_id}: interval data"):
             ui.label(f"{batch_id}: {len(view.table.rows):,} intervals").classes("rf-sub").props(
                 'data-testid="interval-count"'
             )
