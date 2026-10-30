@@ -59,8 +59,15 @@ the workbook decisions, test case 2 1.49 million MJ more (5.9%).
 
 ## Quick start
 
+`uv run rfnbo` (or `rfnbo app`) opens the app in the browser on your projects folder
+(`~/rfnbo-projects`; `--dir` or `$RFNBO_PROJECTS` to choose another). Create a project there
+and build the case from scratch on the Data screen: draw the plant or upload its config, choose
+the quarter, upload the data and map its columns, enter consignments, and run. "Open a folder"
+opens a project folder kept anywhere else, such as `my_project`.
+
 ```sh
-uv sync --extra ui            # the ui extra is only needed for the diagram editor
+uv sync --extra ui            # the ui extra is only needed for the app and its screens
+uv run rfnbo                  # the app: create or open a project, then set it up and run it
 uv run rfnbo edit examples/test_plant.json   # opens the block flow diagram editor
 uv run rfnbo results runs/                    # browse sealed runs down to 15-minute data
 uv run rfnbo data projects/q4-2026           # Data screen: set up, check, correct and run a quarter

@@ -2,8 +2,8 @@
 reasons, enter consignments, PoS records and the opening ledger, and run (build plan §11.2).
 
 All state and rules live in :class:`rfnbo.ui.data.workspace.Workspace`; this module lays it
-out. The results browser's pages are served alongside, on the project's ``runs/`` folder, so a
-sealed run opens there.
+out. The results browser's pages are served alongside (from ``/runs``), on the project's
+``runs/`` folder, so a sealed run opens there.
 """
 
 from __future__ import annotations
@@ -121,8 +121,9 @@ class _Columns:
 class DataPage:
     """One browser tab's Data screen."""
 
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path, home: str | None = None) -> None:
         self.ws = Workspace(root)
+        self.home = home  # the app's home screen, when the page is served by ``rfnbo app``
         self.message: ui.label | None = None
         self.badges: dict[str, ui.label] = {}
         self.readiness: ui.label | None = None
@@ -249,10 +250,12 @@ class DataPage:
     def build(self) -> None:
         theme.apply()
         root = self.ws.root
-        right = theme.top_bar([(root.name or str(root), None)], hint=str(root.resolve()))
+        here = (root.name or str(root), None)
+        crumbs = [("Projects", self.home), here] if self.home else [here]
+        right = theme.top_bar(crumbs, hint=str(root.resolve()))
         with right:
             self.readiness = theme.pill("", testid="readiness")
-            ui.link("Sealed runs →", "/").props('data-testid="runs-link"')
+            ui.link("Sealed runs →", "/runs").props('data-testid="runs-link"')
         self.dialogs = ui.element("div")
         sections = (
             self.setup,
@@ -1174,26 +1177,45 @@ class DataPage:
         button.on_click(go)
 
 
-def run(root: Path, port: int = 8082, show: bool = True) -> None:
-    results._ROOT = root / "runs"
-    theme.setup()
+def register(current: Callable[[], Path | None], home: str | None = None) -> None:
+    """The Data screen and its diagram editor, on the project ``current()`` returns; with none
+    open, both go to ``home``. The results browser is served alongside on its ``runs/``."""
+
+    def project() -> Path | None:
+        root = current()
+        if root is None:
+            ui.navigate.to(home or "/")
+        else:
+            results._ROOT = root / "runs"
+        return root
 
     @ui.page("/data")
     def data_page() -> None:
-        DataPage(root).build()
+        if (root := project()) is not None:
+            DataPage(root, home).build()
 
     # The diagram editor, on a plant config of the project (opened from the Setup tab).
     editor.add_static()
 
     @ui.page("/plant")
     async def plant_page(file: str = "") -> None:
+        if (root := project()) is None:
+            return
         if not file:
             ui.navigate.to("/data")
             return
         path = Path(file) if Path(file).is_absolute() else root / file
         await editor.open_editor(path, back="/data")
 
-    # Open the Data screen itself; "/" is the results browser for the folder's runs.
+
+def run(root: Path, port: int = 8082, show: bool = True) -> None:
+    theme.setup()
+    register(lambda: root)
+
+    @ui.page("/")
+    def index() -> None:
+        ui.navigate.to("/data")
+
     ui.run(
         port=port,
         show="/data" if show else False,

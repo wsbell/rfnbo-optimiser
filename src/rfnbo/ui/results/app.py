@@ -22,7 +22,7 @@ _ROOT: Path = Path(".")
 # Unit markers that right-align a numeric column without printing a unit in its header.
 NO_SUFFIX = {"", "share", "n", "num"}
 _LOADED: dict[str, V.LoadedRun] = {}
-RUNS = ("Sealed runs", "/")
+RUNS = ("Sealed runs", "/runs")
 
 
 def _runs() -> dict[str, V.RunInfo]:
@@ -104,10 +104,10 @@ def _not_found(exc: Exception) -> None:
     theme.top_bar([RUNS])
     with theme.page():
         ui.label(str(exc)).classes("text-negative")
-        ui.link("All runs", "/")
+        ui.link("All runs", "/runs")
 
 
-@ui.page("/")
+@ui.page("/runs")
 def runs_page() -> None:
     theme.apply()
     theme.top_bar([("Sealed runs", None)])
@@ -581,4 +581,9 @@ def run(root: Path, port: int = 8081, show: bool = True) -> None:
     global _ROOT
     _ROOT = root
     theme.setup()
+
+    @ui.page("/")
+    def index() -> None:
+        ui.navigate.to("/runs")
+
     ui.run(port=port, show=show, reload=False, title="RFNBO results")

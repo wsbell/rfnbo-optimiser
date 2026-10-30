@@ -301,9 +301,28 @@ def _edit(args: argparse.Namespace) -> int:
     return 0
 
 
+def _app(args: argparse.Namespace) -> int:
+    try:
+        from rfnbo.ui.home.app import run
+    except ImportError:
+        print("the app needs the ui extra: uv sync --extra ui", file=sys.stderr)
+        return 1
+    run(Path(args.dir) if args.dir else None, port=args.port, show=not args.no_browser)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="rfnbo")
-    sub = parser.add_subparsers(dest="command", required=True)
+    parser = argparse.ArgumentParser(
+        prog="rfnbo", description="with no command, opens the app on the projects folder"
+    )
+    parser.set_defaults(fn=_app, dir=None, port=8090, no_browser=False)
+    sub = parser.add_subparsers(dest="command")
+
+    a = sub.add_parser("app", help="the app: projects, then the Data screen and results")
+    a.add_argument("--dir", help="projects folder (default $RFNBO_PROJECTS or ~/rfnbo-projects)")
+    a.add_argument("--port", type=int, default=8090)
+    a.add_argument("--no-browser", action="store_true")
+    a.set_defaults(fn=_app)
 
     v = sub.add_parser("validate", help="validate a plant config JSON file")
     v.add_argument("path")

@@ -69,6 +69,10 @@ uv run rfnbo validate examples/test_plant.json
 - `src/rfnbo/ui/results/`: the results browser (`rfnbo results`). `views.py` builds every page
   from a sealed run re-calculated by the calculator (no UI imports, fully unit-tested);
   `app.py` lays it out: runs → run → consignment → batch → 15-minute intervals.
+- `src/rfnbo/ui/home/`: the app (`rfnbo`, `rfnbo app`). `projects.py` lists and creates the
+  project folders in the projects folder (`~/rfnbo-projects`, `--dir`, `$RFNBO_PROJECTS`) with
+  no UI imports; `app.py` is the home screen at `/` and serves the Data screen on the project
+  opened there (`data.app.register`). The results browser's run list is at `/runs`.
 - `src/rfnbo/ui/data/`: the Data screen (`rfnbo data <folder>`). `workspace.py` holds all its
   state and actions with no UI imports (tested in `tests/integration/test_data_project.py`);
   `app.py` lays it out and serves the results browser on the folder's `runs/`. Its Plant tab
