@@ -33,7 +33,7 @@ from rfnbo.model.entities import (
     RenewableAllocation,
 )
 from rfnbo.optimise import allocate, pool
-from rfnbo.optimise.batching import Score, UnitBatching, windows
+from rfnbo.optimise.batching import Cover, Score, UnitBatching, windows
 
 
 def monthly_batches(cfg: PlantConfig, frame: Frame) -> list[BatchSpec]:
@@ -62,7 +62,9 @@ def monthly_split(cfg: PlantConfig, frame: Frame) -> list[RenewableAllocation]:
             cuts = windows(cfg, frame, unit)[0]
             fixed = UnitBatching(unit.id, cuts, None, None, Score(0.0, 0.0, len(cuts)))
 
-            def monthly(_pool: FloatArray, b: UnitBatching = fixed) -> UnitBatching:
+            def monthly(
+                _pool: FloatArray, *, cover: Cover | None = None, b: UnitBatching = fixed
+            ) -> UnitBatching:
                 return b
 
             out += pool.plan(cfg, frame, unit, monthly, repair=False).allocations

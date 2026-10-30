@@ -7,7 +7,11 @@ unit matches within its own batch; conditioning units keep one batch per month.
 
 The split alternates stage A with an allocation until stable:
 
-1. Batch the electrolyser on the pool it has (stage A's dynamic programme).
+1. Batch the electrolyser on the pool it has (stage A's dynamic programme), aiming at the
+   blend limit the conditioning units allow with the renewable they can count on: what they
+   took in step 4 and their share of the surplus left when each month's electrolyser batch is
+   the whole month. Splitting a batch only leaves more surplus, so the limit is never
+   optimistic; assuming them fully covered let stage A cut batches no blend could take.
 2. Give each electrolyser batch the renewable it can match, from its own intervals; the rest
    of each interval is surplus.
 3. Share the surplus between the conditioning units, up to each one's electricity in its
@@ -25,8 +29,8 @@ whole pool and stage A is unchanged. The split is a proposal: the calculator re-
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from dataclasses import dataclass, field
+from typing import Protocol
 
 import numpy as np
 
@@ -37,7 +41,14 @@ from rfnbo.data import calendar as cal
 from rfnbo.data.ingest import FloatArray
 from rfnbo.data.quality import Frame
 from rfnbo.model.entities import RenewableAllocation
-from rfnbo.optimise.batching import BatchingError, Caps, UnitBatching, product_limit, windows
+from rfnbo.optimise.batching import (
+    BatchingError,
+    Caps,
+    Cover,
+    UnitBatching,
+    product_limit,
+    windows,
+)
 
 ROUNDS = 6
 MARGIN = 1e-6  # gCO2e/MJ kept below the threshold so the calculator's check always passes
@@ -50,6 +61,14 @@ class PoolSplit:
     allocations: list[RenewableAllocation]
     reserved_kWh: dict[str, float]  # kWh each conditioning unit took from the electrolyser
     log: list[str] = field(default_factory=list)
+
+
+class BatchFn(Protocol):
+    """Stage A for the electrolyser on ``renewable_kWh``, given the conditioning units' cover."""
+
+    def __call__(
+        self, renewable_kWh: FloatArray, /, *, cover: Cover | None = None
+    ) -> UnitBatching: ...
 
 
 def renewable_source(cfg: PlantConfig, unit: ProcessingUnit) -> InputBlock | None:
@@ -116,7 +135,7 @@ def plan(
     cfg: PlantConfig,
     frame: Frame,
     electrolyser: ProcessingUnit,
-    batch: Callable[[FloatArray], UnitBatching],
+    batch: BatchFn,
     repair: bool = True,
     caps: Caps | None = None,
 ) -> PoolSplit:
@@ -148,7 +167,7 @@ def plan(
 
     for rnd in range(ROUNDS):
         e_pool = pool - taken()
-        ub = batch(e_pool)
+        ub = batch(e_pool, cover=_assured_cover(cond, e_pool, e_elec, reserved))
         e_alloc, surplus = electrolyser_allocation(e_pool, e_elec, ub.cuts)
         alloc = {c.unit.id: reserved[c.unit.id].copy() for c in cond}
         # 3. Surplus to the conditioning units, up to each one's monthly electricity.
@@ -244,6 +263,27 @@ def plan(
                 log,
             )
     raise BatchingError(f"{src.id}: pool split did not settle in {ROUNDS} rounds")
+
+
+def _assured_cover(
+    cond: list[_Conditioning],
+    e_pool: FloatArray,
+    e_elec: FloatArray,
+    reserved: dict[str, FloatArray],
+) -> dict[str, float]:
+    """Renewable kWh each conditioning unit gets whatever the electrolyser's batching: what it
+    reserved, and its share (in step 3's order) of each month's surplus with the month as one
+    electrolyser batch, the least any batching leaves (a batch leaves max(0, pool − use) over
+    its own intervals, which only grows when it is split)."""
+    out = {c.unit.id: float(reserved[c.unit.id].sum()) for c in cond}
+    for s, e in cond[0].months if cond else []:
+        left = max(0.0, float(e_pool[s:e].sum()) - float(e_elec[s:e].sum()))
+        for c in cond:
+            need = float(c.electricity[s:e].sum()) - float(reserved[c.unit.id][s:e].sum())
+            give = min(max(0.0, need), left)
+            out[c.unit.id] += give
+            left -= give
+    return out
 
 
 def _batch_ghg(

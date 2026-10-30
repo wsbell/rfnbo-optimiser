@@ -155,10 +155,16 @@ class Downstream:
 
 
 Caps = Mapping[str, float]  # unit id → GHG its product may reach (a consignment's limit)
+# Unit id → renewable kWh a downstream unit on a shared pool can count on over the period.
+Cover = Mapping[str, float]
 
 
 def product_limit(
-    cfg: PlantConfig, frame: Frame, unit: ProcessingUnit, caps: Caps | None = None
+    cfg: PlantConfig,
+    frame: Frame,
+    unit: ProcessingUnit,
+    caps: Caps | None = None,
+    cover: Cover | None = None,
 ) -> float:
     """GHG the unit's product may reach: the threshold, the unit's cap if any, and the feed
     limit of every unit it feeds, back-propagated through units in series (§12)."""
@@ -167,12 +173,18 @@ def product_limit(
         for f in cfg.flows_out_of(store.id):
             down = cfg.block(f.target)
             if isinstance(down, ProcessingUnit):
-                limit = min(limit, downstream_of(cfg, frame, unit, down, caps).limit_gCO2e_per_MJ)
+                limit = min(
+                    limit, downstream_of(cfg, frame, unit, down, caps, cover).limit_gCO2e_per_MJ
+                )
     return limit
 
 
 def downstream(
-    cfg: PlantConfig, frame: Frame, unit: ProcessingUnit, caps: Caps | None = None
+    cfg: PlantConfig,
+    frame: Frame,
+    unit: ProcessingUnit,
+    caps: Caps | None = None,
+    cover: Cover | None = None,
 ) -> Downstream | None:
     """Feed GHG at which the downstream unit's product sits exactly at its limit.
 
@@ -181,6 +193,10 @@ def downstream(
     the downstream product's own limit (:func:`product_limit`): the threshold, or less when that
     product feeds a further unit or carries a cap. Totals are taken over the whole period (a
     stage A approximation; stage B enforces the limit for each downstream batch).
+
+    A downstream unit on a shared renewable pool pays grid emissions on what ``cover`` (the
+    pool split's renewable for it) leaves uncovered; without ``cover`` it is taken as fully
+    covered.
     """
     units = [
         u
@@ -193,13 +209,13 @@ def downstream(
     if len(units) > 1:
         # Several units take the product (a split output, or one storage feeding several):
         # the blend must suit the most demanding of them; their feed adds up (phase 13).
-        parts = [downstream_of(cfg, frame, unit, u, caps) for u in units]
+        parts = [downstream_of(cfg, frame, unit, u, caps, cover) for u in units]
         return Downstream(
             ",".join(p.unit for p in parts),
             min(p.limit_gCO2e_per_MJ for p in parts),
             sum(p.cap_MJ for p in parts),
         )
-    return downstream_of(cfg, frame, unit, units[0], caps)
+    return downstream_of(cfg, frame, unit, units[0], caps, cover)
 
 
 def downstream_of(
@@ -208,6 +224,7 @@ def downstream_of(
     unit: ProcessingUnit,
     down: ProcessingUnit,
     caps: Caps | None = None,
+    cover: Cover | None = None,
 ) -> Downstream:
     feed_flows = [
         f for f in cfg.flows_into(down.id) if isinstance(cfg.block(f.source), StorageUnit)
@@ -225,8 +242,8 @@ def downstream_of(
     out_mj = float(s[down.production_series or ""].sum()) * down.lhv_MJ_per_kg
     on = cal.local_date(frame.index[0], frame.timezone)
     own = 0.0
-    # A downstream unit on the renewable pool is assumed covered by the pool's surplus (the
-    # pool split gives it renewable; stage B enforces each batch's actual limit).
+    # A downstream unit on the renewable pool pays grid emissions on what its cover leaves
+    # (stage B enforces each batch's actual limit).
     on_pool = any(
         isinstance(b, InputBlock) and b.renewable
         for b in (cfg.block(f.source) for f in cfg.flows_into(down.id))
@@ -236,10 +253,11 @@ def downstream_of(
         if not isinstance(b, InputBlock):
             continue
         if f.material == ELECTRICITY:
-            if not b.renewable and not on_pool:
-                own += (
-                    float(s[down.electricity_series or ""].sum()) * b.emission_factor_at(on).value
-                )
+            if not b.renewable:
+                kwh = float(s[down.electricity_series or ""].sum())
+                if on_pool:
+                    kwh = 0.0 if cover is None else max(0.0, kwh - cover.get(down.id, 0.0))
+                own += kwh * b.emission_factor_at(on).value
         else:
             own += float(s[f.series or ""].sum()) * b.emission_factor_at(on).value
     if feed_mj <= 0 or out_mj <= 0:
@@ -421,11 +439,12 @@ def batch_unit(
     eps: float = EPS_MJ,
     renewable_kWh: FloatArray | None = None,
     caps: Caps | None = None,
+    cover: Cover | None = None,
 ) -> UnitBatching:
     us = unit_series(cfg, frame, unit, renewable_kWh)
     slices, lo = windows(cfg, frame, unit)
-    down = downstream(cfg, frame, unit, caps)
-    limit = product_limit(cfg, frame, unit, caps)
+    down = downstream(cfg, frame, unit, caps, cover)
+    limit = product_limit(cfg, frame, unit, caps, cover)
     base = segment(slices, lo, value_fn(us, "limit", 0.0, limit), eps)
     threshold = cfg.settings.rfnbo_threshold_gCO2e_per_MJ
     months = slices  # month windows: batches in one may be averaged (§12.1)
