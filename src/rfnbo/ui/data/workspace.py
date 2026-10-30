@@ -246,7 +246,7 @@ class Workspace:
         p = self._p()
         try:
             return p.config()
-        except (ProjectError, ConfigError) as exc:
+        except (ProjectError, ConfigError, ValueError) as exc:  # ValueError: a sealed opening
             raise WorkspaceError(str(exc)) from exc
 
     @property
@@ -541,6 +541,21 @@ class Workspace:
                         badge=str(errors) if errors else "✓",
                     )
                 )
+        try:
+            frame = self.prepared().frame
+        except WorkspaceError:
+            frame = None
+        if frame is not None and frame.provisional:
+            until = cal.to_local(frame.end, frame.timezone).isoformat(sep=" ", timespec="minutes")
+            steps.append(
+                Step(
+                    "Period",
+                    True,
+                    f"PROVISIONAL: the data ends {until}, so the run is quarter to date, closed "
+                    "as if the quarter ended there; it cannot open the next quarter",
+                    required=False,
+                )
+            )
         n = len(p.corrections)
         steps.append(
             Step("Corrections", True, f"{n} correction(s)", badge=str(n or ""), required=False)

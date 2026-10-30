@@ -335,6 +335,16 @@ def build(
         "quarter": run.frame.quarter,
         "timezone": run.frame.timezone,
         "intervals": len(run.frame),
+        **(
+            {
+                "provisional": {
+                    "until": run.frame.end.isoformat(),
+                    "note": "quarter to date: closed as if the quarter ended at the data's end",
+                }
+            }
+            if run.frame.provisional
+            else {}
+        ),
         "hashes": {**hashes, "batches_sha256": sha256(batches_bytes)},
         "provenance": {
             "source_files_sha256": list(
@@ -480,6 +490,11 @@ def with_opening_from(cfg: PlantConfig, run_dir: str | Path, quarter: str) -> Pl
     each storage's carried-weight fallback from the prior run's storage weight.
     """
     rec = load_record(run_dir)
+    if "provisional" in rec:
+        raise SealError(
+            f"sealed run {rec['run_id']} is provisional (quarter to date until "
+            f"{rec['provisional']['until']}): only a full quarter's run can open the next one"
+        )
     if rec["plant"] != cfg.plant:
         raise SealError(f"sealed run is for plant {rec['plant']!r}, not {cfg.plant!r}")
     if next_quarter(rec["quarter"]) != quarter:

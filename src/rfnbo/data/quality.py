@@ -49,6 +49,9 @@ class Frame:
     quarter: str
     source_sha256: tuple[str, ...] = field(default=())
     interval: dt.timedelta = cal.INTERVAL
+    # Quarter to date: the data ends before the quarter does, so the run closes as if the
+    # quarter ended at the data's end (decided 2026-10-30). A provisional view, never a closing.
+    provisional: bool = False
 
     def __len__(self) -> int:
         return len(self.index)
@@ -86,15 +89,33 @@ def align(
     raw: RawData, year: int, quarter: int, tz: str, step: dt.timedelta | None = None
 ) -> tuple[Frame, list[QualityFlag]]:
     """Put the data on the quarter's grid at its own time step (``step``, else detected from
-    the timestamps: hourly data stays hourly, 15-minute data 15-minute)."""
+    the timestamps: hourly data stays hourly, 15-minute data 15-minute).
+
+    Data that ends before the quarter does gives a provisional, quarter-to-date frame: from the
+    quarter's start to the data's last interval, flagged; gaps within it are still errors."""
     step = step or cal.detect_step(raw.timestamps)
     try:
         grid = cal.quarter_intervals(year, quarter, tz, step)
     except ValueError as exc:
         raise ValueError(f"{year}-Q{quarter} in {tz} does not start on a {step} interval") from exc
     start, end = grid[0], grid[-1] + step
+    within = [ts for ts in raw.timestamps if start <= ts < end and not (ts - start) % step]
+    provisional = bool(within) and max(within) + step < end
+    if provisional:
+        end = max(within) + step
+        grid = [ts for ts in grid if ts < end]
     n = len(grid)
     flags: list[QualityFlag] = []
+    if provisional:
+        until = cal.to_local(end, tz).isoformat(timespec="minutes")
+        flags.append(
+            QualityFlag(
+                "provisional_period",
+                "warning",
+                f"the data ends at {until}, before {year}-Q{quarter} does: provisional, "
+                "quarter to date, closed as if the quarter ended there",
+            )
+        )
 
     rows_for: dict[int, list[int]] = {}
     off_grid: list[dt.datetime] = []
@@ -141,6 +162,7 @@ def align(
         quarter=f"{year:04d}-Q{quarter}",
         source_sha256=(raw.sha256,),
         interval=step,
+        provisional=provisional,
     )
     return frame, flags
 

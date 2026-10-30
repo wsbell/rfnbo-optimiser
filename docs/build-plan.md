@@ -96,6 +96,7 @@ Matched renewable electricity has EF = 0. Feed batches carry their own GHG.
 
 ### 2.7 Mass balance
 - Each storage unit keeps an RFNBO ledger per calendar quarter, checked at quarter end only.
+  Data that ends early gives a provisional, quarter-to-date run (§10.3 decision 13).
 - Quarter end: closing ledger ≥ 0 and ≤ measured physical inventory. Non-compliant RFNBO
   (§2.5) cannot be stored and carried into the next quarter: all of it left at quarter end is
   written off (decided 2026-10-17). Beyond that, any excess over physical inventory is written
@@ -411,6 +412,7 @@ decisions, the lineage graph) already works on networks.
 | 10 | At what time step is the plant calculated? (decided 2026-10-30) | At the data's own step: hourly data is calculated hour by hour, 15-minute data in 15-minute intervals; nothing is resampled. The step is read from the timestamps and must divide an hour (1 to 60 minutes), so every clock hour, month and quarter starts on an interval; all data files of a quarter have the same step. Batches are runs of whole intervals as before |
 | 11 | Data in other units? (decided 2026-10-30) | Converted on reading to the unit a series is named in (kWh, kg): energy (Wh, kWh, MWh, GWh), mass (g, kg, t), and rates (W to GW, kg/h, t/h) multiplied by the interval's length. A column's unit is read from its header ("Solar Power (MWh)") or set in the mapping; a column of the wrong kind is refused. Every conversion is reported with the run (an info flag, sealed) |
 | 12 | Comparison with a baseline? (decided 2026-10-30) | Not by default: a run calculates and seals the result for the given data and rules. The baseline (one batch per unit and month, FIFO) is calculated only on request (`rfnbo optimise --compare`) |
+| 13 | Data for less than the quarter (e.g. one month)? (decided 2026-10-30) | Run provisionally, quarter to date: from the quarter's start to the data's last interval, closed as if the quarter ended there (write-offs and carried RFNBO at the data's end, by §2.7). Gaps within that period are still errors. Labelled PROVISIONAL in the quality flags, the sealed record, the report summary, the results browser and the CLI; a provisional run cannot open the next quarter. The mass balance period stays the calendar quarter |
 
 **Follow-up (settled 2026-10-17).** (a) The single-chain optimiser uses the new objective 2
 now (§2.8). (b) Non-compliant RFNBO cannot be stored and carried between quarters: it is

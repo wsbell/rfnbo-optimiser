@@ -276,12 +276,18 @@ def prepare(project: Project) -> Prepared:
             frame, flags = quality.align(raw, year, q, cfg.timezone)
         except ValueError as exc:
             raise ProjectError(f"{src.file}: {exc}") from exc
+        if index is not None and frame.index != index:
+            raise ProjectError(
+                f"{src.file} covers {len(frame)} intervals, the other data {len(index)}: every "
+                "data file of a project covers the same period"
+            )
         if step is not None and frame.interval != step:
             raise ProjectError(
                 f"{src.file} has a {frame.interval} time step, the other data {step}: "
                 "every data file of a project has the same step"
             )
         step = frame.interval
+        provisional = frame.provisional
         align_flags += (
             quality.read_notes(raw)
             + flags
@@ -296,7 +302,9 @@ def prepare(project: Project) -> Prepared:
     if index is None:
         raise ProjectError("no column of any data file is mapped to a series")
     assert step is not None
-    original = Frame(index, series, cfg.timezone, f"{year:04d}-Q{q}", tuple(shas), step)
+    original = Frame(
+        index, series, cfg.timezone, f"{year:04d}-Q{q}", tuple(shas), step, provisional
+    )
     corrected, applied = apply(original, project.corrections)
     before = align_flags + quality.check(cfg, original)
     after_check = quality.check(cfg, corrected)

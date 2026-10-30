@@ -12,6 +12,7 @@ from typing import Any
 
 from nicegui import ui
 
+from rfnbo.data import calendar as cal
 from rfnbo.report.excel import write_xlsx
 from rfnbo.report.tables import all_tables
 from rfnbo.ui import theme
@@ -171,6 +172,13 @@ def run_page(run_id: str) -> None:
                 theme.pill("Does not reproduce", "danger", testid="reproduce")
             else:
                 theme.pill("Reproduces byte for byte", "success", testid="reproduce")
+            if run.frame.provisional:
+                until = cal.to_local(run.frame.end, run.frame.timezone)
+                theme.pill(
+                    f"Provisional: quarter to date until {until:%Y-%m-%d %H:%M}",
+                    "caution",
+                    testid="provisional",
+                ).tooltip("Closed as if the quarter ended at the data's end; not a closing")
             failed = len(run.failures)
             theme.pill(
                 f"{len(run.checks)} checks, {failed} failed",

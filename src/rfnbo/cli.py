@@ -74,6 +74,8 @@ def _run(args: argparse.Namespace) -> int:
     out = sealed.seal(result, args.out, flags)
     rec = sealed.load_record(out)
     print(f"{rec['run_id']}: sealed to {out}")
+    if "provisional" in rec:
+        print(f"  PROVISIONAL: quarter to date until {rec['provisional']['until']}")
     print(f"  {len(result.checks)} checks, {len(result.failures)} failed")
     for failure in result.failures[:20]:
         print(f"  {failure}")
@@ -205,6 +207,12 @@ def _optimise(args: argparse.Namespace) -> int:
         )
         out = seal_optimisation(result, args.out, flags)
 
+    frame = result.optimised.run.frame
+    if frame.provisional:
+        print(
+            f"PROVISIONAL: the data ends {frame.end.isoformat()} (UTC), before {frame.quarter} "
+            "does; quarter to date, closed as if the quarter ended there"
+        )
     vb = result.value_bound()
     bound = result.bound()
     columns = [("result", result.optimised.objectives)]

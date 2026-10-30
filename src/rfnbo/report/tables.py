@@ -997,6 +997,13 @@ def summary(run: RunResult, run_id: str | None = None) -> Table:
         ("Plant", cfg.plant),
         ("Config version", f"{cfg.version} (effective {cfg.effective_from.isoformat()})"),
         ("Quarter", run.frame.quarter),
+        (
+            "Period",
+            f"PROVISIONAL: quarter to date, until {run.frame.end.isoformat()} (UTC); closed as "
+            "if the quarter ended there"
+            if run.frame.provisional
+            else "the full quarter",
+        ),
         ("Plant time zone", run.frame.timezone),
         ("Intervals", str(len(run.frame))),
         ("RFNBO threshold (gCO2e/MJ)", f"{cfg.settings.rfnbo_threshold_gCO2e_per_MJ:.4g}"),

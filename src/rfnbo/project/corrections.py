@@ -124,6 +124,12 @@ def apply(frame: Frame, corrections: Sequence[Correction]) -> tuple[Frame, list[
         values.setflags(write=False)
         out[name] = values
     corrected = Frame(
-        frame.index, out, frame.timezone, frame.quarter, frame.source_sha256, frame.interval
+        frame.index,
+        out,
+        frame.timezone,
+        frame.quarter,
+        frame.source_sha256,
+        frame.interval,
+        frame.provisional,
     )
     return corrected, applied
